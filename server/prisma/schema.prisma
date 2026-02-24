@@ -1,0 +1,324 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum TraitCategory {
+  ACADEMIC
+  INTERPERSONAL
+  MOTIVATION
+  EXPERIENCE
+  LEADERSHIP
+  PROBLEM_SOLVING
+}
+
+enum TraitQuestionType {
+  CHAT
+  QUIZ
+}
+
+enum ProgramTraitPriorityBucket {
+  CRITICAL
+  VERY_IMPORTANT
+  IMPORTANT
+  NICE_TO_HAVE
+}
+
+enum TonePreset {
+  FRIENDLY
+  ENCOURAGING
+  DIRECT
+  PROFESSIONAL
+  PLAYFUL
+}
+
+enum PreferredChannel {
+  email
+  sms
+  phone
+}
+
+enum LeadSource {
+  widget
+  import
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  APPLIED
+  DISQUALIFIED
+}
+
+enum CallStatus {
+  INITIATED
+  RINGING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  NO_ANSWER
+  BUSY
+  CANCELED
+}
+
+enum CandidateSessionChannel {
+  WEB_VOICE
+  WEB_CHAT
+  WEB_QUIZ
+  PHONE_VOICE
+  SMS
+}
+
+enum SmsDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum SmsDeliveryStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+  UNDELIVERED
+  RECEIVED
+}
+
+enum SmsSessionStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  OPTED_OUT
+}
+
+model Candidate {
+  id               String            @id @default(cuid())
+  firstName        String?
+  lastName         String?
+  email            String?
+  phone            String?
+  preferredChannel PreferredChannel?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  sessions         CandidateSession[]
+  leads            Lead[]
+
+  @@index([email])
+  @@index([phone])
+}
+
+model CandidateSession {
+  id        String           @id @default(cuid())
+  candidateId String?
+  programId String?
+  mode      String
+  channel   CandidateSessionChannel @default(WEB_VOICE)
+  status    String
+  startedAt DateTime         @default(now())
+  endedAt   DateTime?
+  candidate Candidate?       @relation(fields: [candidateId], references: [id], onDelete: SetNull)
+  program   Program?         @relation(fields: [programId], references: [id], onDelete: SetNull)
+  turns     TranscriptTurn[]
+  scorecards Scorecard[]
+  callSessions CallSession[]
+  smsSessions SmsSession[]
+
+  @@index([candidateId])
+  @@index([programId])
+}
+
+model TranscriptTurn {
+  id        String   @id @default(cuid())
+  sessionId String
+  ts        DateTime
+  speaker   String
+  text      String
+  session   CandidateSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+}
+
+model Trait {
+  id                    String         @id @default(cuid())
+  name                  String         @unique
+  category              TraitCategory
+  definition            String?
+  rubricScaleMin        Int            @default(0)
+  rubricScaleMax        Int            @default(5)
+  rubricPositiveSignals String?
+  rubricNegativeSignals String?
+  rubricFollowUps       String?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+  questions             TraitQuestion[]
+  programTraits         ProgramTrait[]
+  traitScores           TraitScore[]
+}
+
+model TraitQuestion {
+  id           String            @id @default(cuid())
+  traitId      String
+  type         TraitQuestionType
+  prompt       String
+  optionsJson  String?
+  scoringHints String?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  trait        Trait             @relation(fields: [traitId], references: [id], onDelete: Cascade)
+
+  @@index([traitId])
+}
+
+model Program {
+  id          String         @id @default(cuid())
+  name        String         @unique
+  description String?
+  degreeLevel String?
+  department  String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  traits      ProgramTrait[]
+  scorecards  Scorecard[]
+  sessions    CandidateSession[]
+  leads       Lead[]
+}
+
+model ProgramTrait {
+  id        String                     @id @default(cuid())
+  programId String
+  traitId   String
+  bucket    ProgramTraitPriorityBucket
+  sortOrder Int
+  notes     String?
+  program   Program                    @relation(fields: [programId], references: [id], onDelete: Cascade)
+  trait     Trait                      @relation(fields: [traitId], references: [id], onDelete: Cascade)
+
+  @@unique([programId, traitId])
+  @@index([programId, bucket, sortOrder])
+  @@index([traitId])
+}
+
+model BrandVoice {
+  id            String     @id @default(cuid())
+  name          String     @unique
+  tonePreset    TonePreset
+  doList        String?
+  dontList      String?
+  samplePhrases String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+}
+
+model Scorecard {
+  id           String           @id @default(cuid())
+  sessionId    String
+  programId    String
+  overallScore Float
+  createdAt    DateTime         @default(now())
+  session      CandidateSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  program      Program          @relation(fields: [programId], references: [id], onDelete: Cascade)
+  traitScores  TraitScore[]
+
+  @@index([sessionId])
+  @@index([programId])
+}
+
+model TraitScore {
+  id           String                     @id @default(cuid())
+  scorecardId  String
+  traitId      String
+  bucket       ProgramTraitPriorityBucket
+  score0to5    Float
+  confidence   Float
+  evidenceJson String
+  scorecard    Scorecard                  @relation(fields: [scorecardId], references: [id], onDelete: Cascade)
+  trait        Trait                      @relation(fields: [traitId], references: [id], onDelete: Cascade)
+
+  @@index([scorecardId])
+  @@index([traitId])
+}
+
+model Lead {
+  id              String     @id @default(cuid())
+  candidateId     String
+  programId       String?
+  source          LeadSource @default(widget)
+  status          LeadStatus @default(NEW)
+  owner           String?
+  notes           String?
+  lastContactedAt DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  candidate       Candidate  @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  program         Program?   @relation(fields: [programId], references: [id], onDelete: SetNull)
+  callSessions    CallSession[]
+  smsSessions     SmsSession[]
+
+  @@index([candidateId])
+  @@index([programId])
+  @@index([status])
+}
+
+model CallSession {
+  id                 String          @id @default(cuid())
+  candidateSessionId String
+  leadId             String?
+  toPhone            String
+  fromPhone          String
+  provider           String          @default("twilio")
+  status             CallStatus      @default(INITIATED)
+  twilioCallSid      String?         @unique
+  streamSid          String?
+  startedAt          DateTime?
+  endedAt            DateTime?
+  failureReason      String?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  candidateSession   CandidateSession @relation(fields: [candidateSessionId], references: [id], onDelete: Cascade)
+  lead               Lead?           @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@index([candidateSessionId])
+  @@index([leadId])
+  @@index([status])
+}
+
+model SmsSession {
+  id                 String           @id @default(cuid())
+  candidateSessionId String
+  leadId             String?
+  phone              String
+  status             SmsSessionStatus @default(ACTIVE)
+  currentStep        Int              @default(0)
+  lastInboundAt      DateTime?
+  lastOutboundAt     DateTime?
+  optedOutAt         DateTime?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  candidateSession   CandidateSession @relation(fields: [candidateSessionId], references: [id], onDelete: Cascade)
+  lead               Lead?            @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  messages           SmsMessage[]
+
+  @@index([candidateSessionId])
+  @@index([leadId])
+  @@index([phone])
+  @@index([status])
+}
+
+model SmsMessage {
+  id               String             @id @default(cuid())
+  smsSessionId     String
+  direction        SmsDirection
+  body             String
+  twilioMessageSid String?            @unique
+  deliveryStatus   SmsDeliveryStatus?
+  errorCode        String?
+  errorMessage     String?
+  createdAt        DateTime           @default(now())
+  smsSession       SmsSession         @relation(fields: [smsSessionId], references: [id], onDelete: Cascade)
+
+  @@index([smsSessionId])
+}

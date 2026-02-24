@@ -1,0 +1,478 @@
+import { z } from "zod";
+
+const baseErrorSchema = z.object({
+  error: z
+    .union([
+      z.string(),
+      z.object({
+        code: z.string(),
+        message: z.string(),
+        details: z.unknown().optional()
+      })
+    ])
+    .optional()
+});
+
+const bucketSchema = z.enum(["CRITICAL", "VERY_IMPORTANT", "IMPORTANT", "NICE_TO_HAVE"]);
+const leadStatusSchema = z.enum(["NEW", "CONTACTED", "QUALIFIED", "APPLIED", "DISQUALIFIED"]);
+const preferredChannelSchema = z.enum(["email", "sms", "phone"]);
+
+export const transcriptTurnSchema = z.object({
+  ts: z.string(),
+  speaker: z.enum(["candidate", "assistant"]),
+  text: z.string()
+});
+
+const sessionSchema = z.object({ id: z.string(), status: z.string(), startedAt: z.string() });
+const completeSessionSchema = z.object({ id: z.string(), status: z.string(), endedAt: z.string().nullable() });
+
+const publicProgramSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullable()
+});
+
+const programQuestionSchema = z.object({
+  id: z.string(),
+  traitId: z.string(),
+  prompt: z.string(),
+  type: z.enum(["chat", "quiz"]),
+  options: z.array(z.string()),
+  scoringHints: z.string().nullable(),
+  traitName: z.string(),
+  bucket: bucketSchema,
+  traitSortOrder: z.number().int()
+});
+
+const scorecardSchema = z.object({
+  id: z.string(),
+  sessionId: z.string(),
+  programId: z.string(),
+  overallScore: z.number(),
+  createdAt: z.string(),
+  perTrait: z.array(
+    z.object({
+      traitId: z.string(),
+      traitName: z.string(),
+      bucket: bucketSchema,
+      score0to5: z.number(),
+      evidence: z.array(z.string()),
+      confidence: z.number()
+    })
+  )
+});
+
+const advisorLeadListItemSchema = z.object({
+  id: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  status: leadStatusSchema,
+  owner: z.string().nullable(),
+  candidate: z.object({
+    id: z.string(),
+    firstName: z.string().nullable(),
+    lastName: z.string().nullable(),
+    email: z.string().nullable(),
+    phone: z.string().nullable(),
+    preferredChannel: preferredChannelSchema.nullable()
+  }),
+  program: z
+    .object({
+      id: z.string(),
+      name: z.string()
+    })
+    .nullable(),
+  latestSession: z
+    .object({
+      id: z.string(),
+      mode: z.string(),
+      channel: z.string(),
+      status: z.string(),
+      startedAt: z.string(),
+      endedAt: z.string().nullable(),
+      latestCall: z
+        .object({
+          id: z.string(),
+          status: z.string(),
+          twilioCallSid: z.string().nullable(),
+          createdAt: z.string()
+        })
+        .nullable(),
+      latestSms: z
+        .object({
+          id: z.string(),
+          status: z.string(),
+          phone: z.string(),
+          createdAt: z.string()
+        })
+        .nullable()
+    })
+    .nullable(),
+  scoreSummary: z
+    .object({
+      scorecardId: z.string(),
+      overallScore: z.number(),
+      confidence: z.number().nullable()
+    })
+    .nullable()
+});
+
+const advisorLeadDetailSchema = z.object({
+  id: z.string(),
+  source: z.enum(["widget", "import"]),
+  status: leadStatusSchema,
+  owner: z.string().nullable(),
+  notes: z.string().nullable(),
+  lastContactedAt: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  candidate: z.object({
+    id: z.string(),
+    firstName: z.string().nullable(),
+    lastName: z.string().nullable(),
+    email: z.string().nullable(),
+    phone: z.string().nullable(),
+    preferredChannel: preferredChannelSchema.nullable(),
+    createdAt: z.string(),
+    updatedAt: z.string()
+  }),
+  program: z
+    .object({
+      id: z.string(),
+      name: z.string()
+    })
+    .nullable(),
+  sessions: z.array(
+    z.object({
+      id: z.string(),
+      mode: z.string(),
+      channel: z.string(),
+      status: z.string(),
+      startedAt: z.string(),
+      endedAt: z.string().nullable(),
+      program: z
+        .object({
+          id: z.string(),
+          name: z.string()
+        })
+        .nullable(),
+      latestScorecard: z
+        .object({
+          id: z.string(),
+          overallScore: z.number(),
+          createdAt: z.string()
+        })
+        .nullable(),
+      callSessions: z.array(
+        z.object({
+          id: z.string(),
+          status: z.string(),
+          toPhone: z.string(),
+          fromPhone: z.string(),
+          twilioCallSid: z.string().nullable(),
+          createdAt: z.string(),
+          startedAt: z.string().nullable(),
+          endedAt: z.string().nullable(),
+          failureReason: z.string().nullable()
+        })
+      ),
+      smsSessions: z.array(
+        z.object({
+          id: z.string(),
+          status: z.string(),
+          phone: z.string(),
+          currentStep: z.number().int(),
+          optedOutAt: z.string().nullable(),
+          createdAt: z.string(),
+          updatedAt: z.string(),
+          messages: z.array(
+            z.object({
+              id: z.string(),
+              direction: z.enum(["INBOUND", "OUTBOUND"]),
+              body: z.string(),
+              twilioMessageSid: z.string().nullable(),
+              deliveryStatus: z.enum(["QUEUED", "SENT", "DELIVERED", "FAILED", "UNDELIVERED", "RECEIVED"]).nullable(),
+              errorCode: z.string().nullable(),
+              errorMessage: z.string().nullable(),
+              createdAt: z.string()
+            })
+          )
+        })
+      )
+    })
+  ),
+  selectedSession: z
+    .object({
+      id: z.string(),
+      mode: z.string(),
+      status: z.string(),
+      startedAt: z.string(),
+      endedAt: z.string().nullable(),
+      transcript: z.array(
+        z.object({
+          id: z.string(),
+          speaker: z.string(),
+          text: z.string(),
+          ts: z.string()
+        })
+      )
+    })
+    .nullable(),
+  scorecard: z
+    .object({
+      id: z.string(),
+      sessionId: z.string(),
+      overallScore: z.number(),
+      createdAt: z.string(),
+      perTrait: z.array(
+        z.object({
+          traitId: z.string(),
+          traitName: z.string(),
+          bucket: z.string(),
+          score0to5: z.number(),
+          confidence: z.number(),
+          evidence: z.array(z.string())
+        })
+      )
+    })
+    .nullable()
+});
+
+const createPhoneCallResponseSchema = z.object({
+  callSessionId: z.string(),
+  candidateSessionId: z.string(),
+  twilioCallSid: z.string()
+});
+
+const startSmsResponseSchema = z.object({
+  smsSessionId: z.string()
+});
+
+const sendSmsResponseSchema = z.object({
+  messageId: z.string().nullable(),
+  twilioMessageSid: z.string()
+});
+
+export type TranscriptTurnInput = z.infer<typeof transcriptTurnSchema>;
+export type PublicProgram = z.infer<typeof publicProgramSchema>;
+export type ProgramQuestion = z.infer<typeof programQuestionSchema>;
+export type Scorecard = z.infer<typeof scorecardSchema>;
+export type LeadStatus = z.infer<typeof leadStatusSchema>;
+export type AdvisorLeadListItem = z.infer<typeof advisorLeadListItemSchema>;
+export type AdvisorLeadDetail = z.infer<typeof advisorLeadDetailSchema>;
+
+export type ApiClientConfig = {
+  baseUrl: string;
+};
+
+const parseResponse = async <T>(response: Response, schema?: z.ZodSchema<T>) => {
+  if (!response.ok) {
+    const raw = await response.json().catch(() => ({}));
+    const parsed = baseErrorSchema.safeParse(raw);
+    if (parsed.success) {
+      const errorPayload = parsed.data.error;
+      if (typeof errorPayload === "string") {
+        throw new Error(errorPayload);
+      }
+      if (errorPayload?.message) {
+        throw new Error(errorPayload.message);
+      }
+    }
+    throw new Error("Request failed");
+  }
+
+  if (!schema) {
+    return undefined as T;
+  }
+
+  const data = await response.json();
+  return schema.parse(data);
+};
+
+const encodeQuery = (params: Record<string, string | number | undefined | null>) => {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && String(value).length > 0) {
+      search.set(key, String(value));
+    }
+  }
+  const query = search.toString();
+  return query.length > 0 ? `?${query}` : "";
+};
+
+export const createApiClient = ({ baseUrl }: ApiClientConfig) => {
+  const post = async <T>(path: string, body?: unknown, schema?: z.ZodSchema<T>) => {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: body ? JSON.stringify(body) : undefined
+    });
+
+    return parseResponse(response, schema);
+  };
+
+  const put = async <T>(path: string, body?: unknown, schema?: z.ZodSchema<T>) => {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: body ? JSON.stringify(body) : undefined
+    });
+
+    return parseResponse(response, schema);
+  };
+
+  const get = async <T>(path: string, schema: z.ZodSchema<T>) => {
+    const response = await fetch(`${baseUrl}${path}`);
+    return parseResponse(response, schema);
+  };
+
+  return {
+    createSession: (mode: "voice" | "chat" | "quiz" = "voice", options?: { programId?: string; candidateId?: string }) =>
+      post("/api/sessions", { mode, ...options }, sessionSchema),
+    appendTranscript: (sessionId: string, turns: TranscriptTurnInput[]) => post(`/api/sessions/${sessionId}/transcript`, { turns }),
+    completeSession: (sessionId: string) => post(`/api/sessions/${sessionId}/complete`, undefined, completeSessionSchema),
+    getRealtimeToken: () =>
+      post(
+        "/api/realtime/token",
+        undefined,
+        z.object({
+          client_secret: z.object({ value: z.string(), expires_at: z.number().optional() })
+        })
+      ),
+    getPublicPrograms: () => get("/api/public/programs", z.object({ data: z.array(publicProgramSchema) })),
+    getPublicProgram: (programId: string) =>
+      get(
+        `/api/public/programs/${programId}`,
+        z.object({
+          data: z.object({
+            id: z.string(),
+            name: z.string(),
+            description: z.string().nullable(),
+            traits: z.array(
+              z.object({
+                id: z.string(),
+                traitId: z.string(),
+                bucket: bucketSchema,
+                sortOrder: z.number().int(),
+                notes: z.string().nullable(),
+                trait: z.object({
+                  id: z.string(),
+                  name: z.string(),
+                  category: z.string(),
+                  definition: z.string().nullable()
+                })
+              })
+            )
+          })
+        })
+      ),
+    getProgramQuestions: (programId: string, type: "chat" | "quiz") =>
+      get(
+        `/api/public/programs/${programId}/questions?type=${type}`,
+        z.object({
+          data: z.object({
+            programId: z.string(),
+            type: z.enum(["chat", "quiz", "all"]),
+            grouped: z.array(
+              z.object({
+                traitId: z.string(),
+                traitName: z.string(),
+                bucket: bucketSchema,
+                sortOrder: z.number().int(),
+                questions: z.array(
+                  z.object({
+                    id: z.string(),
+                    traitId: z.string(),
+                    prompt: z.string(),
+                    type: z.enum(["chat", "quiz"]),
+                    options: z.array(z.string()),
+                    scoringHints: z.string().nullable()
+                  })
+                )
+              })
+            ),
+            orderedQuestions: z.array(programQuestionSchema)
+          })
+        })
+      ),
+    createPublicLead: (input: {
+      firstName?: string;
+      lastName?: string;
+      email?: string;
+      phone?: string;
+      preferredChannel?: "email" | "sms" | "phone";
+      programId?: string;
+      sessionId?: string;
+    }) => post("/api/public/leads", input, z.object({ candidateId: z.string(), leadId: z.string() })),
+    scoreSession: (input: {
+      sessionId: string;
+      mode: "chat" | "quiz";
+      programId: string;
+      transcriptTurns?: TranscriptTurnInput[];
+      responses?: Array<{ questionId: string; answer: string }>;
+    }) =>
+      post(
+        `/api/sessions/${input.sessionId}/score`,
+        {
+          mode: input.mode,
+          programId: input.programId,
+          transcriptTurns: input.transcriptTurns,
+          responses: input.responses
+        },
+        z.object({ data: scorecardSchema })
+      ),
+    getAdvisorPrograms: () => get("/api/advisor/programs", z.object({ data: z.array(z.object({ id: z.string(), name: z.string() })) })),
+    getAdvisorLeads: (filters?: {
+      status?: LeadStatus;
+      mode?: "voice" | "chat" | "quiz";
+      programId?: string;
+      q?: string;
+      from?: string;
+      to?: string;
+      limit?: number;
+      offset?: number;
+    }) =>
+      get(
+        `/api/advisor/leads${encodeQuery(filters ?? {})}`,
+        z.object({
+          data: z.array(advisorLeadListItemSchema),
+          pagination: z.object({ limit: z.number(), offset: z.number(), total: z.number() })
+        })
+      ),
+    getAdvisorLeadDetail: (leadId: string, sessionId?: string) =>
+      get(`/api/advisor/leads/${leadId}${encodeQuery({ sessionId })}`, z.object({ data: advisorLeadDetailSchema })),
+    updateAdvisorLead: (
+      leadId: string,
+      input: { status?: LeadStatus; owner?: string | null; notes?: string | null; lastContactedAt?: string | null }
+    ) =>
+      put(
+        `/api/advisor/leads/${leadId}`,
+        input,
+        z.object({
+          data: z.object({
+            id: z.string(),
+            status: leadStatusSchema,
+            owner: z.string().nullable(),
+            notes: z.string().nullable(),
+            lastContactedAt: z.string().nullable(),
+            updatedAt: z.string()
+          })
+        })
+      ),
+    createPhoneCall: (input: {
+      leadId?: string;
+      candidateId?: string;
+      candidateSessionId?: string;
+      programId?: string;
+      toPhone: string;
+      fromPhone?: string;
+      script?: "default";
+    }) => post("/api/phone/calls", input, createPhoneCallResponseSchema),
+    startSmsInterview: (input: { leadId: string; programId?: string }) => post("/api/sms/start", input, startSmsResponseSchema),
+    sendSmsMessage: (input: { leadId: string; body: string }) => post("/api/sms/send", input, sendSmsResponseSchema)
+  };
+};

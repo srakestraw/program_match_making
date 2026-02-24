@@ -1,0 +1,19 @@
+{
+  "name": "program-match-making",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.6.3",
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "check": "pnpm -r typecheck && pnpm -r lint && pnpm --filter @pmm/domain test && pnpm --filter @pmm/server test",
+    "db:generate": "pnpm --filter @pmm/server prisma:generate",
+    "db:migrate": "pnpm --filter @pmm/server prisma:migrate"
+  },
+  "devDependencies": {
+    "turbo": "^2.4.2",
+    "typescript": "^5.7.3"
+  }
+}

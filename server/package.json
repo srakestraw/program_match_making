@@ -1,0 +1,38 @@
+{
+  "name": "@pmm/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -b",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -b --noEmit",
+    "lint": "echo 'no lint configured'",
+    "test": "DATABASE_URL=file:./test.db pnpm prisma:migrate && DATABASE_URL=file:./test.db vitest run",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "DATABASE_URL=${DATABASE_URL:-file:./dev.db} prisma db execute --schema prisma/schema.prisma --file prisma/migrations/202602241620_admin_foundation/migration.sql && DATABASE_URL=${DATABASE_URL:-file:./dev.db} prisma db execute --schema prisma/schema.prisma --file prisma/migrations/202602241900_step3_scorecards/migration.sql && (DATABASE_URL=${DATABASE_URL:-file:./dev.db} prisma db execute --schema prisma/schema.prisma --file prisma/migrations/202602241980_step4_candidate_leads/migration.sql 2>/dev/null || true) && DATABASE_URL=${DATABASE_URL:-file:./dev.db} prisma db execute --schema prisma/schema.prisma --file prisma/migrations/202602242040_step5_indexes/migration.sql && (DATABASE_URL=${DATABASE_URL:-file:./dev.db} prisma db execute --schema prisma/schema.prisma --file prisma/migrations/202602242230_step6_phone_calls/migration.sql 2>/dev/null || true) && (DATABASE_URL=${DATABASE_URL:-file:./dev.db} prisma db execute --schema prisma/schema.prisma --file prisma/migrations/202602242355_step7_sms/migration.sql 2>/dev/null || true)",
+    "seed": "tsx src/scripts/seed.ts",
+    "cleanup:mock": "tsx src/scripts/cleanup-mock-data.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.2.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "ws": "^8.19.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.2",
+    "@types/supertest": "^6.0.3",
+    "@types/ws": "^8.18.1",
+    "prisma": "^6.2.1",
+    "supertest": "^7.2.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^4.0.18"
+  }
+}

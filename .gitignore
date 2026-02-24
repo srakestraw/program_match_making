@@ -1,0 +1,14 @@
+node_modules
+.pnpm-store
+.env
+.env.local
+*.log
+coverage
+dist
+build
+*.tsbuildinfo
+.DS_Store
+server/prisma/dev.db
+server/prisma/dev.db-journal
+server/prisma/test.db
+server/prisma/test.db-journal

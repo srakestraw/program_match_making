@@ -1,0 +1,575 @@
+import { jsxs as _jsxs, jsx as _jsx, Fragment as _Fragment } from "react/jsx-runtime";
+import React, { useEffect, useMemo, useState } from "react";
+import ReactDOM from "react-dom/client";
+import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { boardStateToProgramTraitRows, programTraitPriorityBuckets, tonePresets, traitCategories } from "@pmm/domain";
+import { AppShell, Button, Card } from "@pmm/ui";
+import "./styles.css";
+const queryClient = new QueryClient();
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
+const emptyProgramBoardState = {
+    CRITICAL: [],
+    VERY_IMPORTANT: [],
+    IMPORTANT: [],
+    NICE_TO_HAVE: []
+};
+const navLinkClass = "rounded-md px-3 py-2 text-sm font-medium hover:bg-slate-200";
+const inputClass = "w-full rounded-md border border-slate-300 px-3 py-2 text-sm";
+const labelClass = "mb-1 block text-xs font-medium uppercase tracking-wide text-slate-600";
+const subtleButtonClass = "rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50";
+async function request(path, init) {
+    const response = await fetch(`${apiBaseUrl}${path}`, {
+        headers: { "Content-Type": "application/json" },
+        ...init
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        const errorPayload = data?.error;
+        if (typeof errorPayload === "string") {
+            throw new Error(errorPayload);
+        }
+        if (errorPayload && typeof errorPayload === "object" && typeof errorPayload.message === "string") {
+            throw new Error(errorPayload.message);
+        }
+        throw new Error("Request failed");
+    }
+    return data;
+}
+function splitListText(value) {
+    return value
+        .split("\n")
+        .map((item) => item.trim())
+        .filter(Boolean);
+}
+function joinListText(items) {
+    return items.join("\n");
+}
+function buildDefinitionDraft(name, category) {
+    const targetName = name.trim() || "This trait";
+    return `${targetName} evaluates a candidate's ${category.toLowerCase().replaceAll("_", " ")} capability through consistent behaviors that indicate preparedness, growth potential, and fit for the program context.`;
+}
+function buildSignalSuggestions(kind, name) {
+    const baseName = name.trim() || "the trait";
+    if (kind === "positive") {
+        return [
+            `Provides concrete examples that demonstrate ${baseName.toLowerCase()}.`,
+            `Explains decisions with clear reasoning and tradeoffs.`,
+            "Shows reflection on outcomes and specific lessons learned.",
+            "Connects prior experience to future program contribution.",
+            "Communicates confidently while remaining precise and honest."
+        ];
+    }
+    return [
+        `Struggles to provide specific evidence of ${baseName.toLowerCase()}.`,
+        "Uses vague or contradictory responses without clear reasoning.",
+        "Deflects responsibility and avoids discussing improvement areas.",
+        "Cannot connect past work to expected program demands.",
+        "Shows low awareness of impact, collaboration, or accountability."
+    ];
+}
+function qualityHint(value) {
+    const count = value.trim().length;
+    if (count >= 220) {
+        return { label: "High quality detail", className: "text-emerald-700" };
+    }
+    if (count >= 100) {
+        return { label: "Good depth", className: "text-slate-600" };
+    }
+    return { label: "Add more detail", className: "text-amber-700" };
+}
+function FieldMeta({ value }) {
+    const hint = qualityHint(value);
+    return (_jsxs("div", { className: "mt-1 flex items-center justify-between text-xs", children: [_jsxs("span", { className: "text-slate-500", children: [value.length, " characters"] }), _jsx("span", { className: hint.className, children: hint.label })] }));
+}
+function CollapsibleSection({ title, defaultOpen = true, children }) {
+    return (_jsxs("details", { open: defaultOpen, className: "rounded-md border border-slate-200 bg-slate-50/50", children: [_jsx("summary", { className: "cursor-pointer select-none px-3 py-2 text-sm font-semibold text-slate-800", children: title }), _jsx("div", { className: "space-y-3 border-t border-slate-200 bg-white p-3", children: children })] }));
+}
+function ListBuilder({ label, items, placeholder, onChange, emptyText, suggestionButtonLabel, onSuggestion }) {
+    const [draft, setDraft] = useState("");
+    const addItem = () => {
+        const next = draft.trim();
+        if (!next) {
+            return;
+        }
+        onChange([...items, next]);
+        setDraft("");
+    };
+    return (_jsxs("div", { children: [_jsxs("div", { className: "mb-1 flex items-center justify-between", children: [_jsx("label", { className: labelClass, children: label }), suggestionButtonLabel && onSuggestion && (_jsx("button", { type: "button", className: subtleButtonClass, onClick: onSuggestion, children: suggestionButtonLabel }))] }), _jsxs("div", { className: "space-y-2", children: [items.length === 0 && _jsx("p", { className: "text-xs text-slate-500", children: emptyText }), items.map((item, index) => (_jsxs("div", { className: "flex items-start gap-2", children: [_jsx("input", { className: inputClass, value: item, onChange: (event) => {
+                                    const next = [...items];
+                                    next[index] = event.target.value;
+                                    onChange(next);
+                                } }), _jsx("button", { type: "button", className: "mt-2 text-xs text-red-700 underline", onClick: () => onChange(items.filter((_, itemIndex) => itemIndex !== index)), children: "Remove" })] }, `${label}-${index}`))), _jsxs("div", { className: "flex items-center gap-2", children: [_jsx("input", { className: inputClass, placeholder: placeholder, value: draft, onChange: (event) => setDraft(event.target.value), onKeyDown: (event) => {
+                                    if (event.key === "Enter") {
+                                        event.preventDefault();
+                                        addItem();
+                                    }
+                                } }), _jsx(Button, { type: "button", onClick: addItem, children: "Add" })] })] })] }));
+}
+function ShellLayout({ children }) {
+    return (_jsxs(AppShell, { children: [_jsx("header", { className: "border-b border-slate-200 bg-white", children: _jsxs("div", { className: "mx-auto flex max-w-7xl items-center justify-between p-4", children: [_jsx("h1", { className: "text-xl font-semibold", children: "Program Match Admin" }), _jsxs("nav", { className: "flex gap-2", children: [_jsx(Link, { className: navLinkClass, to: "/traits", children: "Traits" }), _jsx(Link, { className: navLinkClass, to: "/programs", children: "Programs" }), _jsx(Link, { className: navLinkClass, to: "/brand-voice", children: "Brand Voice" })] })] }) }), _jsx("main", { className: "mx-auto max-w-7xl p-4", children: children })] }));
+}
+function TraitsPage() {
+    const [traits, setTraits] = useState([]);
+    const [questions, setQuestions] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [search, setSearch] = useState("");
+    const [categoryFilter, setCategoryFilter] = useState("ALL");
+    const [selectedTraitId, setSelectedTraitId] = useState(null);
+    const [isEditing, setIsEditing] = useState(false);
+    const [form, setForm] = useState({
+        name: "",
+        category: "ACADEMIC",
+        definition: "",
+        rubricPositiveSignals: "",
+        rubricNegativeSignals: "",
+        rubricFollowUps: ""
+    });
+    const [questionForm, setQuestionForm] = useState({
+        id: "",
+        prompt: "",
+        type: "chat",
+        optionsText: "",
+        scoringHints: ""
+    });
+    const [traitNotice, setTraitNotice] = useState(null);
+    const [traitError, setTraitError] = useState(null);
+    const positiveSignals = useMemo(() => splitListText(form.rubricPositiveSignals), [form.rubricPositiveSignals]);
+    const negativeSignals = useMemo(() => splitListText(form.rubricNegativeSignals), [form.rubricNegativeSignals]);
+    const followUps = useMemo(() => splitListText(form.rubricFollowUps), [form.rubricFollowUps]);
+    const quizOptions = useMemo(() => splitListText(questionForm.optionsText), [questionForm.optionsText]);
+    const selectedTrait = traits.find((trait) => trait.id === selectedTraitId) ?? null;
+    const loadTraits = async () => {
+        setLoading(true);
+        try {
+            const query = new URLSearchParams();
+            if (search.trim()) {
+                query.set("q", search.trim());
+            }
+            if (categoryFilter !== "ALL") {
+                query.set("category", categoryFilter);
+            }
+            const payload = await request(`/api/admin/traits?${query.toString()}`);
+            setTraits(payload.data);
+            if (payload.data.length === 0) {
+                setSelectedTraitId(null);
+            }
+            else if (!payload.data.some((trait) => trait.id === selectedTraitId)) {
+                setSelectedTraitId(payload.data[0]?.id ?? null);
+            }
+        }
+        finally {
+            setLoading(false);
+        }
+    };
+    const loadQuestions = async (traitId) => {
+        const payload = await request(`/api/admin/traits/${traitId}/questions`);
+        setQuestions(payload.data);
+    };
+    useEffect(() => {
+        void loadTraits();
+    }, [search, categoryFilter]);
+    useEffect(() => {
+        if (!selectedTraitId) {
+            setQuestions([]);
+            return;
+        }
+        void loadQuestions(selectedTraitId);
+    }, [selectedTraitId]);
+    useEffect(() => {
+        if (!selectedTrait || !isEditing) {
+            return;
+        }
+        setForm({
+            name: selectedTrait.name,
+            category: selectedTrait.category,
+            definition: selectedTrait.definition ?? "",
+            rubricPositiveSignals: selectedTrait.rubricPositiveSignals ?? "",
+            rubricNegativeSignals: selectedTrait.rubricNegativeSignals ?? "",
+            rubricFollowUps: selectedTrait.rubricFollowUps ?? ""
+        });
+    }, [selectedTrait, isEditing]);
+    const resetTraitForm = () => {
+        setIsEditing(false);
+        setForm({
+            name: "",
+            category: "ACADEMIC",
+            definition: "",
+            rubricPositiveSignals: "",
+            rubricNegativeSignals: "",
+            rubricFollowUps: ""
+        });
+    };
+    const submitTrait = async (event) => {
+        event.preventDefault();
+        setTraitError(null);
+        setTraitNotice(null);
+        try {
+            const body = {
+                ...form,
+                rubricScaleMin: 0,
+                rubricScaleMax: 5
+            };
+            if (isEditing && selectedTraitId) {
+                await request(`/api/admin/traits/${selectedTraitId}`, {
+                    method: "PUT",
+                    body: JSON.stringify(body)
+                });
+                setTraitNotice("Trait saved.");
+            }
+            else {
+                const created = await request("/api/admin/traits", {
+                    method: "POST",
+                    body: JSON.stringify(body)
+                });
+                setSelectedTraitId(created.data.id);
+                setTraitNotice("Trait created.");
+            }
+            resetTraitForm();
+            await loadTraits();
+            if (selectedTraitId) {
+                await loadQuestions(selectedTraitId);
+            }
+        }
+        catch (error) {
+            setTraitError(error instanceof Error ? error.message : "Failed to save trait.");
+        }
+    };
+    const deleteTrait = async (id) => {
+        await request(`/api/admin/traits/${id}`, { method: "DELETE" });
+        if (selectedTraitId === id) {
+            setSelectedTraitId(null);
+        }
+        await loadTraits();
+    };
+    const submitQuestion = async (event) => {
+        event.preventDefault();
+        if (!selectedTraitId) {
+            return;
+        }
+        const body = {
+            prompt: questionForm.prompt,
+            type: questionForm.type,
+            options: questionForm.type === "quiz"
+                ? questionForm.optionsText
+                    .split("\n")
+                    .map((line) => line.trim())
+                    .filter(Boolean)
+                : undefined,
+            scoringHints: questionForm.scoringHints
+        };
+        if (questionForm.id) {
+            await request(`/api/admin/questions/${questionForm.id}`, {
+                method: "PUT",
+                body: JSON.stringify(body)
+            });
+        }
+        else {
+            await request(`/api/admin/traits/${selectedTraitId}/questions`, {
+                method: "POST",
+                body: JSON.stringify(body)
+            });
+        }
+        setQuestionForm({
+            id: "",
+            prompt: "",
+            type: "chat",
+            optionsText: "",
+            scoringHints: ""
+        });
+        await loadQuestions(selectedTraitId);
+    };
+    const deleteQuestion = async (id) => {
+        await request(`/api/admin/questions/${id}`, { method: "DELETE" });
+        if (selectedTraitId) {
+            await loadQuestions(selectedTraitId);
+        }
+    };
+    return (_jsxs("div", { className: "grid gap-4 lg:grid-cols-[320px_1fr_1fr]", children: [_jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: "Traits Library" }), _jsxs("div", { className: "space-y-2", children: [_jsx("input", { className: inputClass, placeholder: "Search traits...", value: search, onChange: (event) => setSearch(event.target.value) }), _jsxs("select", { className: inputClass, value: categoryFilter, onChange: (event) => setCategoryFilter(event.target.value), children: [_jsx("option", { value: "ALL", children: "All categories" }), traitCategories.map((category) => (_jsx("option", { value: category, children: category }, category)))] })] }), _jsxs("div", { className: "mt-4 space-y-2", children: [loading && _jsx("p", { className: "text-sm text-slate-500", children: "Loading..." }), !loading && traits.length === 0 && _jsx("p", { className: "text-sm text-slate-500", children: "No traits yet. Create your first trait." }), traits.map((trait) => (_jsxs("button", { type: "button", onClick: () => setSelectedTraitId(trait.id), className: `w-full rounded-md border p-2 text-left text-sm ${selectedTraitId === trait.id ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white"}`, children: [_jsx("div", { className: "font-semibold", children: trait.name }), _jsx("div", { className: "text-xs text-slate-500", children: trait.category })] }, trait.id)))] })] }), _jsxs(Card, { children: [_jsxs("div", { className: "mb-3 flex items-center justify-between", children: [_jsx("h2", { className: "text-lg font-semibold", children: isEditing ? "Edit Trait" : "Create Trait" }), selectedTrait && (_jsxs("div", { className: "flex gap-2", children: [_jsx("button", { type: "button", className: "text-xs text-slate-600 underline", onClick: () => {
+                                            setIsEditing(true);
+                                        }, children: "Load selected" }), _jsx("button", { type: "button", className: "text-xs text-red-700 underline", onClick: () => void deleteTrait(selectedTrait.id), children: "Delete selected" })] }))] }), _jsxs("form", { className: "space-y-3", onSubmit: (event) => void submitTrait(event), children: [_jsxs(CollapsibleSection, { title: "Basics", children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Name" }), _jsx("input", { required: true, className: inputClass, value: form.name, onChange: (event) => setForm((prev) => ({ ...prev, name: event.target.value })) }), _jsx(FieldMeta, { value: form.name })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Category" }), _jsx("select", { className: inputClass, value: form.category, onChange: (event) => setForm((prev) => ({ ...prev, category: event.target.value })), children: traitCategories.map((category) => (_jsx("option", { value: category, children: category }, category))) })] }), _jsxs("div", { children: [_jsxs("div", { className: "mb-1 flex items-center justify-between", children: [_jsx("label", { className: labelClass, children: "Definition" }), _jsx("button", { type: "button", className: subtleButtonClass, onClick: () => setForm((prev) => ({
+                                                            ...prev,
+                                                            definition: buildDefinitionDraft(prev.name, prev.category)
+                                                        })), children: "AI Draft Definition" })] }), _jsx("textarea", { className: inputClass, value: form.definition, onChange: (event) => setForm((prev) => ({ ...prev, definition: event.target.value })) }), _jsx(FieldMeta, { value: form.definition })] })] }), _jsxs(CollapsibleSection, { title: "Rubric Signals", children: [_jsx(ListBuilder, { label: "Positive Signals", items: positiveSignals, placeholder: "Add a positive signal", emptyText: "No positive signals yet.", suggestionButtonLabel: "Generate 5 positive signals", onSuggestion: () => setForm((prev) => ({
+                                            ...prev,
+                                            rubricPositiveSignals: joinListText(buildSignalSuggestions("positive", prev.name))
+                                        })), onChange: (items) => setForm((prev) => ({ ...prev, rubricPositiveSignals: joinListText(items) })) }), _jsx(ListBuilder, { label: "Negative Signals", items: negativeSignals, placeholder: "Add a negative signal", emptyText: "No negative signals yet.", suggestionButtonLabel: "Generate 5 negative signals", onSuggestion: () => setForm((prev) => ({
+                                            ...prev,
+                                            rubricNegativeSignals: joinListText(buildSignalSuggestions("negative", prev.name))
+                                        })), onChange: (items) => setForm((prev) => ({ ...prev, rubricNegativeSignals: joinListText(items) })) })] }), _jsx(CollapsibleSection, { title: "Follow-Ups", defaultOpen: false, children: _jsx(ListBuilder, { label: "Follow-up Questions", items: followUps, placeholder: "Add a follow-up question", emptyText: "No follow-ups yet.", onChange: (items) => setForm((prev) => ({ ...prev, rubricFollowUps: joinListText(items) })) }) }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { type: "submit", children: isEditing ? "Save Trait" : "Create Trait" }), _jsx("button", { type: "button", className: "text-sm underline", onClick: resetTraitForm, children: "Reset" })] }), traitNotice && _jsx("p", { className: "text-sm text-emerald-700", children: traitNotice }), traitError && _jsx("p", { className: "text-sm text-red-700", children: traitError })] })] }), _jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: "Trait Questions" }), !selectedTrait ? (_jsx("p", { className: "text-sm text-slate-500", children: "Select a trait to manage questions." })) : (_jsxs(_Fragment, { children: [_jsx("p", { className: "mb-3 text-sm text-slate-600", children: selectedTrait.name }), _jsxs("form", { className: "space-y-3", onSubmit: (event) => void submitQuestion(event), children: [_jsxs(CollapsibleSection, { title: "Question Details", children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Prompt" }), _jsx("textarea", { required: true, className: inputClass, value: questionForm.prompt, onChange: (event) => setQuestionForm((prev) => ({ ...prev, prompt: event.target.value })) }), _jsx(FieldMeta, { value: questionForm.prompt })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Type" }), _jsxs("select", { className: inputClass, value: questionForm.type, onChange: (event) => setQuestionForm((prev) => ({ ...prev, type: event.target.value })), children: [_jsx("option", { value: "chat", children: "Chat" }), _jsx("option", { value: "quiz", children: "Quiz" })] })] })] }), questionForm.type === "quiz" && (_jsx(CollapsibleSection, { title: "Quiz Options", defaultOpen: false, children: _jsx(ListBuilder, { label: "Options", items: quizOptions, placeholder: "Add a quiz option", emptyText: "No options yet.", onChange: (items) => setQuestionForm((prev) => ({ ...prev, optionsText: joinListText(items) })) }) })), _jsx(CollapsibleSection, { title: "Scoring Guidance", defaultOpen: false, children: _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Scoring Hints" }), _jsx("textarea", { className: inputClass, value: questionForm.scoringHints, onChange: (event) => setQuestionForm((prev) => ({ ...prev, scoringHints: event.target.value })) }), _jsx(FieldMeta, { value: questionForm.scoringHints })] }) }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { type: "submit", children: questionForm.id ? "Save Question" : "Add Question" }), _jsx("button", { type: "button", className: "text-sm underline", onClick: () => setQuestionForm({ id: "", prompt: "", type: "chat", optionsText: "", scoringHints: "" }), children: "Reset" })] })] }), _jsx("div", { className: "mt-4 space-y-2", children: questions.map((question) => (_jsxs("div", { className: "rounded-md border border-slate-200 p-2", children: [_jsx("div", { className: "text-xs text-slate-500", children: question.type.toUpperCase() }), _jsx("div", { className: "text-sm font-medium", children: question.prompt }), question.options.length > 0 && _jsxs("div", { className: "text-xs text-slate-600", children: ["Options: ", question.options.join(", ")] }), _jsxs("div", { className: "mt-2 flex gap-2 text-xs", children: [_jsx("button", { type: "button", className: "underline", onClick: () => setQuestionForm({
+                                                        id: question.id,
+                                                        prompt: question.prompt,
+                                                        type: question.type,
+                                                        optionsText: question.options.join("\n"),
+                                                        scoringHints: question.scoringHints ?? ""
+                                                    }), children: "Edit" }), _jsx("button", { type: "button", className: "text-red-700 underline", onClick: () => void deleteQuestion(question.id), children: "Delete" })] })] }, question.id))) })] }))] })] }));
+}
+function ProgramsPage() {
+    const [programs, setPrograms] = useState([]);
+    const [traits, setTraits] = useState([]);
+    const [selectedProgramId, setSelectedProgramId] = useState(null);
+    const [board, setBoard] = useState(emptyProgramBoardState);
+    const [programForm, setProgramForm] = useState({
+        name: "",
+        description: "",
+        degreeLevel: "",
+        department: ""
+    });
+    const [traitModalOpen, setTraitModalOpen] = useState(false);
+    const [selectorSearch, setSelectorSearch] = useState("");
+    const [selectorCategory, setSelectorCategory] = useState("ALL");
+    const [selectedTraitIds, setSelectedTraitIds] = useState(new Set());
+    const [programNotice, setProgramNotice] = useState(null);
+    const [programError, setProgramError] = useState(null);
+    const selectedProgram = programs.find((program) => program.id === selectedProgramId) ?? null;
+    const loadPrograms = async () => {
+        const payload = await request("/api/admin/programs");
+        setPrograms(payload.data);
+        if (payload.data.length > 0 && !payload.data.some((program) => program.id === selectedProgramId)) {
+            setSelectedProgramId(payload.data[0]?.id ?? null);
+        }
+        if (payload.data.length === 0) {
+            setSelectedProgramId(null);
+            setBoard(emptyProgramBoardState);
+        }
+    };
+    const loadTraits = async () => {
+        const payload = await request("/api/admin/traits");
+        setTraits(payload.data);
+    };
+    const loadProgramTraits = async (programId) => {
+        const payload = await request(`/api/admin/programs/${programId}/traits`);
+        const nextState = {
+            CRITICAL: [],
+            VERY_IMPORTANT: [],
+            IMPORTANT: [],
+            NICE_TO_HAVE: []
+        };
+        for (const item of payload.data) {
+            nextState[item.bucket].push(item.trait);
+        }
+        setBoard(nextState);
+    };
+    useEffect(() => {
+        void Promise.all([loadPrograms(), loadTraits()]);
+    }, []);
+    useEffect(() => {
+        if (!selectedProgramId) {
+            setBoard(emptyProgramBoardState);
+            return;
+        }
+        void loadProgramTraits(selectedProgramId);
+    }, [selectedProgramId]);
+    useEffect(() => {
+        if (!selectedProgram) {
+            setProgramForm({ name: "", description: "", degreeLevel: "", department: "" });
+            return;
+        }
+        setProgramForm({
+            name: selectedProgram.name,
+            description: selectedProgram.description ?? "",
+            degreeLevel: selectedProgram.degreeLevel ?? "",
+            department: selectedProgram.department ?? ""
+        });
+    }, [selectedProgram]);
+    const createProgram = async (event) => {
+        event.preventDefault();
+        const payload = await request("/api/admin/programs", {
+            method: "POST",
+            body: JSON.stringify(programForm)
+        });
+        await loadPrograms();
+        setSelectedProgramId(payload.data.id);
+    };
+    const saveProgram = async (event) => {
+        event.preventDefault();
+        if (!selectedProgramId) {
+            return;
+        }
+        await request(`/api/admin/programs/${selectedProgramId}`, {
+            method: "PUT",
+            body: JSON.stringify(programForm)
+        });
+        await loadPrograms();
+    };
+    const deleteProgram = async (id) => {
+        await request(`/api/admin/programs/${id}`, { method: "DELETE" });
+        await loadPrograms();
+    };
+    const moveTrait = (fromBucket, fromIndex, toBucket, toIndex) => {
+        setBoard((current) => {
+            const source = [...current[fromBucket]];
+            const [moved] = source.splice(fromIndex, 1);
+            if (!moved) {
+                return current;
+            }
+            const destination = fromBucket === toBucket ? source : [...current[toBucket]];
+            const insertIndex = toIndex === undefined ? destination.length : toIndex;
+            destination.splice(insertIndex, 0, moved);
+            return {
+                ...current,
+                [fromBucket]: source,
+                [toBucket]: destination
+            };
+        });
+    };
+    const saveBoard = async () => {
+        if (!selectedProgramId) {
+            return;
+        }
+        setProgramNotice(null);
+        setProgramError(null);
+        try {
+            const boardIds = {
+                CRITICAL: board.CRITICAL.map((trait) => trait.id),
+                VERY_IMPORTANT: board.VERY_IMPORTANT.map((trait) => trait.id),
+                IMPORTANT: board.IMPORTANT.map((trait) => trait.id),
+                NICE_TO_HAVE: board.NICE_TO_HAVE.map((trait) => trait.id)
+            };
+            await request(`/api/admin/programs/${selectedProgramId}/traits`, {
+                method: "PUT",
+                body: JSON.stringify({
+                    items: boardStateToProgramTraitRows(boardIds)
+                })
+            });
+            await loadProgramTraits(selectedProgramId);
+            setProgramNotice("Program board saved.");
+        }
+        catch (error) {
+            setProgramError(error instanceof Error ? error.message : "Failed to save board.");
+        }
+    };
+    const assignedTraitIds = useMemo(() => {
+        const ids = new Set();
+        for (const bucket of programTraitPriorityBuckets) {
+            for (const trait of board[bucket]) {
+                ids.add(trait.id);
+            }
+        }
+        return ids;
+    }, [board]);
+    const selectableTraits = useMemo(() => traits.filter((trait) => {
+        if (assignedTraitIds.has(trait.id)) {
+            return false;
+        }
+        if (selectorCategory !== "ALL" && trait.category !== selectorCategory) {
+            return false;
+        }
+        if (selectorSearch.trim()) {
+            const q = selectorSearch.toLowerCase();
+            return trait.name.toLowerCase().includes(q) || (trait.definition ?? "").toLowerCase().includes(q);
+        }
+        return true;
+    }), [traits, assignedTraitIds, selectorCategory, selectorSearch]);
+    const addSelectedTraits = () => {
+        const nextTraits = traits.filter((trait) => selectedTraitIds.has(trait.id));
+        if (nextTraits.length === 0) {
+            return;
+        }
+        setBoard((current) => ({
+            ...current,
+            IMPORTANT: [...current.IMPORTANT, ...nextTraits]
+        }));
+        setSelectedTraitIds(new Set());
+        setTraitModalOpen(false);
+    };
+    return (_jsxs("div", { className: "grid gap-4 lg:grid-cols-[280px_320px_1fr]", children: [_jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: "Programs" }), _jsxs("div", { className: "space-y-2", children: [programs.length === 0 && _jsx("p", { className: "text-sm text-slate-500", children: "No programs yet. Create one to begin." }), programs.map((program) => (_jsxs("button", { type: "button", onClick: () => setSelectedProgramId(program.id), className: `w-full rounded-md border p-2 text-left text-sm ${selectedProgramId === program.id ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white"}`, children: [_jsx("div", { className: "font-semibold", children: program.name }), program.department && _jsx("div", { className: "text-xs text-slate-500", children: program.department })] }, program.id)))] })] }), _jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: selectedProgram ? "Edit Program" : "Create Program" }), _jsxs("form", { className: "space-y-3", onSubmit: (event) => void (selectedProgram ? saveProgram(event) : createProgram(event)), children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Name" }), _jsx("input", { required: true, className: inputClass, value: programForm.name, onChange: (event) => setProgramForm((prev) => ({ ...prev, name: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Description" }), _jsx("textarea", { className: inputClass, value: programForm.description, onChange: (event) => setProgramForm((prev) => ({ ...prev, description: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Degree Level" }), _jsx("input", { className: inputClass, value: programForm.degreeLevel, onChange: (event) => setProgramForm((prev) => ({ ...prev, degreeLevel: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Department" }), _jsx("input", { className: inputClass, value: programForm.department, onChange: (event) => setProgramForm((prev) => ({ ...prev, department: event.target.value })) })] }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { type: "submit", children: selectedProgram ? "Save Program" : "Create Program" }), selectedProgram && (_jsx("button", { type: "button", className: "text-sm text-red-700 underline", onClick: () => void deleteProgram(selectedProgram.id), children: "Delete" }))] })] })] }), _jsxs(Card, { children: [_jsxs("div", { className: "mb-3 flex items-center justify-between", children: [_jsx("h2", { className: "text-lg font-semibold", children: "Trait Priority Board" }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { type: "button", onClick: () => setTraitModalOpen(true), disabled: !selectedProgram, children: "Add Trait" }), _jsx(Button, { type: "button", onClick: () => void saveBoard(), disabled: !selectedProgram, children: "Save Board" })] })] }), !selectedProgram ? (_jsx("p", { className: "text-sm text-slate-500", children: "Select a program to edit board priorities." })) : (_jsx("div", { className: "grid gap-3 md:grid-cols-2 xl:grid-cols-4", children: programTraitPriorityBuckets.map((bucket) => (_jsxs("div", { className: "rounded-md border border-slate-200 bg-slate-50 p-2", onDragOver: (event) => event.preventDefault(), onDrop: (event) => {
+                                event.preventDefault();
+                                const payload = event.dataTransfer.getData("text/plain");
+                                if (!payload) {
+                                    return;
+                                }
+                                const parsed = JSON.parse(payload);
+                                moveTrait(parsed.fromBucket, parsed.fromIndex, bucket);
+                            }, children: [_jsx("h3", { className: "mb-2 text-sm font-semibold", children: bucket }), _jsx("div", { className: "space-y-2", children: board[bucket].map((trait, index) => (_jsxs("div", { draggable: true, onDragStart: (event) => event.dataTransfer.setData("text/plain", JSON.stringify({
+                                            fromBucket: bucket,
+                                            fromIndex: index
+                                        })), onDragOver: (event) => event.preventDefault(), onDrop: (event) => {
+                                            event.preventDefault();
+                                            const payload = event.dataTransfer.getData("text/plain");
+                                            if (!payload) {
+                                                return;
+                                            }
+                                            const parsed = JSON.parse(payload);
+                                            moveTrait(parsed.fromBucket, parsed.fromIndex, bucket, index);
+                                        }, className: "cursor-grab rounded border border-slate-300 bg-white p-2 text-sm", children: [_jsx("div", { className: "font-medium", children: trait.name }), _jsx("div", { className: "text-xs text-slate-500", children: trait.category })] }, trait.id))) })] }, bucket))) })), traitModalOpen && (_jsx("div", { className: "fixed inset-0 z-20 flex items-center justify-center bg-black/30 p-4", children: _jsxs("div", { className: "w-full max-w-xl rounded-md bg-white p-4", children: [_jsxs("div", { className: "mb-3 flex items-center justify-between", children: [_jsx("h3", { className: "text-lg font-semibold", children: "Add Traits" }), _jsx("button", { type: "button", className: "text-sm underline", onClick: () => setTraitModalOpen(false), children: "Close" })] }), _jsxs("div", { className: "mb-3 grid gap-2 md:grid-cols-2", children: [_jsx("input", { className: inputClass, placeholder: "Search traits...", value: selectorSearch, onChange: (event) => setSelectorSearch(event.target.value) }), _jsxs("select", { className: inputClass, value: selectorCategory, onChange: (event) => setSelectorCategory(event.target.value), children: [_jsx("option", { value: "ALL", children: "All categories" }), traitCategories.map((category) => (_jsx("option", { value: category, children: category }, category)))] })] }), _jsx("div", { className: "max-h-64 space-y-2 overflow-auto", children: selectableTraits.map((trait) => (_jsxs("label", { className: "flex items-start gap-2 rounded border border-slate-200 p-2 text-sm", children: [_jsx("input", { type: "checkbox", checked: selectedTraitIds.has(trait.id), onChange: (event) => setSelectedTraitIds((prev) => {
+                                                    const next = new Set(prev);
+                                                    if (event.target.checked) {
+                                                        next.add(trait.id);
+                                                    }
+                                                    else {
+                                                        next.delete(trait.id);
+                                                    }
+                                                    return next;
+                                                }) }), _jsxs("span", { children: [_jsx("span", { className: "block font-medium", children: trait.name }), _jsx("span", { className: "text-xs text-slate-500", children: trait.category })] })] }, trait.id))) }), _jsx("div", { className: "mt-3 flex justify-end", children: _jsx(Button, { type: "button", onClick: addSelectedTraits, children: "Add Selected" }) })] }) })), programNotice && _jsx("p", { className: "mt-3 text-sm text-emerald-700", children: programNotice }), programError && _jsx("p", { className: "mt-3 text-sm text-red-700", children: programError })] })] }));
+}
+function BrandVoicePage() {
+    const [voices, setVoices] = useState([]);
+    const [selectedVoiceId, setSelectedVoiceId] = useState(null);
+    const [form, setForm] = useState({
+        name: "",
+        tonePreset: "FRIENDLY",
+        doList: "",
+        dontList: "",
+        samplePhrases: ""
+    });
+    const selectedVoice = voices.find((voice) => voice.id === selectedVoiceId) ?? null;
+    const loadVoices = async () => {
+        const payload = await request("/api/admin/brand-voices");
+        setVoices(payload.data);
+        if (payload.data.length > 0 && !payload.data.some((voice) => voice.id === selectedVoiceId)) {
+            setSelectedVoiceId(payload.data[0]?.id ?? null);
+        }
+        if (payload.data.length === 0) {
+            setSelectedVoiceId(null);
+        }
+    };
+    useEffect(() => {
+        void loadVoices();
+    }, []);
+    useEffect(() => {
+        if (!selectedVoice) {
+            setForm({
+                name: "",
+                tonePreset: "FRIENDLY",
+                doList: "",
+                dontList: "",
+                samplePhrases: ""
+            });
+            return;
+        }
+        setForm({
+            name: selectedVoice.name,
+            tonePreset: selectedVoice.tonePreset,
+            doList: selectedVoice.doList ?? "",
+            dontList: selectedVoice.dontList ?? "",
+            samplePhrases: selectedVoice.samplePhrases ?? ""
+        });
+    }, [selectedVoice]);
+    const createVoice = async (event) => {
+        event.preventDefault();
+        const payload = await request("/api/admin/brand-voices", {
+            method: "POST",
+            body: JSON.stringify(form)
+        });
+        await loadVoices();
+        setSelectedVoiceId(payload.data.id);
+    };
+    const saveVoice = async (event) => {
+        event.preventDefault();
+        if (!selectedVoiceId) {
+            return;
+        }
+        await request(`/api/admin/brand-voices/${selectedVoiceId}`, {
+            method: "PUT",
+            body: JSON.stringify(form)
+        });
+        await loadVoices();
+    };
+    const deleteVoice = async (id) => {
+        await request(`/api/admin/brand-voices/${id}`, { method: "DELETE" });
+        await loadVoices();
+    };
+    return (_jsxs("div", { className: "grid gap-4 lg:grid-cols-[280px_1fr]", children: [_jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: "Brand Voices" }), _jsx("div", { className: "space-y-2", children: voices.map((voice) => (_jsxs("button", { type: "button", onClick: () => setSelectedVoiceId(voice.id), className: `w-full rounded-md border p-2 text-left text-sm ${selectedVoiceId === voice.id ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white"}`, children: [_jsx("div", { className: "font-semibold", children: voice.name }), _jsx("div", { className: "text-xs text-slate-500", children: voice.tonePreset })] }, voice.id))) })] }), _jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: selectedVoice ? "Edit Brand Voice" : "Create Brand Voice" }), _jsxs("form", { className: "space-y-3", onSubmit: (event) => void (selectedVoice ? saveVoice(event) : createVoice(event)), children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Name" }), _jsx("input", { required: true, className: inputClass, value: form.name, onChange: (event) => setForm((prev) => ({ ...prev, name: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Tone Preset" }), _jsx("select", { className: inputClass, value: form.tonePreset, onChange: (event) => setForm((prev) => ({ ...prev, tonePreset: event.target.value })), children: tonePresets.map((tonePreset) => (_jsx("option", { value: tonePreset, children: tonePreset }, tonePreset))) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Do List" }), _jsx("textarea", { className: inputClass, value: form.doList, onChange: (event) => setForm((prev) => ({ ...prev, doList: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Dont List" }), _jsx("textarea", { className: inputClass, value: form.dontList, onChange: (event) => setForm((prev) => ({ ...prev, dontList: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Sample Phrases" }), _jsx("textarea", { className: inputClass, value: form.samplePhrases, onChange: (event) => setForm((prev) => ({ ...prev, samplePhrases: event.target.value })) })] }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { type: "submit", children: selectedVoice ? "Save Brand Voice" : "Create Brand Voice" }), selectedVoice && (_jsx("button", { type: "button", className: "text-sm text-red-700 underline", onClick: () => void deleteVoice(selectedVoice.id), children: "Delete" }))] })] })] })] }));
+}
+ReactDOM.createRoot(document.getElementById("root")).render(_jsx(React.StrictMode, { children: _jsx(QueryClientProvider, { client: queryClient, children: _jsx(BrowserRouter, { children: _jsx(ShellLayout, { children: _jsxs(Routes, { children: [_jsx(Route, { path: "/", element: _jsx(Navigate, { to: "/traits", replace: true }) }), _jsx(Route, { path: "/traits", element: _jsx(TraitsPage, {}) }), _jsx(Route, { path: "/programs", element: _jsx(ProgramsPage, {}) }), _jsx(Route, { path: "/brand-voice", element: _jsx(BrandVoicePage, {}) }), _jsx(Route, { path: "*", element: _jsx(Navigate, { to: "/traits", replace: true }) })] }) }) }) }) }));
