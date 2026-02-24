@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -26,14 +26,6 @@ enum ProgramTraitPriorityBucket {
   VERY_IMPORTANT
   IMPORTANT
   NICE_TO_HAVE
-}
-
-enum TonePreset {
-  FRIENDLY
-  ENCOURAGING
-  DIRECT
-  PROFESSIONAL
-  PLAYFUL
 }
 
 enum PreferredChannel {
@@ -93,6 +85,24 @@ enum SmsSessionStatus {
   PAUSED
   COMPLETED
   OPTED_OUT
+}
+
+enum ConversationScenarioStage {
+  AWARENESS
+  CONSIDERATION
+  OBJECTION
+}
+
+enum ConversationPersona {
+  STUDENT
+  PARENT
+  INTERNATIONAL
+}
+
+enum ConversationTurnRole {
+  USER
+  ASSISTANT
+  SYSTEM
 }
 
 model Candidate {
@@ -169,6 +179,7 @@ model TraitQuestion {
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
   trait        Trait             @relation(fields: [traitId], references: [id], onDelete: Cascade)
+  traitScores  TraitScore[]
 
   @@index([traitId])
 }
@@ -205,12 +216,71 @@ model ProgramTrait {
 model BrandVoice {
   id            String     @id @default(cuid())
   name          String     @unique
-  tonePreset    TonePreset
-  doList        String?
-  dontList      String?
-  samplePhrases String?
+  primaryTone   String     @default("professional")
+  ttsVoiceName  String     @default("alloy")
+  toneModifiers String[]   @default([])
+  toneProfile   Json       @default("{\"formality\":75,\"warmth\":60,\"directness\":65,\"confidence\":70,\"energy\":55}")
+  styleFlags    String[]   @default(["clear", "credible", "supportive", "future_focused"])
+  avoidFlags    String[]   @default(["jargon_heavy", "overly_salesy", "impersonal"])
+  canonicalExamples Json   @default("[]")
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
+  simulations   ConversationSimulation[]
+}
+
+model ConversationScenario {
+  id        String                    @id @default(cuid())
+  title     String
+  stage     ConversationScenarioStage
+  persona   ConversationPersona?
+  seedPrompt String
+  isPreset  Boolean                   @default(true)
+  createdAt DateTime                  @default(now())
+  updatedAt DateTime                  @updatedAt
+  simulations ConversationSimulation[]
+}
+
+model ConversationSimulation {
+  id             String               @id @default(cuid())
+  brandVoiceId   String
+  scenarioId     String?
+  persona        ConversationPersona
+  customScenario String?
+  stabilityScore Int?
+  createdAt      DateTime             @default(now())
+  brandVoice     BrandVoice           @relation(fields: [brandVoiceId], references: [id], onDelete: Cascade)
+  scenario       ConversationScenario? @relation(fields: [scenarioId], references: [id], onDelete: SetNull)
+  turns          ConversationTurn[]
+  voiceSamples   VoiceSample[]
+
+  @@index([brandVoiceId])
+}
+
+model ConversationTurn {
+  id           String               @id @default(cuid())
+  simulationId String
+  role         ConversationTurnRole
+  content      String
+  createdAt    DateTime             @default(now())
+  order        Int
+  simulation   ConversationSimulation @relation(fields: [simulationId], references: [id], onDelete: Cascade)
+  voiceSamples VoiceSample[]
+
+  @@index([simulationId, order])
+}
+
+model VoiceSample {
+  id           String                 @id @default(cuid())
+  simulationId String
+  turnId       String
+  provider     String                 @default("stub")
+  voiceName    String?
+  audioUrl     String
+  createdAt    DateTime               @default(now())
+  simulation   ConversationSimulation @relation(fields: [simulationId], references: [id], onDelete: Cascade)
+  turn         ConversationTurn       @relation(fields: [turnId], references: [id], onDelete: Cascade)
+
+  @@index([simulationId])
 }
 
 model Scorecard {
@@ -231,15 +301,22 @@ model TraitScore {
   id           String                     @id @default(cuid())
   scorecardId  String
   traitId      String
+  traitQuestionId String?
   bucket       ProgramTraitPriorityBucket
   score0to5    Float
   confidence   Float
   evidenceJson String
+  rationale    String?
+  scoredAt     DateTime                   @default(now())
+  createdAt    DateTime                   @default(now())
+  updatedAt    DateTime                   @updatedAt
   scorecard    Scorecard                  @relation(fields: [scorecardId], references: [id], onDelete: Cascade)
+  traitQuestion TraitQuestion?            @relation(fields: [traitQuestionId], references: [id], onDelete: SetNull)
   trait        Trait                      @relation(fields: [traitId], references: [id], onDelete: Cascade)
 
   @@index([scorecardId])
   @@index([traitId])
+  @@index([traitQuestionId])
 }
 
 model Lead {

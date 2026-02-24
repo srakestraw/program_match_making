@@ -1,0 +1,7 @@
+ALTER TABLE "BrandVoice"
+DROP COLUMN IF EXISTS "tonePreset",
+DROP COLUMN IF EXISTS "doList",
+DROP COLUMN IF EXISTS "dontList",
+DROP COLUMN IF EXISTS "samplePhrases";
+
+DROP TYPE IF EXISTS "TonePreset";

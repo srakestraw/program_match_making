@@ -1,4 +1,5 @@
 import { ProgramTraitPriorityBucket, TraitQuestionType } from "@prisma/client";
+import type { Response } from "express";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
@@ -6,6 +7,7 @@ import { sendError, sendValidationError } from "../lib/http.js";
 import { incrementMetric } from "../lib/metrics.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import { fetchOpenAiWithRetry } from "../lib/openai.js";
+import { computeProgramFit, type ScoringSnapshot, type SnapshotConfidence } from "../lib/program-fit.js";
 
 const bucketRank: Record<ProgramTraitPriorityBucket, number> = {
   CRITICAL: 0,
@@ -46,7 +48,16 @@ const scoreSchema = z.object({
   mode: z.enum(["chat", "quiz"]),
   programId: z.string().min(1),
   transcriptTurns: z.array(transcriptTurnSchema).max(200).optional(),
-  responses: z.array(responseSchema).max(100).optional()
+  responses: z.array(responseSchema).max(100).optional(),
+  activeTraitId: z.string().min(1).optional()
+});
+
+const voiceTurnSchema = scoreSchema.extend({
+  sessionId: z.string().min(1)
+});
+
+const voiceEndSchema = z.object({
+  sessionId: z.string().min(1)
 });
 
 const parseJsonObject = (value: string | null): Record<string, unknown> | null => {
@@ -114,6 +125,8 @@ type ScorecardTraitResult = {
   score0to5: number;
   confidence: number;
   evidence: string[];
+  rationale: string | null;
+  traitQuestionId: string | null;
 };
 
 const computeOverallScore = (items: ScorecardTraitResult[]) => {
@@ -159,6 +172,7 @@ const computeQuizTraitScores = (input: {
       const traitQuestionScores: number[] = [];
       const evidence: string[] = [];
       let answeredCount = 0;
+      let lastAnsweredQuestionId: string | null = null;
 
       for (const question of row.trait.questions) {
         const options = parseOptions(question.optionsJson);
@@ -178,6 +192,7 @@ const computeQuizTraitScores = (input: {
         }
 
         answeredCount += 1;
+        lastAnsweredQuestionId = question.id;
 
         const normalizedAnswer = normalizeText(selectedAnswer);
         const parsedOptions = options.map((option) => parseInlineOptionScore(option));
@@ -225,7 +240,12 @@ const computeQuizTraitScores = (input: {
         bucket: row.bucket,
         score0to5,
         confidence: Number(confidenceFromCoverage(answeredCount, row.trait.questions.length).toFixed(2)),
-        evidence: evidence.length > 0 ? evidence : ["No quiz response captured for this trait."]
+        evidence: evidence.length > 0 ? evidence : ["No quiz response captured for this trait."],
+        rationale:
+          answeredCount > 0
+            ? `Averaged ${answeredCount} quiz response${answeredCount === 1 ? "" : "s"} for this trait.`
+            : "No quiz response captured for this trait yet.",
+        traitQuestionId: lastAnsweredQuestionId
       } satisfies ScorecardTraitResult;
     });
 };
@@ -313,7 +333,9 @@ const computeChatTraitScores = async (input: {
         bucket: item.bucket,
         score0to5: clampScore(Number(modelValue?.score0to5 ?? 2.5)),
         confidence: Math.max(0, Math.min(1, Number(modelValue?.confidence ?? 0.5))),
-        evidence: evidence.length > 0 ? evidence : ["No concrete evidence returned by model."]
+        evidence: evidence.length > 0 ? evidence : ["No concrete evidence returned by model."],
+        rationale: typeof modelValue?.rationale === "string" ? modelValue.rationale.trim().slice(0, 600) : null,
+        traitQuestionId: null
       } satisfies ScorecardTraitResult;
     });
 };
@@ -331,6 +353,7 @@ const buildScorecardResponse = (scorecard: {
     score0to5: number;
     confidence: number;
     evidenceJson: string;
+    rationale: string | null;
     trait: { name: string };
   }>;
 }) => ({
@@ -345,6 +368,7 @@ const buildScorecardResponse = (scorecard: {
     bucket: item.bucket,
     score0to5: item.score0to5,
     confidence: item.confidence,
+    rationale: item.rationale,
     evidence: (() => {
       try {
         const parsed = JSON.parse(item.evidenceJson);
@@ -355,6 +379,140 @@ const buildScorecardResponse = (scorecard: {
     })()
   }))
 });
+
+const mapConfidence = (value: number | null): SnapshotConfidence => {
+  if (value === null) return null;
+  if (value >= 0.75) return "high";
+  if (value >= 0.5) return "medium";
+  return "low";
+};
+
+const buildScoringSnapshot = (input: {
+  programTraits: Array<{
+    traitId: string;
+    bucket: ProgramTraitPriorityBucket;
+    sortOrder: number;
+    trait: { name: string };
+  }>;
+  scorecard:
+    | {
+        traitScores: Array<{
+          traitId: string;
+          score0to5: number;
+          confidence: number;
+          evidenceJson: string;
+          rationale: string | null;
+          traitQuestionId: string | null;
+        }>;
+      }
+    | null;
+  activeTraitId?: string;
+}): ScoringSnapshot => {
+  const scoreByTrait = new Map(
+    (input.scorecard?.traitScores ?? []).map((trait) => [
+      trait.traitId,
+      {
+        score_1_to_5: Number(Math.max(1, Math.min(5, trait.score0to5)).toFixed(2)),
+        confidence: mapConfidence(trait.confidence),
+        evidence: (() => {
+          try {
+            const parsed = JSON.parse(trait.evidenceJson);
+            return Array.isArray(parsed) ? parsed.map((entry) => String(entry)) : [];
+          } catch {
+            return [];
+          }
+        })(),
+        rationale: trait.rationale,
+        answered: trait.traitQuestionId !== null || trait.evidenceJson !== JSON.stringify(["No quiz response captured for this trait."])
+      }
+    ])
+  );
+
+  const orderedTraits = [...input.programTraits].sort((a, b) => {
+    const bucketDiff = bucketRank[a.bucket] - bucketRank[b.bucket];
+    if (bucketDiff !== 0) return bucketDiff;
+    return a.sortOrder - b.sortOrder;
+  });
+
+  const fallbackActiveTraitId =
+    input.activeTraitId ??
+    orderedTraits.find((item) => {
+      const trait = scoreByTrait.get(item.traitId);
+      return !trait?.answered;
+    })?.traitId ??
+    null;
+
+  return {
+    traits: orderedTraits.map((trait) => {
+      const scored = scoreByTrait.get(trait.traitId);
+      const status = fallbackActiveTraitId === trait.traitId ? "active" : scored?.answered ? "complete" : "unanswered";
+
+      return {
+        traitId: trait.traitId,
+        traitName: trait.trait.name,
+        score_1_to_5: scored?.answered ? scored.score_1_to_5 : null,
+        confidence: scored?.answered ? scored.confidence : null,
+        evidence: scored?.evidence ?? [],
+        rationale: scored?.rationale ?? null,
+        status
+      };
+    })
+  };
+};
+
+const loadProgramTraits = async (programId: string, mode: "chat" | "quiz") =>
+  prisma.programTrait.findMany({
+    where: { programId },
+    include: {
+      trait: {
+        include: {
+          questions:
+            mode === "quiz"
+              ? {
+                  where: { type: TraitQuestionType.QUIZ },
+                  orderBy: { createdAt: "asc" }
+                }
+              : false
+        }
+      }
+    }
+  });
+
+const buildSessionInsights = async (input: {
+  sessionId: string;
+  programId: string;
+  mode: "chat" | "quiz";
+  activeTraitId?: string;
+}) => {
+  const [programTraits, scorecard] = await Promise.all([
+    loadProgramTraits(input.programId, input.mode),
+    prisma.scorecard.findFirst({
+      where: { sessionId: input.sessionId, programId: input.programId },
+      orderBy: { createdAt: "desc" },
+      include: {
+        traitScores: true
+      }
+    })
+  ]);
+
+  const scoringSnapshot = buildScoringSnapshot({
+    programTraits: programTraits.map((item) => ({
+      traitId: item.traitId,
+      bucket: item.bucket,
+      sortOrder: item.sortOrder,
+      trait: { name: item.trait.name }
+    })),
+    scorecard,
+    activeTraitId: input.activeTraitId
+  });
+
+  const programFit = await computeProgramFit(input.sessionId, scoringSnapshot);
+
+  return {
+    scoring_snapshot: scoringSnapshot,
+    program_fit: programFit
+  };
+};
 
 export const sessionsRouter = Router();
 const scoreRateLimit = createRateLimiter({
@@ -369,6 +527,7 @@ export const createScorecardForSession = async (input: {
   programId: string;
   transcriptTurns?: Array<{ ts: string; speaker: "candidate" | "assistant"; text: string }>;
   responses?: Array<{ questionId: string; answer: string }>;
+  activeTraitId?: string;
 }) => {
   const [session, program] = await Promise.all([
     prisma.candidateSession.findUnique({ where: { id: input.sessionId } }),
@@ -396,22 +555,7 @@ export const createScorecardForSession = async (input: {
         text: turn.text
       }));
 
-  const programTraits = await prisma.programTrait.findMany({
-    where: { programId: input.programId },
-    include: {
-      trait: {
-        include: {
-          questions:
-            input.mode === "quiz"
-              ? {
-                  where: { type: TraitQuestionType.QUIZ },
-                  orderBy: { createdAt: "asc" }
-                }
-              : false
-        }
-      }
-    }
-  });
+  const programTraits = await loadProgramTraits(input.programId, input.mode);
 
   const perTrait =
     input.mode === "quiz"
@@ -465,7 +609,9 @@ export const createScorecardForSession = async (input: {
             bucket: item.bucket,
             score0to5: Number(item.score0to5.toFixed(2)),
             confidence: Number(item.confidence.toFixed(2)),
-            evidenceJson: JSON.stringify(item.evidence)
+            evidenceJson: JSON.stringify(item.evidence),
+            rationale: item.rationale,
+            traitQuestionId: item.traitQuestionId
           }))
         }
       },
@@ -483,29 +629,77 @@ export const createScorecardForSession = async (input: {
     return scorecard;
   });
 
-  return buildScorecardResponse(persisted);
+  const scorecard = buildScorecardResponse(persisted);
+  const insights = await buildSessionInsights({
+    sessionId: input.sessionId,
+    programId: input.programId,
+    mode: input.mode,
+    activeTraitId: input.activeTraitId
+  });
+
+  return {
+    ...scorecard,
+    ...insights
+  };
+};
+
+const createSession = async (body: z.infer<typeof createSessionSchema>) => {
+  const session = await prisma.candidateSession.create({
+    data: {
+      mode: body.mode,
+      channel: body.mode === "voice" ? "WEB_VOICE" : body.mode === "chat" ? "WEB_CHAT" : "WEB_QUIZ",
+      status: "active",
+      ...(body.candidateId ? { candidateId: body.candidateId } : {}),
+      ...(body.programId ? { programId: body.programId } : {})
+    }
+  });
+
+  const baseResponse = {
+    id: session.id,
+    status: session.status,
+    startedAt: session.startedAt.toISOString()
+  };
+
+  if (!body.programId || body.mode === "voice") {
+    return baseResponse;
+  }
+
+  const insights = await buildSessionInsights({
+    sessionId: session.id,
+    programId: body.programId,
+    mode: body.mode
+  });
+
+  return {
+    ...baseResponse,
+    ...insights
+  };
+};
+
+const sendScoreError = (res: Response, error: unknown) => {
+  incrementMetric("scoring.failed");
+  if (error instanceof z.ZodError) {
+    sendValidationError(res, error);
+    return;
+  }
+
+  const rawMessage = error instanceof Error ? error.message : "Could not score session";
+  const message = rawMessage.replace(/^OPENAI_UPSTREAM:\s*/i, "");
+  const openAiRelated = /OPENAI|OpenAI|chat scoring/i.test(rawMessage);
+  if (message === "Session not found" || message === "Program not found") {
+    sendError(res, 404, message);
+    return;
+  }
+  sendError(res, openAiRelated ? 502 : 400, message, undefined, openAiRelated ? "SCORING_UPSTREAM_FAILED" : undefined);
 };
 
 sessionsRouter.post("/", async (req, res) => {
   try {
     const body = createSessionSchema.parse(req.body);
-
-    const session = await prisma.candidateSession.create({
-      data: {
-        mode: body.mode,
-        channel: body.mode === "voice" ? "WEB_VOICE" : body.mode === "chat" ? "WEB_CHAT" : "WEB_QUIZ",
-        status: "active",
-        ...(body.candidateId ? { candidateId: body.candidateId } : {}),
-        ...(body.programId ? { programId: body.programId } : {})
-      }
-    });
+    const session = await createSession(body);
 
     incrementMetric("sessions.created");
-    res.status(201).json({
-      id: session.id,
-      status: session.status,
-      startedAt: session.startedAt.toISOString()
-    });
+    res.status(201).json(session);
   } catch (error) {
     if (error instanceof z.ZodError) {
       sendValidationError(res, error);
@@ -548,26 +742,14 @@ sessionsRouter.post("/:id/score", scoreRateLimit, async (req, res) => {
       mode: body.mode,
       programId: body.programId,
       transcriptTurns: body.transcriptTurns,
-      responses: body.responses
+      responses: body.responses,
+      activeTraitId: body.activeTraitId
     });
 
     incrementMetric("scoring.success");
     res.json({ data: result });
   } catch (error) {
-    incrementMetric("scoring.failed");
-    if (error instanceof z.ZodError) {
-      sendValidationError(res, error);
-      return;
-    }
-
-    const rawMessage = error instanceof Error ? error.message : "Could not score session";
-    const message = rawMessage.replace(/^OPENAI_UPSTREAM:\s*/i, "");
-    const openAiRelated = /OPENAI|OpenAI|chat scoring/i.test(rawMessage);
-    if (message === "Session not found" || message === "Program not found") {
-      sendError(res, 404, message);
-      return;
-    }
-    sendError(res, openAiRelated ? 502 : 400, message, undefined, openAiRelated ? "SCORING_UPSTREAM_FAILED" : undefined);
+    sendScoreError(res, error);
   }
 });
 
@@ -579,14 +761,112 @@ sessionsRouter.post("/:id/complete", async (req, res) => {
       data: {
         status: "completed",
         endedAt: new Date()
-      }
+      },
+      include: { program: true }
+    });
+
+    incrementMetric("sessions.completed");
+    const baseResponse = {
+      id: session.id,
+      status: session.status,
+      endedAt: session.endedAt?.toISOString() ?? null
+    };
+
+    if (!session.programId || (session.mode !== "chat" && session.mode !== "quiz")) {
+      res.json(baseResponse);
+      return;
+    }
+
+    const insights = await buildSessionInsights({
+      sessionId: session.id,
+      programId: session.programId,
+      mode: session.mode as "chat" | "quiz"
+    });
+
+    res.json({
+      ...baseResponse,
+      done: true,
+      ...insights
+    });
+  } catch (error) {
+    incrementMetric("sessions.failed");
+    if (error instanceof z.ZodError) {
+      sendValidationError(res, error);
+      return;
+    }
+    sendError(res, 400, error instanceof Error ? error.message : "Could not complete session");
+  }
+});
+
+sessionsRouter.post("/start", async (req, res) => {
+  try {
+    const body = createSessionSchema.parse(req.body);
+    const session = await createSession(body);
+
+    incrementMetric("sessions.created");
+    res.status(201).json(session);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      sendValidationError(res, error);
+      return;
+    }
+    sendError(res, 400, error instanceof Error ? error.message : "Invalid payload");
+  }
+});
+
+sessionsRouter.post("/turn", scoreRateLimit, async (req, res) => {
+  try {
+    const body = voiceTurnSchema.parse(req.body);
+    const result = await createScorecardForSession({
+      sessionId: body.sessionId,
+      mode: body.mode,
+      programId: body.programId,
+      transcriptTurns: body.transcriptTurns,
+      responses: body.responses,
+      activeTraitId: body.activeTraitId
+    });
+
+    incrementMetric("scoring.success");
+    res.json({ data: result });
+  } catch (error) {
+    sendScoreError(res, error);
+  }
+});
+
+sessionsRouter.post("/end", async (req, res) => {
+  try {
+    const body = voiceEndSchema.parse(req.body);
+    const session = await prisma.candidateSession.update({
+      where: { id: body.sessionId },
+      data: {
+        status: "completed",
+        endedAt: new Date()
+      },
+      include: { program: true }
+    });
+
+    const baseResponse = {
+      id: session.id,
+      status: session.status,
+      endedAt: session.endedAt?.toISOString() ?? null
+    };
+
+    if (!session.programId || (session.mode !== "chat" && session.mode !== "quiz")) {
+      res.json(baseResponse);
+      return;
+    }
+
+    const insights = await buildSessionInsights({
+      sessionId: session.id,
+      programId: session.programId,
+      mode: session.mode as "chat" | "quiz"
     });
 
     incrementMetric("sessions.completed");
     res.json({
-      id: session.id,
-      status: session.status,
-      endedAt: session.endedAt?.toISOString() ?? null
+      ...baseResponse,
+      done: true,
+      ...insights
     });
   } catch (error) {
     incrementMetric("sessions.failed");

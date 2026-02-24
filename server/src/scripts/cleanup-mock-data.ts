@@ -4,7 +4,7 @@ import path from "node:path";
 
 dotenv.config({ path: path.resolve(process.cwd(), "../.env") });
 dotenv.config();
-process.env.DATABASE_URL ??= "file:./dev.db";
+// DATABASE_URL must be set (e.g. in .env) - RDS PostgreSQL
 
 const prisma = new PrismaClient();
 

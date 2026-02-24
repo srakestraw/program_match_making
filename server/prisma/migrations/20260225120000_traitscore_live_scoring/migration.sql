@@ -1,0 +1,13 @@
+ALTER TABLE "TraitScore"
+  ADD COLUMN "traitQuestionId" TEXT,
+  ADD COLUMN "rationale" TEXT,
+  ADD COLUMN "scoredAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ADD COLUMN "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ADD COLUMN "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+CREATE INDEX "TraitScore_traitQuestionId_idx" ON "TraitScore"("traitQuestionId");
+
+ALTER TABLE "TraitScore"
+  ADD CONSTRAINT "TraitScore_traitQuestionId_fkey"
+  FOREIGN KEY ("traitQuestionId") REFERENCES "TraitQuestion"("id")
+  ON DELETE SET NULL ON UPDATE CASCADE;

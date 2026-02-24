@@ -9,7 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
-process.env.DATABASE_URL ??= "file:./test.db";
+// DATABASE_URL from .env (RDS PostgreSQL)
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let prisma: typeof import("../src/lib/prisma.js")["prisma"];

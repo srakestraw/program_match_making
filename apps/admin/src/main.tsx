@@ -1,17 +1,38 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  BrandVoiceSampleType,
+  CanonicalExample,
+  ToneProfile,
   ProgramTraitPriorityBucket,
-  TonePreset,
   TraitCategory,
+  brandVoiceAvoidFlagOptions,
+  brandVoiceStyleFlagOptions,
   boardStateToProgramTraitRows,
-  programTraitPriorityBuckets,
-  tonePresets,
+  defaultAvoidFlags,
+  defaultStyleFlags,
+  defaultToneProfile,
+  generateBrandVoicePreview,
   traitCategories
 } from "@pmm/domain";
 import { AppShell, Button, Card } from "@pmm/ui";
+import { BrandVoicePreview } from "./components/brand-voice/BrandVoicePreview";
+import { ChipSelectWithCustom } from "./components/brand-voice/ChipSelectWithCustom";
+import { GeneratedSamplesPanel } from "./components/brand-voice/GeneratedSamplesPanel";
+import { SimulationLab } from "./components/brand-voice/SimulationLab";
+import { ToneSelector } from "./components/brand-voice/ToneSelector";
+import { ToneSliders } from "./components/brand-voice/ToneSliders";
+import {
+  BoardTrait,
+  ProgramBoardState,
+  createEmptyProgramBoardState,
+  isBoardDirty,
+  moveTraitInBoard,
+  removeTraitFromBoard,
+  toBoardIdState
+} from "./program-board-state";
 import "./styles.css";
 
 const queryClient = new QueryClient();
@@ -64,25 +85,20 @@ type ProgramTrait = {
 type BrandVoice = {
   id: string;
   name: string;
-  tonePreset: TonePreset;
-  doList: string | null;
-  dontList: string | null;
-  samplePhrases: string | null;
-};
-
-type ProgramBoardState = Record<ProgramTraitPriorityBucket, Trait[]>;
-
-const emptyProgramBoardState: ProgramBoardState = {
-  CRITICAL: [],
-  VERY_IMPORTANT: [],
-  IMPORTANT: [],
-  NICE_TO_HAVE: []
+  primaryTone: string;
+  ttsVoiceName: string;
+  toneModifiers: string[];
+  toneProfile: ToneProfile;
+  styleFlags: string[];
+  avoidFlags: string[];
+  canonicalExamples: CanonicalExample[];
 };
 
 const navLinkClass = "rounded-md px-3 py-2 text-sm font-medium hover:bg-slate-200";
 const inputClass = "w-full rounded-md border border-slate-300 px-3 py-2 text-sm";
 const labelClass = "mb-1 block text-xs font-medium uppercase tracking-wide text-slate-600";
 const subtleButtonClass = "rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50";
+const openAiVoiceOptions = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBaseUrl}${path}`, {
@@ -734,11 +750,12 @@ function TraitsPage() {
   );
 }
 
-function ProgramsPage() {
+export function ProgramsPage() {
   const [programs, setPrograms] = useState<Program[]>([]);
   const [traits, setTraits] = useState<Trait[]>([]);
   const [selectedProgramId, setSelectedProgramId] = useState<string | null>(null);
-  const [board, setBoard] = useState<ProgramBoardState>(emptyProgramBoardState);
+  const [board, setBoard] = useState<ProgramBoardState>(createEmptyProgramBoardState);
+  const [savedBoard, setSavedBoard] = useState<ProgramBoardState>(createEmptyProgramBoardState);
   const [programForm, setProgramForm] = useState({
     name: "",
     description: "",
@@ -751,8 +768,13 @@ function ProgramsPage() {
   const [selectedTraitIds, setSelectedTraitIds] = useState<Set<string>>(new Set());
   const [programNotice, setProgramNotice] = useState<string | null>(null);
   const [programError, setProgramError] = useState<string | null>(null);
+  const [removingTrait, setRemovingTrait] = useState<BoardTrait | null>(null);
+  const [removeDialogOpen, setRemoveDialogOpen] = useState(false);
+  const cancelRemoveButtonRef = useRef<HTMLButtonElement | null>(null);
+  const confirmRemoveButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const selectedProgram = programs.find((program) => program.id === selectedProgramId) ?? null;
+  const boardDirty = useMemo(() => isBoardDirty(board, savedBoard), [board, savedBoard]);
 
   const loadPrograms = async () => {
     const payload = await request<{ data: Program[] }>("/api/admin/programs");
@@ -762,7 +784,9 @@ function ProgramsPage() {
     }
     if (payload.data.length === 0) {
       setSelectedProgramId(null);
-      setBoard(emptyProgramBoardState);
+      const empty = createEmptyProgramBoardState();
+      setBoard(empty);
+      setSavedBoard(empty);
     }
   };
 
@@ -773,18 +797,14 @@ function ProgramsPage() {
 
   const loadProgramTraits = async (programId: string) => {
     const payload = await request<{ data: ProgramTrait[] }>(`/api/admin/programs/${programId}/traits`);
-    const nextState: ProgramBoardState = {
-      CRITICAL: [],
-      VERY_IMPORTANT: [],
-      IMPORTANT: [],
-      NICE_TO_HAVE: []
-    };
+    const nextState: ProgramBoardState = createEmptyProgramBoardState();
 
     for (const item of payload.data) {
       nextState[item.bucket].push(item.trait);
     }
 
     setBoard(nextState);
+    setSavedBoard(nextState);
   };
 
   useEffect(() => {
@@ -793,7 +813,9 @@ function ProgramsPage() {
 
   useEffect(() => {
     if (!selectedProgramId) {
-      setBoard(emptyProgramBoardState);
+      const empty = createEmptyProgramBoardState();
+      setBoard(empty);
+      setSavedBoard(empty);
       return;
     }
     void loadProgramTraits(selectedProgramId);
@@ -845,23 +867,52 @@ function ProgramsPage() {
     toBucket: ProgramTraitPriorityBucket,
     toIndex?: number
   ) => {
-    setBoard((current) => {
-      const source = [...current[fromBucket]];
-      const [moved] = source.splice(fromIndex, 1);
-      if (!moved) {
-        return current;
+    setBoard((current) => moveTraitInBoard(current, fromBucket, fromIndex, toBucket, toIndex));
+  };
+
+  const openRemoveDialog = (trait: BoardTrait) => {
+    setRemovingTrait(trait);
+    setRemoveDialogOpen(true);
+  };
+
+  const confirmRemoveTrait = () => {
+    if (!removingTrait) {
+      return;
+    }
+    setBoard((current) => removeTraitFromBoard(current, removingTrait.id).nextBoard);
+    setProgramNotice(`Removed ${removingTrait.name} from the board. Save board to persist.`);
+    setProgramError(null);
+    setRemovingTrait(null);
+    setRemoveDialogOpen(false);
+  };
+
+  const cancelRemoveTrait = () => {
+    setRemovingTrait(null);
+    setRemoveDialogOpen(false);
+  };
+
+  const onRemoveDialogKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelRemoveTrait();
+      return;
+    }
+
+    if (event.key === "Tab") {
+      const first = cancelRemoveButtonRef.current;
+      const last = confirmRemoveButtonRef.current;
+      if (!first || !last) {
+        return;
       }
 
-      const destination = fromBucket === toBucket ? source : [...current[toBucket]];
-      const insertIndex = toIndex === undefined ? destination.length : toIndex;
-      destination.splice(insertIndex, 0, moved);
-
-      return {
-        ...current,
-        [fromBucket]: source,
-        [toBucket]: destination
-      };
-    });
+      if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      }
+    }
   };
 
   const saveBoard = async () => {
@@ -873,12 +924,7 @@ function ProgramsPage() {
     setProgramError(null);
 
     try {
-      const boardIds = {
-        CRITICAL: board.CRITICAL.map((trait) => trait.id),
-        VERY_IMPORTANT: board.VERY_IMPORTANT.map((trait) => trait.id),
-        IMPORTANT: board.IMPORTANT.map((trait) => trait.id),
-        NICE_TO_HAVE: board.NICE_TO_HAVE.map((trait) => trait.id)
-      };
+      const boardIds = toBoardIdState(board);
 
       await request<{ data: unknown }>(`/api/admin/programs/${selectedProgramId}/traits`, {
         method: "PUT",
@@ -895,7 +941,7 @@ function ProgramsPage() {
 
   const assignedTraitIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const bucket of programTraitPriorityBuckets) {
+    for (const bucket of Object.keys(board) as ProgramTraitPriorityBucket[]) {
       for (const trait of board[bucket]) {
         ids.add(trait.id);
       }
@@ -1007,23 +1053,33 @@ function ProgramsPage() {
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-lg font-semibold">Trait Priority Board</h2>
           <div className="flex gap-2">
-            <Button type="button" onClick={() => setTraitModalOpen(true)} disabled={!selectedProgram}>
+            <button
+              type="button"
+              className={`${subtleButtonClass} disabled:cursor-not-allowed disabled:opacity-50`}
+              onClick={() => setTraitModalOpen(true)}
+              disabled={!selectedProgram}
+            >
               Add Trait
-            </Button>
-            <Button type="button" onClick={() => void saveBoard()} disabled={!selectedProgram}>
+            </button>
+            <Button type="button" onClick={() => void saveBoard()} disabled={!selectedProgram || !boardDirty}>
               Save Board
             </Button>
           </div>
         </div>
+        {selectedProgram && boardDirty && (
+          <p className="mb-3 text-xs font-medium uppercase tracking-wide text-amber-700" role="status">
+            Unsaved changes
+          </p>
+        )}
 
         {!selectedProgram ? (
           <p className="text-sm text-slate-500">Select a program to edit board priorities.</p>
         ) : (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            {programTraitPriorityBuckets.map((bucket) => (
+          <div className="grid max-h-[32rem] gap-3 overflow-y-auto pr-1 md:grid-cols-2 xl:grid-cols-4">
+            {(Object.keys(board) as ProgramTraitPriorityBucket[]).map((bucket) => (
               <div
                 key={bucket}
-                className="rounded-md border border-slate-200 bg-slate-50 p-2"
+                className="max-h-[30rem] overflow-y-auto rounded-md border border-slate-200 bg-slate-50 p-2"
                 onDragOver={(event) => event.preventDefault()}
                 onDrop={(event) => {
                   event.preventDefault();
@@ -1038,8 +1094,15 @@ function ProgramsPage() {
                   moveTrait(parsed.fromBucket, parsed.fromIndex, bucket);
                 }}
               >
-                <h3 className="mb-2 text-sm font-semibold">{bucket}</h3>
+                <div className="sticky top-0 mb-2 flex items-center justify-between border-b border-slate-200 bg-slate-50 pb-2">
+                  <h3 className="text-sm font-semibold">
+                    {bucket} ({board[bucket].length})
+                  </h3>
+                </div>
                 <div className="space-y-2">
+                  {board[bucket].length === 0 && (
+                    <p className="rounded border border-dashed border-slate-300 bg-white/70 p-2 text-xs text-slate-500">Drag traits here</p>
+                  )}
                   {board[bucket].map((trait, index) => (
                     <div
                       key={trait.id}
@@ -1066,15 +1129,77 @@ function ProgramsPage() {
                         };
                         moveTrait(parsed.fromBucket, parsed.fromIndex, bucket, index);
                       }}
-                      className="cursor-grab rounded border border-slate-300 bg-white p-2 text-sm"
+                      className="group rounded border border-slate-300 bg-white p-2 text-sm transition hover:border-slate-400 hover:bg-slate-50"
                     >
-                      <div className="font-medium">{trait.name}</div>
-                      <div className="text-xs text-slate-500">{trait.category}</div>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex min-w-0 items-start gap-2">
+                          <button
+                            type="button"
+                            className="mt-0.5 cursor-grab rounded px-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                            title="Drag trait"
+                            aria-label={`Drag ${trait.name}`}
+                          >
+                            ::
+                          </button>
+                          <div className="min-w-0">
+                            <div className="truncate font-medium">{trait.name}</div>
+                            <div className="text-xs text-slate-500">{trait.category}</div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="rounded p-1 text-slate-500 hover:bg-red-50 hover:text-red-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-700 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+                          aria-label={`Remove ${trait.name} from board`}
+                          onClick={() => openRemoveDialog(trait)}
+                        >
+                          x
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
               </div>
             ))}
+          </div>
+        )}
+        {removeDialogOpen && removingTrait && (
+          <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/30 p-4" role="presentation">
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="remove-trait-title"
+              aria-describedby="remove-trait-body"
+              className="w-full max-w-md rounded-md bg-white p-4 shadow-lg"
+              onKeyDown={onRemoveDialogKeyDown}
+            >
+              <h3 id="remove-trait-title" className="text-lg font-semibold">
+                Remove trait from this program?
+              </h3>
+              <p id="remove-trait-body" className="mt-2 text-sm text-slate-600">
+                This will remove the trait from the priority board for this program. It will not delete the trait from the library.
+              </p>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  className={subtleButtonClass}
+                  autoFocus
+                  ref={cancelRemoveButtonRef}
+                  onClick={cancelRemoveTrait}
+                  aria-label="Cancel trait removal"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md bg-red-700 px-4 py-2 font-medium text-white hover:bg-red-800"
+                  ref={confirmRemoveButtonRef}
+                  onClick={confirmRemoveTrait}
+                  aria-label={`Remove ${removingTrait.name} from board`}
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1147,18 +1272,61 @@ function ProgramsPage() {
   );
 }
 
-function BrandVoicePage() {
-  const [voices, setVoices] = useState<BrandVoice[]>([]);
-  const [selectedVoiceId, setSelectedVoiceId] = useState<string | null>(null);
-  const [form, setForm] = useState({
+export function BrandVoicePage() {
+  type BrandVoiceFormState = {
+    name: string;
+    primaryTone: string;
+    ttsVoiceName: string;
+    toneModifiers: string[];
+    toneProfile: ToneProfile;
+    styleFlags: string[];
+    avoidFlags: string[];
+    canonicalExamples: CanonicalExample[];
+  };
+
+  const defaultBrandVoiceForm = (): BrandVoiceFormState => ({
     name: "",
-    tonePreset: "FRIENDLY" as TonePreset,
-    doList: "",
-    dontList: "",
-    samplePhrases: ""
+    primaryTone: "professional",
+    ttsVoiceName: "alloy",
+    toneModifiers: ["encouraging"],
+    toneProfile: { ...defaultToneProfile },
+    styleFlags: [...defaultStyleFlags],
+    avoidFlags: [...defaultAvoidFlags],
+    canonicalExamples: []
   });
 
+  const [voices, setVoices] = useState<BrandVoice[]>([]);
+  const [selectedVoiceId, setSelectedVoiceId] = useState<string | null>(null);
+  const [form, setForm] = useState<BrandVoiceFormState>(defaultBrandVoiceForm);
+  const [seedText, setSeedText] = useState("");
+  const [previewOverride, setPreviewOverride] = useState<Partial<Record<BrandVoiceSampleType, string>>>({});
+  const [generatedSamples, setGeneratedSamples] = useState<{
+    headline: string;
+    cta: string;
+    email_intro: string;
+    description: string;
+  } | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isTestingVoice, setIsTestingVoice] = useState(false);
+  const [voiceTestText, setVoiceTestText] = useState("Welcome to Graduate Admissions. Let me walk you through your next best step.");
+  const [voiceTestUrl, setVoiceTestUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"configuration" | "simulation">("configuration");
+
   const selectedVoice = voices.find((voice) => voice.id === selectedVoiceId) ?? null;
+  const preview = useMemo(() => {
+    const base = generateBrandVoicePreview({
+      name: form.name,
+      primaryTone: form.primaryTone,
+      toneModifiers: form.toneModifiers,
+      toneProfile: form.toneProfile,
+      styleFlags: form.styleFlags,
+      avoidFlags: form.avoidFlags,
+      seedText
+    });
+
+    return { ...base, ...previewOverride };
+  }, [form, previewOverride, seedText]);
 
   const loadVoices = async () => {
     const payload = await request<{ data: BrandVoice[] }>("/api/admin/brand-voices");
@@ -1177,29 +1345,36 @@ function BrandVoicePage() {
 
   useEffect(() => {
     if (!selectedVoice) {
-      setForm({
-        name: "",
-        tonePreset: "FRIENDLY",
-        doList: "",
-        dontList: "",
-        samplePhrases: ""
-      });
+      setForm(defaultBrandVoiceForm());
+      setGeneratedSamples(null);
+      setPreviewOverride({});
+      setVoiceTestUrl(null);
       return;
     }
     setForm({
       name: selectedVoice.name,
-      tonePreset: selectedVoice.tonePreset,
-      doList: selectedVoice.doList ?? "",
-      dontList: selectedVoice.dontList ?? "",
-      samplePhrases: selectedVoice.samplePhrases ?? ""
+      primaryTone: selectedVoice.primaryTone ?? "professional",
+      ttsVoiceName: selectedVoice.ttsVoiceName ?? "alloy",
+      toneModifiers: selectedVoice.toneModifiers ?? [],
+      toneProfile: selectedVoice.toneProfile ?? { ...defaultToneProfile },
+      styleFlags: selectedVoice.styleFlags ?? [],
+      avoidFlags: selectedVoice.avoidFlags ?? [],
+      canonicalExamples: selectedVoice.canonicalExamples ?? []
     });
+    setGeneratedSamples(null);
+    setPreviewOverride({});
+    setVoiceTestUrl(null);
   }, [selectedVoice]);
 
   const createVoice = async (event: React.FormEvent) => {
     event.preventDefault();
+    setError(null);
     const payload = await request<{ data: BrandVoice }>("/api/admin/brand-voices", {
       method: "POST",
-      body: JSON.stringify(form)
+      body: JSON.stringify({
+        ...form,
+        canonicalExamples: form.canonicalExamples.filter((item) => item.pinned)
+      })
     });
     await loadVoices();
     setSelectedVoiceId(payload.data.id);
@@ -1210,9 +1385,13 @@ function BrandVoicePage() {
     if (!selectedVoiceId) {
       return;
     }
+    setError(null);
     await request<{ data: BrandVoice }>(`/api/admin/brand-voices/${selectedVoiceId}`, {
       method: "PUT",
-      body: JSON.stringify(form)
+      body: JSON.stringify({
+        ...form,
+        canonicalExamples: form.canonicalExamples.filter((item) => item.pinned)
+      })
     });
     await loadVoices();
   };
@@ -1222,8 +1401,64 @@ function BrandVoicePage() {
     await loadVoices();
   };
 
+  const generateSamples = async () => {
+    if (!selectedVoiceId) {
+      return;
+    }
+
+    setError(null);
+    setIsGenerating(true);
+    try {
+      const payload = await request<{
+        samples: { headline: string; cta: string; email_intro: string; description: string };
+      }>(`/api/admin/brand-voices/${selectedVoiceId}/generate-samples`, {
+        method: "POST",
+        body: JSON.stringify({ context: { useCase: "general" } })
+      });
+      setGeneratedSamples(payload.samples);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate sample language");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const testVoice = async () => {
+    setError(null);
+    setIsTestingVoice(true);
+    try {
+      const payload = await request<{ data: { audioUrl: string } }>("/api/admin/brand-voices/test-voice", {
+        method: "POST",
+        body: JSON.stringify({
+          voiceName: form.ttsVoiceName,
+          text: voiceTestText
+        })
+      });
+      setVoiceTestUrl(payload.data.audioUrl);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to test voice");
+    } finally {
+      setIsTestingVoice(false);
+    }
+  };
+
+  const pinExample = (type: BrandVoiceSampleType, text: string) => {
+    setForm((prev) => ({
+      ...prev,
+      canonicalExamples: [
+        ...prev.canonicalExamples.filter((item) => !(item.type === type && item.text.trim().toLowerCase() === text.trim().toLowerCase())),
+        {
+          id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          type,
+          text,
+          pinned: true
+        }
+      ]
+    }));
+  };
+
   return (
-    <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
+    <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
       <Card>
         <h2 className="mb-3 text-lg font-semibold">Brand Voices</h2>
         <div className="space-y-2">
@@ -1237,7 +1472,7 @@ function BrandVoicePage() {
               }`}
             >
               <div className="font-semibold">{voice.name}</div>
-              <div className="text-xs text-slate-500">{voice.tonePreset}</div>
+              <div className="text-xs text-slate-500">{voice.primaryTone}</div>
             </button>
           ))}
         </div>
@@ -1245,82 +1480,205 @@ function BrandVoicePage() {
 
       <Card>
         <h2 className="mb-3 text-lg font-semibold">{selectedVoice ? "Edit Brand Voice" : "Create Brand Voice"}</h2>
-        <form className="space-y-3" onSubmit={(event) => void (selectedVoice ? saveVoice(event) : createVoice(event))}>
-          <div>
-            <label className={labelClass}>Name</label>
-            <input
-              required
-              className={inputClass}
-              value={form.name}
-              onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
+        <div className="mb-4 flex gap-2">
+          <button
+            type="button"
+            className={`rounded-md border px-3 py-1.5 text-sm font-medium ${
+              activeTab === "configuration" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
+            }`}
+            onClick={() => setActiveTab("configuration")}
+          >
+            Configuration
+          </button>
+          <button
+            type="button"
+            className={`rounded-md border px-3 py-1.5 text-sm font-medium ${
+              activeTab === "simulation" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"
+            }`}
+            onClick={() => setActiveTab("simulation")}
+          >
+            Simulation Lab
+          </button>
+        </div>
+        {activeTab === "configuration" ? (
+          <form
+            className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]"
+            onSubmit={(event) => void (selectedVoice ? saveVoice(event) : createVoice(event))}
+          >
+          <div className="space-y-3">
+            <div>
+              <label className={labelClass}>Name</label>
+              <input
+                required
+                className={inputClass}
+                value={form.name}
+                onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
+              />
+            </div>
+
+            <ToneSelector
+              primaryTone={form.primaryTone}
+              modifiers={form.toneModifiers}
+              onPrimaryToneChange={(primaryTone) => setForm((prev) => ({ ...prev, primaryTone }))}
+              onModifiersChange={(toneModifiers) => setForm((prev) => ({ ...prev, toneModifiers }))}
             />
-          </div>
-          <div>
-            <label className={labelClass}>Tone Preset</label>
-            <select
-              className={inputClass}
-              value={form.tonePreset}
-              onChange={(event) => setForm((prev) => ({ ...prev, tonePreset: event.target.value as TonePreset }))}
-            >
-              {tonePresets.map((tonePreset) => (
-                <option key={tonePreset} value={tonePreset}>
-                  {tonePreset}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className={labelClass}>Do List</label>
-            <textarea
-              className={inputClass}
-              value={form.doList}
-              onChange={(event) => setForm((prev) => ({ ...prev, doList: event.target.value }))}
+
+            <ToneSliders value={form.toneProfile} onChange={(toneProfile) => setForm((prev) => ({ ...prev, toneProfile }))} />
+
+            <div className="rounded-md border border-slate-200 p-3">
+              <h3 className="mb-2 text-sm font-semibold">Voice (OpenAI TTS)</h3>
+              <label className={labelClass}>Preferred voice</label>
+              <select
+                className={inputClass}
+                value={form.ttsVoiceName}
+                onChange={(event) => {
+                  const nextVoice = event.target.value;
+                  setForm((prev) => ({ ...prev, ttsVoiceName: nextVoice }));
+                  setVoiceTestUrl(null);
+                }}
+              >
+                {openAiVoiceOptions.map((voice) => (
+                  <option key={voice} value={voice}>
+                    {voice}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-slate-500">This voice is used for simulation voice samples unless overridden.</p>
+            </div>
+
+            <ChipSelectWithCustom
+              label="Voice Behaviors"
+              options={[...brandVoiceStyleFlagOptions]}
+              value={form.styleFlags}
+              onChange={(styleFlags) => setForm((prev) => ({ ...prev, styleFlags }))}
+              addPlaceholder="Add custom behavior"
             />
-          </div>
-          <div>
-            <label className={labelClass}>Dont List</label>
-            <textarea
-              className={inputClass}
-              value={form.dontList}
-              onChange={(event) => setForm((prev) => ({ ...prev, dontList: event.target.value }))}
+
+            <ChipSelectWithCustom
+              label="Avoid"
+              options={[...brandVoiceAvoidFlagOptions]}
+              value={form.avoidFlags}
+              onChange={(avoidFlags) => setForm((prev) => ({ ...prev, avoidFlags }))}
+              addPlaceholder="Add custom avoid rule"
             />
+
+            <CollapsibleSection title="Canonical Examples" defaultOpen={false}>
+              <div className="space-y-2">
+                {form.canonicalExamples.length === 0 && <p className="text-xs text-slate-500">No pinned examples yet.</p>}
+                {form.canonicalExamples.map((example) => (
+                  <div key={example.id} className="rounded border border-slate-200 p-2 text-sm">
+                    <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">{example.type}</div>
+                    <div>{example.text}</div>
+                  </div>
+                ))}
+              </div>
+            </CollapsibleSection>
+
+            <div className="flex gap-2">
+              <Button type="submit">{selectedVoice ? "Save Brand Voice" : "Create Brand Voice"}</Button>
+              {selectedVoice && (
+                <button type="button" className="text-sm text-red-700 underline" onClick={() => void deleteVoice(selectedVoice.id)}>
+                  Delete
+                </button>
+              )}
+            </div>
+            {error && <p className="text-sm text-red-700">{error}</p>}
           </div>
-          <div>
-            <label className={labelClass}>Sample Phrases</label>
-            <textarea
-              className={inputClass}
-              value={form.samplePhrases}
-              onChange={(event) => setForm((prev) => ({ ...prev, samplePhrases: event.target.value }))}
-            />
-          </div>
-          <div className="flex gap-2">
-            <Button type="submit">{selectedVoice ? "Save Brand Voice" : "Create Brand Voice"}</Button>
-            {selectedVoice && (
-              <button type="button" className="text-sm text-red-700 underline" onClick={() => void deleteVoice(selectedVoice.id)}>
-                Delete
-              </button>
+
+          <div className="space-y-3">
+            <div>
+              <label className={labelClass}>Use my own seed text</label>
+              <input className={inputClass} value={seedText} onChange={(event) => setSeedText(event.target.value)} />
+            </div>
+
+            <BrandVoicePreview title="Live Preview" samples={preview} />
+
+            <div className="rounded-md border border-slate-200 p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-sm font-semibold">Test Voice</h3>
+                <button
+                  type="button"
+                  className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium hover:bg-slate-50 disabled:opacity-60"
+                  onClick={() => void testVoice()}
+                  disabled={isTestingVoice || voiceTestText.trim().length === 0}
+                >
+                  {isTestingVoice ? "Testing..." : "Test voice"}
+                </button>
+              </div>
+              <label className={labelClass}>Sample script</label>
+              <textarea
+                className={inputClass}
+                rows={3}
+                value={voiceTestText}
+                onChange={(event) => setVoiceTestText(event.target.value)}
+                placeholder="Enter short script to synthesize voice"
+              />
+              {voiceTestUrl && (
+                <div className="mt-2 min-w-0 rounded border border-slate-200 p-2">
+                  <a className="block break-all text-xs text-blue-700 underline" href={voiceTestUrl} target="_blank" rel="noreferrer">
+                    Open tested audio
+                  </a>
+                  <audio className="mt-2 block w-full max-w-full" controls preload="metadata" src={voiceTestUrl} />
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-md border border-slate-200 p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-sm font-semibold">Generate Sample Language</h3>
+                <button
+                  type="button"
+                  className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium hover:bg-slate-50 disabled:opacity-60"
+                  onClick={() => void generateSamples()}
+                  disabled={!selectedVoiceId || isGenerating}
+                >
+                  {isGenerating ? "Generating..." : "Generate Sample Language"}
+                </button>
+              </div>
+              {!selectedVoiceId && (
+                <p className="text-xs text-slate-500">Create this brand voice first, then generate AI suggestions.</p>
+              )}
+            </div>
+
+            {generatedSamples && (
+              <GeneratedSamplesPanel
+                samples={generatedSamples}
+                onPin={pinExample}
+                onReplacePreview={(type, text) =>
+                  setPreviewOverride((prev) => ({
+                    ...prev,
+                    [type]: text
+                  }))
+                }
+              />
             )}
           </div>
-        </form>
+          </form>
+        ) : (
+          <SimulationLab brandVoiceId={selectedVoiceId} request={request} />
+        )}
       </Card>
     </div>
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <ShellLayout>
-          <Routes>
-            <Route path="/" element={<Navigate to="/traits" replace />} />
-            <Route path="/traits" element={<TraitsPage />} />
-            <Route path="/programs" element={<ProgramsPage />} />
-            <Route path="/brand-voice" element={<BrandVoicePage />} />
-            <Route path="*" element={<Navigate to="/traits" replace />} />
-          </Routes>
-        </ShellLayout>
-      </BrowserRouter>
-    </QueryClientProvider>
-  </React.StrictMode>
-);
+const rootElement = document.getElementById("root");
+if (rootElement) {
+  ReactDOM.createRoot(rootElement).render(
+    <React.StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <ShellLayout>
+            <Routes>
+              <Route path="/" element={<Navigate to="/traits" replace />} />
+              <Route path="/traits" element={<TraitsPage />} />
+              <Route path="/programs" element={<ProgramsPage />} />
+              <Route path="/brand-voice" element={<BrandVoicePage />} />
+              <Route path="*" element={<Navigate to="/traits" replace />} />
+            </Routes>
+          </ShellLayout>
+        </BrowserRouter>
+      </QueryClientProvider>
+    </React.StrictMode>
+  );
+}

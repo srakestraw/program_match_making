@@ -1,23 +1,25 @@
 import { jsxs as _jsxs, jsx as _jsx, Fragment as _Fragment } from "react/jsx-runtime";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { boardStateToProgramTraitRows, programTraitPriorityBuckets, tonePresets, traitCategories } from "@pmm/domain";
+import { brandVoiceAvoidFlagOptions, brandVoiceStyleFlagOptions, boardStateToProgramTraitRows, defaultAvoidFlags, defaultStyleFlags, defaultToneProfile, generateBrandVoicePreview, traitCategories } from "@pmm/domain";
 import { AppShell, Button, Card } from "@pmm/ui";
+import { BrandVoicePreview } from "./components/brand-voice/BrandVoicePreview";
+import { ChipSelectWithCustom } from "./components/brand-voice/ChipSelectWithCustom";
+import { GeneratedSamplesPanel } from "./components/brand-voice/GeneratedSamplesPanel";
+import { SimulationLab } from "./components/brand-voice/SimulationLab";
+import { ToneSelector } from "./components/brand-voice/ToneSelector";
+import { ToneSliders } from "./components/brand-voice/ToneSliders";
+import { createEmptyProgramBoardState, isBoardDirty, moveTraitInBoard, removeTraitFromBoard, toBoardIdState } from "./program-board-state";
 import "./styles.css";
 const queryClient = new QueryClient();
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
-const emptyProgramBoardState = {
-    CRITICAL: [],
-    VERY_IMPORTANT: [],
-    IMPORTANT: [],
-    NICE_TO_HAVE: []
-};
 const navLinkClass = "rounded-md px-3 py-2 text-sm font-medium hover:bg-slate-200";
 const inputClass = "w-full rounded-md border border-slate-300 px-3 py-2 text-sm";
 const labelClass = "mb-1 block text-xs font-medium uppercase tracking-wide text-slate-600";
 const subtleButtonClass = "rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50";
+const openAiVoiceOptions = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
 async function request(path, init) {
     const response = await fetch(`${apiBaseUrl}${path}`, {
         headers: { "Content-Type": "application/json" },
@@ -304,11 +306,12 @@ function TraitsPage() {
                                                         scoringHints: question.scoringHints ?? ""
                                                     }), children: "Edit" }), _jsx("button", { type: "button", className: "text-red-700 underline", onClick: () => void deleteQuestion(question.id), children: "Delete" })] })] }, question.id))) })] }))] })] }));
 }
-function ProgramsPage() {
+export function ProgramsPage() {
     const [programs, setPrograms] = useState([]);
     const [traits, setTraits] = useState([]);
     const [selectedProgramId, setSelectedProgramId] = useState(null);
-    const [board, setBoard] = useState(emptyProgramBoardState);
+    const [board, setBoard] = useState(createEmptyProgramBoardState);
+    const [savedBoard, setSavedBoard] = useState(createEmptyProgramBoardState);
     const [programForm, setProgramForm] = useState({
         name: "",
         description: "",
@@ -321,7 +324,12 @@ function ProgramsPage() {
     const [selectedTraitIds, setSelectedTraitIds] = useState(new Set());
     const [programNotice, setProgramNotice] = useState(null);
     const [programError, setProgramError] = useState(null);
+    const [removingTrait, setRemovingTrait] = useState(null);
+    const [removeDialogOpen, setRemoveDialogOpen] = useState(false);
+    const cancelRemoveButtonRef = useRef(null);
+    const confirmRemoveButtonRef = useRef(null);
     const selectedProgram = programs.find((program) => program.id === selectedProgramId) ?? null;
+    const boardDirty = useMemo(() => isBoardDirty(board, savedBoard), [board, savedBoard]);
     const loadPrograms = async () => {
         const payload = await request("/api/admin/programs");
         setPrograms(payload.data);
@@ -330,7 +338,9 @@ function ProgramsPage() {
         }
         if (payload.data.length === 0) {
             setSelectedProgramId(null);
-            setBoard(emptyProgramBoardState);
+            const empty = createEmptyProgramBoardState();
+            setBoard(empty);
+            setSavedBoard(empty);
         }
     };
     const loadTraits = async () => {
@@ -339,23 +349,21 @@ function ProgramsPage() {
     };
     const loadProgramTraits = async (programId) => {
         const payload = await request(`/api/admin/programs/${programId}/traits`);
-        const nextState = {
-            CRITICAL: [],
-            VERY_IMPORTANT: [],
-            IMPORTANT: [],
-            NICE_TO_HAVE: []
-        };
+        const nextState = createEmptyProgramBoardState();
         for (const item of payload.data) {
             nextState[item.bucket].push(item.trait);
         }
         setBoard(nextState);
+        setSavedBoard(nextState);
     };
     useEffect(() => {
         void Promise.all([loadPrograms(), loadTraits()]);
     }, []);
     useEffect(() => {
         if (!selectedProgramId) {
-            setBoard(emptyProgramBoardState);
+            const empty = createEmptyProgramBoardState();
+            setBoard(empty);
+            setSavedBoard(empty);
             return;
         }
         void loadProgramTraits(selectedProgramId);
@@ -397,21 +405,47 @@ function ProgramsPage() {
         await loadPrograms();
     };
     const moveTrait = (fromBucket, fromIndex, toBucket, toIndex) => {
-        setBoard((current) => {
-            const source = [...current[fromBucket]];
-            const [moved] = source.splice(fromIndex, 1);
-            if (!moved) {
-                return current;
+        setBoard((current) => moveTraitInBoard(current, fromBucket, fromIndex, toBucket, toIndex));
+    };
+    const openRemoveDialog = (trait) => {
+        setRemovingTrait(trait);
+        setRemoveDialogOpen(true);
+    };
+    const confirmRemoveTrait = () => {
+        if (!removingTrait) {
+            return;
+        }
+        setBoard((current) => removeTraitFromBoard(current, removingTrait.id).nextBoard);
+        setProgramNotice(`Removed ${removingTrait.name} from the board. Save board to persist.`);
+        setProgramError(null);
+        setRemovingTrait(null);
+        setRemoveDialogOpen(false);
+    };
+    const cancelRemoveTrait = () => {
+        setRemovingTrait(null);
+        setRemoveDialogOpen(false);
+    };
+    const onRemoveDialogKeyDown = (event) => {
+        if (event.key === "Escape") {
+            event.preventDefault();
+            cancelRemoveTrait();
+            return;
+        }
+        if (event.key === "Tab") {
+            const first = cancelRemoveButtonRef.current;
+            const last = confirmRemoveButtonRef.current;
+            if (!first || !last) {
+                return;
             }
-            const destination = fromBucket === toBucket ? source : [...current[toBucket]];
-            const insertIndex = toIndex === undefined ? destination.length : toIndex;
-            destination.splice(insertIndex, 0, moved);
-            return {
-                ...current,
-                [fromBucket]: source,
-                [toBucket]: destination
-            };
-        });
+            if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+            else if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            }
+        }
     };
     const saveBoard = async () => {
         if (!selectedProgramId) {
@@ -420,12 +454,7 @@ function ProgramsPage() {
         setProgramNotice(null);
         setProgramError(null);
         try {
-            const boardIds = {
-                CRITICAL: board.CRITICAL.map((trait) => trait.id),
-                VERY_IMPORTANT: board.VERY_IMPORTANT.map((trait) => trait.id),
-                IMPORTANT: board.IMPORTANT.map((trait) => trait.id),
-                NICE_TO_HAVE: board.NICE_TO_HAVE.map((trait) => trait.id)
-            };
+            const boardIds = toBoardIdState(board);
             await request(`/api/admin/programs/${selectedProgramId}/traits`, {
                 method: "PUT",
                 body: JSON.stringify({
@@ -441,7 +470,7 @@ function ProgramsPage() {
     };
     const assignedTraitIds = useMemo(() => {
         const ids = new Set();
-        for (const bucket of programTraitPriorityBuckets) {
+        for (const bucket of Object.keys(board)) {
             for (const trait of board[bucket]) {
                 ids.add(trait.id);
             }
@@ -473,7 +502,7 @@ function ProgramsPage() {
         setSelectedTraitIds(new Set());
         setTraitModalOpen(false);
     };
-    return (_jsxs("div", { className: "grid gap-4 lg:grid-cols-[280px_320px_1fr]", children: [_jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: "Programs" }), _jsxs("div", { className: "space-y-2", children: [programs.length === 0 && _jsx("p", { className: "text-sm text-slate-500", children: "No programs yet. Create one to begin." }), programs.map((program) => (_jsxs("button", { type: "button", onClick: () => setSelectedProgramId(program.id), className: `w-full rounded-md border p-2 text-left text-sm ${selectedProgramId === program.id ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white"}`, children: [_jsx("div", { className: "font-semibold", children: program.name }), program.department && _jsx("div", { className: "text-xs text-slate-500", children: program.department })] }, program.id)))] })] }), _jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: selectedProgram ? "Edit Program" : "Create Program" }), _jsxs("form", { className: "space-y-3", onSubmit: (event) => void (selectedProgram ? saveProgram(event) : createProgram(event)), children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Name" }), _jsx("input", { required: true, className: inputClass, value: programForm.name, onChange: (event) => setProgramForm((prev) => ({ ...prev, name: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Description" }), _jsx("textarea", { className: inputClass, value: programForm.description, onChange: (event) => setProgramForm((prev) => ({ ...prev, description: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Degree Level" }), _jsx("input", { className: inputClass, value: programForm.degreeLevel, onChange: (event) => setProgramForm((prev) => ({ ...prev, degreeLevel: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Department" }), _jsx("input", { className: inputClass, value: programForm.department, onChange: (event) => setProgramForm((prev) => ({ ...prev, department: event.target.value })) })] }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { type: "submit", children: selectedProgram ? "Save Program" : "Create Program" }), selectedProgram && (_jsx("button", { type: "button", className: "text-sm text-red-700 underline", onClick: () => void deleteProgram(selectedProgram.id), children: "Delete" }))] })] })] }), _jsxs(Card, { children: [_jsxs("div", { className: "mb-3 flex items-center justify-between", children: [_jsx("h2", { className: "text-lg font-semibold", children: "Trait Priority Board" }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { type: "button", onClick: () => setTraitModalOpen(true), disabled: !selectedProgram, children: "Add Trait" }), _jsx(Button, { type: "button", onClick: () => void saveBoard(), disabled: !selectedProgram, children: "Save Board" })] })] }), !selectedProgram ? (_jsx("p", { className: "text-sm text-slate-500", children: "Select a program to edit board priorities." })) : (_jsx("div", { className: "grid gap-3 md:grid-cols-2 xl:grid-cols-4", children: programTraitPriorityBuckets.map((bucket) => (_jsxs("div", { className: "rounded-md border border-slate-200 bg-slate-50 p-2", onDragOver: (event) => event.preventDefault(), onDrop: (event) => {
+    return (_jsxs("div", { className: "grid gap-4 lg:grid-cols-[280px_320px_1fr]", children: [_jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: "Programs" }), _jsxs("div", { className: "space-y-2", children: [programs.length === 0 && _jsx("p", { className: "text-sm text-slate-500", children: "No programs yet. Create one to begin." }), programs.map((program) => (_jsxs("button", { type: "button", onClick: () => setSelectedProgramId(program.id), className: `w-full rounded-md border p-2 text-left text-sm ${selectedProgramId === program.id ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white"}`, children: [_jsx("div", { className: "font-semibold", children: program.name }), program.department && _jsx("div", { className: "text-xs text-slate-500", children: program.department })] }, program.id)))] })] }), _jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: selectedProgram ? "Edit Program" : "Create Program" }), _jsxs("form", { className: "space-y-3", onSubmit: (event) => void (selectedProgram ? saveProgram(event) : createProgram(event)), children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Name" }), _jsx("input", { required: true, className: inputClass, value: programForm.name, onChange: (event) => setProgramForm((prev) => ({ ...prev, name: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Description" }), _jsx("textarea", { className: inputClass, value: programForm.description, onChange: (event) => setProgramForm((prev) => ({ ...prev, description: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Degree Level" }), _jsx("input", { className: inputClass, value: programForm.degreeLevel, onChange: (event) => setProgramForm((prev) => ({ ...prev, degreeLevel: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Department" }), _jsx("input", { className: inputClass, value: programForm.department, onChange: (event) => setProgramForm((prev) => ({ ...prev, department: event.target.value })) })] }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { type: "submit", children: selectedProgram ? "Save Program" : "Create Program" }), selectedProgram && (_jsx("button", { type: "button", className: "text-sm text-red-700 underline", onClick: () => void deleteProgram(selectedProgram.id), children: "Delete" }))] })] })] }), _jsxs(Card, { children: [_jsxs("div", { className: "mb-3 flex items-center justify-between", children: [_jsx("h2", { className: "text-lg font-semibold", children: "Trait Priority Board" }), _jsxs("div", { className: "flex gap-2", children: [_jsx("button", { type: "button", className: `${subtleButtonClass} disabled:cursor-not-allowed disabled:opacity-50`, onClick: () => setTraitModalOpen(true), disabled: !selectedProgram, children: "Add Trait" }), _jsx(Button, { type: "button", onClick: () => void saveBoard(), disabled: !selectedProgram || !boardDirty, children: "Save Board" })] })] }), selectedProgram && boardDirty && (_jsx("p", { className: "mb-3 text-xs font-medium uppercase tracking-wide text-amber-700", role: "status", children: "Unsaved changes" })), !selectedProgram ? (_jsx("p", { className: "text-sm text-slate-500", children: "Select a program to edit board priorities." })) : (_jsx("div", { className: "grid max-h-[32rem] gap-3 overflow-y-auto pr-1 md:grid-cols-2 xl:grid-cols-4", children: Object.keys(board).map((bucket) => (_jsxs("div", { className: "max-h-[30rem] overflow-y-auto rounded-md border border-slate-200 bg-slate-50 p-2", onDragOver: (event) => event.preventDefault(), onDrop: (event) => {
                                 event.preventDefault();
                                 const payload = event.dataTransfer.getData("text/plain");
                                 if (!payload) {
@@ -481,18 +510,18 @@ function ProgramsPage() {
                                 }
                                 const parsed = JSON.parse(payload);
                                 moveTrait(parsed.fromBucket, parsed.fromIndex, bucket);
-                            }, children: [_jsx("h3", { className: "mb-2 text-sm font-semibold", children: bucket }), _jsx("div", { className: "space-y-2", children: board[bucket].map((trait, index) => (_jsxs("div", { draggable: true, onDragStart: (event) => event.dataTransfer.setData("text/plain", JSON.stringify({
-                                            fromBucket: bucket,
-                                            fromIndex: index
-                                        })), onDragOver: (event) => event.preventDefault(), onDrop: (event) => {
-                                            event.preventDefault();
-                                            const payload = event.dataTransfer.getData("text/plain");
-                                            if (!payload) {
-                                                return;
-                                            }
-                                            const parsed = JSON.parse(payload);
-                                            moveTrait(parsed.fromBucket, parsed.fromIndex, bucket, index);
-                                        }, className: "cursor-grab rounded border border-slate-300 bg-white p-2 text-sm", children: [_jsx("div", { className: "font-medium", children: trait.name }), _jsx("div", { className: "text-xs text-slate-500", children: trait.category })] }, trait.id))) })] }, bucket))) })), traitModalOpen && (_jsx("div", { className: "fixed inset-0 z-20 flex items-center justify-center bg-black/30 p-4", children: _jsxs("div", { className: "w-full max-w-xl rounded-md bg-white p-4", children: [_jsxs("div", { className: "mb-3 flex items-center justify-between", children: [_jsx("h3", { className: "text-lg font-semibold", children: "Add Traits" }), _jsx("button", { type: "button", className: "text-sm underline", onClick: () => setTraitModalOpen(false), children: "Close" })] }), _jsxs("div", { className: "mb-3 grid gap-2 md:grid-cols-2", children: [_jsx("input", { className: inputClass, placeholder: "Search traits...", value: selectorSearch, onChange: (event) => setSelectorSearch(event.target.value) }), _jsxs("select", { className: inputClass, value: selectorCategory, onChange: (event) => setSelectorCategory(event.target.value), children: [_jsx("option", { value: "ALL", children: "All categories" }), traitCategories.map((category) => (_jsx("option", { value: category, children: category }, category)))] })] }), _jsx("div", { className: "max-h-64 space-y-2 overflow-auto", children: selectableTraits.map((trait) => (_jsxs("label", { className: "flex items-start gap-2 rounded border border-slate-200 p-2 text-sm", children: [_jsx("input", { type: "checkbox", checked: selectedTraitIds.has(trait.id), onChange: (event) => setSelectedTraitIds((prev) => {
+                            }, children: [_jsx("div", { className: "sticky top-0 mb-2 flex items-center justify-between border-b border-slate-200 bg-slate-50 pb-2", children: _jsxs("h3", { className: "text-sm font-semibold", children: [bucket, " (", board[bucket].length, ")"] }) }), _jsxs("div", { className: "space-y-2", children: [board[bucket].length === 0 && (_jsx("p", { className: "rounded border border-dashed border-slate-300 bg-white/70 p-2 text-xs text-slate-500", children: "Drag traits here" })), board[bucket].map((trait, index) => (_jsx("div", { draggable: true, onDragStart: (event) => event.dataTransfer.setData("text/plain", JSON.stringify({
+                                                fromBucket: bucket,
+                                                fromIndex: index
+                                            })), onDragOver: (event) => event.preventDefault(), onDrop: (event) => {
+                                                event.preventDefault();
+                                                const payload = event.dataTransfer.getData("text/plain");
+                                                if (!payload) {
+                                                    return;
+                                                }
+                                                const parsed = JSON.parse(payload);
+                                                moveTrait(parsed.fromBucket, parsed.fromIndex, bucket, index);
+                                            }, className: "group rounded border border-slate-300 bg-white p-2 text-sm transition hover:border-slate-400 hover:bg-slate-50", children: _jsxs("div", { className: "flex items-start justify-between gap-2", children: [_jsxs("div", { className: "flex min-w-0 items-start gap-2", children: [_jsx("button", { type: "button", className: "mt-0.5 cursor-grab rounded px-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700", title: "Drag trait", "aria-label": `Drag ${trait.name}`, children: "::" }), _jsxs("div", { className: "min-w-0", children: [_jsx("div", { className: "truncate font-medium", children: trait.name }), _jsx("div", { className: "text-xs text-slate-500", children: trait.category })] })] }), _jsx("button", { type: "button", className: "rounded p-1 text-slate-500 hover:bg-red-50 hover:text-red-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-700 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100", "aria-label": `Remove ${trait.name} from board`, onClick: () => openRemoveDialog(trait), children: "x" })] }) }, trait.id)))] })] }, bucket))) })), removeDialogOpen && removingTrait && (_jsx("div", { className: "fixed inset-0 z-30 flex items-center justify-center bg-black/30 p-4", role: "presentation", children: _jsxs("div", { role: "dialog", "aria-modal": "true", "aria-labelledby": "remove-trait-title", "aria-describedby": "remove-trait-body", className: "w-full max-w-md rounded-md bg-white p-4 shadow-lg", onKeyDown: onRemoveDialogKeyDown, children: [_jsx("h3", { id: "remove-trait-title", className: "text-lg font-semibold", children: "Remove trait from this program?" }), _jsx("p", { id: "remove-trait-body", className: "mt-2 text-sm text-slate-600", children: "This will remove the trait from the priority board for this program. It will not delete the trait from the library." }), _jsxs("div", { className: "mt-4 flex justify-end gap-2", children: [_jsx("button", { type: "button", className: subtleButtonClass, autoFocus: true, ref: cancelRemoveButtonRef, onClick: cancelRemoveTrait, "aria-label": "Cancel trait removal", children: "Cancel" }), _jsx("button", { type: "button", className: "rounded-md bg-red-700 px-4 py-2 font-medium text-white hover:bg-red-800", ref: confirmRemoveButtonRef, onClick: confirmRemoveTrait, "aria-label": `Remove ${removingTrait.name} from board`, children: "Remove" })] })] }) })), traitModalOpen && (_jsx("div", { className: "fixed inset-0 z-20 flex items-center justify-center bg-black/30 p-4", children: _jsxs("div", { className: "w-full max-w-xl rounded-md bg-white p-4", children: [_jsxs("div", { className: "mb-3 flex items-center justify-between", children: [_jsx("h3", { className: "text-lg font-semibold", children: "Add Traits" }), _jsx("button", { type: "button", className: "text-sm underline", onClick: () => setTraitModalOpen(false), children: "Close" })] }), _jsxs("div", { className: "mb-3 grid gap-2 md:grid-cols-2", children: [_jsx("input", { className: inputClass, placeholder: "Search traits...", value: selectorSearch, onChange: (event) => setSelectorSearch(event.target.value) }), _jsxs("select", { className: inputClass, value: selectorCategory, onChange: (event) => setSelectorCategory(event.target.value), children: [_jsx("option", { value: "ALL", children: "All categories" }), traitCategories.map((category) => (_jsx("option", { value: category, children: category }, category)))] })] }), _jsx("div", { className: "max-h-64 space-y-2 overflow-auto", children: selectableTraits.map((trait) => (_jsxs("label", { className: "flex items-start gap-2 rounded border border-slate-200 p-2 text-sm", children: [_jsx("input", { type: "checkbox", checked: selectedTraitIds.has(trait.id), onChange: (event) => setSelectedTraitIds((prev) => {
                                                     const next = new Set(prev);
                                                     if (event.target.checked) {
                                                         next.add(trait.id);
@@ -503,17 +532,42 @@ function ProgramsPage() {
                                                     return next;
                                                 }) }), _jsxs("span", { children: [_jsx("span", { className: "block font-medium", children: trait.name }), _jsx("span", { className: "text-xs text-slate-500", children: trait.category })] })] }, trait.id))) }), _jsx("div", { className: "mt-3 flex justify-end", children: _jsx(Button, { type: "button", onClick: addSelectedTraits, children: "Add Selected" }) })] }) })), programNotice && _jsx("p", { className: "mt-3 text-sm text-emerald-700", children: programNotice }), programError && _jsx("p", { className: "mt-3 text-sm text-red-700", children: programError })] })] }));
 }
-function BrandVoicePage() {
+export function BrandVoicePage() {
+    const defaultBrandVoiceForm = () => ({
+        name: "",
+        primaryTone: "professional",
+        ttsVoiceName: "alloy",
+        toneModifiers: ["encouraging"],
+        toneProfile: { ...defaultToneProfile },
+        styleFlags: [...defaultStyleFlags],
+        avoidFlags: [...defaultAvoidFlags],
+        canonicalExamples: []
+    });
     const [voices, setVoices] = useState([]);
     const [selectedVoiceId, setSelectedVoiceId] = useState(null);
-    const [form, setForm] = useState({
-        name: "",
-        tonePreset: "FRIENDLY",
-        doList: "",
-        dontList: "",
-        samplePhrases: ""
-    });
+    const [form, setForm] = useState(defaultBrandVoiceForm);
+    const [seedText, setSeedText] = useState("");
+    const [previewOverride, setPreviewOverride] = useState({});
+    const [generatedSamples, setGeneratedSamples] = useState(null);
+    const [isGenerating, setIsGenerating] = useState(false);
+    const [isTestingVoice, setIsTestingVoice] = useState(false);
+    const [voiceTestText, setVoiceTestText] = useState("Welcome to Graduate Admissions. Let me walk you through your next best step.");
+    const [voiceTestUrl, setVoiceTestUrl] = useState(null);
+    const [error, setError] = useState(null);
+    const [activeTab, setActiveTab] = useState("configuration");
     const selectedVoice = voices.find((voice) => voice.id === selectedVoiceId) ?? null;
+    const preview = useMemo(() => {
+        const base = generateBrandVoicePreview({
+            name: form.name,
+            primaryTone: form.primaryTone,
+            toneModifiers: form.toneModifiers,
+            toneProfile: form.toneProfile,
+            styleFlags: form.styleFlags,
+            avoidFlags: form.avoidFlags,
+            seedText
+        });
+        return { ...base, ...previewOverride };
+    }, [form, previewOverride, seedText]);
     const loadVoices = async () => {
         const payload = await request("/api/admin/brand-voices");
         setVoices(payload.data);
@@ -529,28 +583,35 @@ function BrandVoicePage() {
     }, []);
     useEffect(() => {
         if (!selectedVoice) {
-            setForm({
-                name: "",
-                tonePreset: "FRIENDLY",
-                doList: "",
-                dontList: "",
-                samplePhrases: ""
-            });
+            setForm(defaultBrandVoiceForm());
+            setGeneratedSamples(null);
+            setPreviewOverride({});
+            setVoiceTestUrl(null);
             return;
         }
         setForm({
             name: selectedVoice.name,
-            tonePreset: selectedVoice.tonePreset,
-            doList: selectedVoice.doList ?? "",
-            dontList: selectedVoice.dontList ?? "",
-            samplePhrases: selectedVoice.samplePhrases ?? ""
+            primaryTone: selectedVoice.primaryTone ?? "professional",
+            ttsVoiceName: selectedVoice.ttsVoiceName ?? "alloy",
+            toneModifiers: selectedVoice.toneModifiers ?? [],
+            toneProfile: selectedVoice.toneProfile ?? { ...defaultToneProfile },
+            styleFlags: selectedVoice.styleFlags ?? [],
+            avoidFlags: selectedVoice.avoidFlags ?? [],
+            canonicalExamples: selectedVoice.canonicalExamples ?? []
         });
+        setGeneratedSamples(null);
+        setPreviewOverride({});
+        setVoiceTestUrl(null);
     }, [selectedVoice]);
     const createVoice = async (event) => {
         event.preventDefault();
+        setError(null);
         const payload = await request("/api/admin/brand-voices", {
             method: "POST",
-            body: JSON.stringify(form)
+            body: JSON.stringify({
+                ...form,
+                canonicalExamples: form.canonicalExamples.filter((item) => item.pinned)
+            })
         });
         await loadVoices();
         setSelectedVoiceId(payload.data.id);
@@ -560,9 +621,13 @@ function BrandVoicePage() {
         if (!selectedVoiceId) {
             return;
         }
+        setError(null);
         await request(`/api/admin/brand-voices/${selectedVoiceId}`, {
             method: "PUT",
-            body: JSON.stringify(form)
+            body: JSON.stringify({
+                ...form,
+                canonicalExamples: form.canonicalExamples.filter((item) => item.pinned)
+            })
         });
         await loadVoices();
     };
@@ -570,6 +635,70 @@ function BrandVoicePage() {
         await request(`/api/admin/brand-voices/${id}`, { method: "DELETE" });
         await loadVoices();
     };
-    return (_jsxs("div", { className: "grid gap-4 lg:grid-cols-[280px_1fr]", children: [_jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: "Brand Voices" }), _jsx("div", { className: "space-y-2", children: voices.map((voice) => (_jsxs("button", { type: "button", onClick: () => setSelectedVoiceId(voice.id), className: `w-full rounded-md border p-2 text-left text-sm ${selectedVoiceId === voice.id ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white"}`, children: [_jsx("div", { className: "font-semibold", children: voice.name }), _jsx("div", { className: "text-xs text-slate-500", children: voice.tonePreset })] }, voice.id))) })] }), _jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: selectedVoice ? "Edit Brand Voice" : "Create Brand Voice" }), _jsxs("form", { className: "space-y-3", onSubmit: (event) => void (selectedVoice ? saveVoice(event) : createVoice(event)), children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Name" }), _jsx("input", { required: true, className: inputClass, value: form.name, onChange: (event) => setForm((prev) => ({ ...prev, name: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Tone Preset" }), _jsx("select", { className: inputClass, value: form.tonePreset, onChange: (event) => setForm((prev) => ({ ...prev, tonePreset: event.target.value })), children: tonePresets.map((tonePreset) => (_jsx("option", { value: tonePreset, children: tonePreset }, tonePreset))) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Do List" }), _jsx("textarea", { className: inputClass, value: form.doList, onChange: (event) => setForm((prev) => ({ ...prev, doList: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Dont List" }), _jsx("textarea", { className: inputClass, value: form.dontList, onChange: (event) => setForm((prev) => ({ ...prev, dontList: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Sample Phrases" }), _jsx("textarea", { className: inputClass, value: form.samplePhrases, onChange: (event) => setForm((prev) => ({ ...prev, samplePhrases: event.target.value })) })] }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { type: "submit", children: selectedVoice ? "Save Brand Voice" : "Create Brand Voice" }), selectedVoice && (_jsx("button", { type: "button", className: "text-sm text-red-700 underline", onClick: () => void deleteVoice(selectedVoice.id), children: "Delete" }))] })] })] })] }));
+    const generateSamples = async () => {
+        if (!selectedVoiceId) {
+            return;
+        }
+        setError(null);
+        setIsGenerating(true);
+        try {
+            const payload = await request(`/api/admin/brand-voices/${selectedVoiceId}/generate-samples`, {
+                method: "POST",
+                body: JSON.stringify({ context: { useCase: "general" } })
+            });
+            setGeneratedSamples(payload.samples);
+        }
+        catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to generate sample language");
+        }
+        finally {
+            setIsGenerating(false);
+        }
+    };
+    const testVoice = async () => {
+        setError(null);
+        setIsTestingVoice(true);
+        try {
+            const payload = await request("/api/admin/brand-voices/test-voice", {
+                method: "POST",
+                body: JSON.stringify({
+                    voiceName: form.ttsVoiceName,
+                    text: voiceTestText
+                })
+            });
+            setVoiceTestUrl(payload.data.audioUrl);
+        }
+        catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to test voice");
+        }
+        finally {
+            setIsTestingVoice(false);
+        }
+    };
+    const pinExample = (type, text) => {
+        setForm((prev) => ({
+            ...prev,
+            canonicalExamples: [
+                ...prev.canonicalExamples.filter((item) => !(item.type === type && item.text.trim().toLowerCase() === text.trim().toLowerCase())),
+                {
+                    id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                    type,
+                    text,
+                    pinned: true
+                }
+            ]
+        }));
+    };
+    return (_jsxs("div", { className: "grid gap-4 lg:grid-cols-[260px_1fr]", children: [_jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: "Brand Voices" }), _jsx("div", { className: "space-y-2", children: voices.map((voice) => (_jsxs("button", { type: "button", onClick: () => setSelectedVoiceId(voice.id), className: `w-full rounded-md border p-2 text-left text-sm ${selectedVoiceId === voice.id ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white"}`, children: [_jsx("div", { className: "font-semibold", children: voice.name }), _jsx("div", { className: "text-xs text-slate-500", children: voice.primaryTone })] }, voice.id))) })] }), _jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: selectedVoice ? "Edit Brand Voice" : "Create Brand Voice" }), _jsxs("div", { className: "mb-4 flex gap-2", children: [_jsx("button", { type: "button", className: `rounded-md border px-3 py-1.5 text-sm font-medium ${activeTab === "configuration" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"}`, onClick: () => setActiveTab("configuration"), children: "Configuration" }), _jsx("button", { type: "button", className: `rounded-md border px-3 py-1.5 text-sm font-medium ${activeTab === "simulation" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700"}`, onClick: () => setActiveTab("simulation"), children: "Simulation Lab" })] }), activeTab === "configuration" ? (_jsxs("form", { className: "grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]", onSubmit: (event) => void (selectedVoice ? saveVoice(event) : createVoice(event)), children: [_jsxs("div", { className: "space-y-3", children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Name" }), _jsx("input", { required: true, className: inputClass, value: form.name, onChange: (event) => setForm((prev) => ({ ...prev, name: event.target.value })) })] }), _jsx(ToneSelector, { primaryTone: form.primaryTone, modifiers: form.toneModifiers, onPrimaryToneChange: (primaryTone) => setForm((prev) => ({ ...prev, primaryTone })), onModifiersChange: (toneModifiers) => setForm((prev) => ({ ...prev, toneModifiers })) }), _jsx(ToneSliders, { value: form.toneProfile, onChange: (toneProfile) => setForm((prev) => ({ ...prev, toneProfile })) }), _jsxs("div", { className: "rounded-md border border-slate-200 p-3", children: [_jsx("h3", { className: "mb-2 text-sm font-semibold", children: "Voice (OpenAI TTS)" }), _jsx("label", { className: labelClass, children: "Preferred voice" }), _jsx("select", { className: inputClass, value: form.ttsVoiceName, onChange: (event) => {
+                                                    const nextVoice = event.target.value;
+                                                    setForm((prev) => ({ ...prev, ttsVoiceName: nextVoice }));
+                                                    setVoiceTestUrl(null);
+                                                }, children: openAiVoiceOptions.map((voice) => (_jsx("option", { value: voice, children: voice }, voice))) }), _jsx("p", { className: "mt-1 text-xs text-slate-500", children: "This voice is used for simulation voice samples unless overridden." })] }), _jsx(ChipSelectWithCustom, { label: "Voice Behaviors", options: [...brandVoiceStyleFlagOptions], value: form.styleFlags, onChange: (styleFlags) => setForm((prev) => ({ ...prev, styleFlags })), addPlaceholder: "Add custom behavior" }), _jsx(ChipSelectWithCustom, { label: "Avoid", options: [...brandVoiceAvoidFlagOptions], value: form.avoidFlags, onChange: (avoidFlags) => setForm((prev) => ({ ...prev, avoidFlags })), addPlaceholder: "Add custom avoid rule" }), _jsx(CollapsibleSection, { title: "Canonical Examples", defaultOpen: false, children: _jsxs("div", { className: "space-y-2", children: [form.canonicalExamples.length === 0 && _jsx("p", { className: "text-xs text-slate-500", children: "No pinned examples yet." }), form.canonicalExamples.map((example) => (_jsxs("div", { className: "rounded border border-slate-200 p-2 text-sm", children: [_jsx("div", { className: "mb-1 text-[11px] uppercase tracking-wide text-slate-500", children: example.type }), _jsx("div", { children: example.text })] }, example.id)))] }) }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { type: "submit", children: selectedVoice ? "Save Brand Voice" : "Create Brand Voice" }), selectedVoice && (_jsx("button", { type: "button", className: "text-sm text-red-700 underline", onClick: () => void deleteVoice(selectedVoice.id), children: "Delete" }))] }), error && _jsx("p", { className: "text-sm text-red-700", children: error })] }), _jsxs("div", { className: "space-y-3", children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Use my own seed text" }), _jsx("input", { className: inputClass, value: seedText, onChange: (event) => setSeedText(event.target.value) })] }), _jsx(BrandVoicePreview, { title: "Live Preview", samples: preview }), _jsxs("div", { className: "rounded-md border border-slate-200 p-3", children: [_jsxs("div", { className: "mb-2 flex items-center justify-between", children: [_jsx("h3", { className: "text-sm font-semibold", children: "Test Voice" }), _jsx("button", { type: "button", className: "rounded-md border border-slate-300 px-3 py-1 text-xs font-medium hover:bg-slate-50 disabled:opacity-60", onClick: () => void testVoice(), disabled: isTestingVoice || voiceTestText.trim().length === 0, children: isTestingVoice ? "Testing..." : "Test voice" })] }), _jsx("label", { className: labelClass, children: "Sample script" }), _jsx("textarea", { className: inputClass, rows: 3, value: voiceTestText, onChange: (event) => setVoiceTestText(event.target.value), placeholder: "Enter short script to synthesize voice" }), voiceTestUrl && (_jsxs("div", { className: "mt-2 min-w-0 rounded border border-slate-200 p-2", children: [_jsx("a", { className: "block break-all text-xs text-blue-700 underline", href: voiceTestUrl, target: "_blank", rel: "noreferrer", children: "Open tested audio" }), _jsx("audio", { className: "mt-2 block w-full max-w-full", controls: true, preload: "metadata", src: voiceTestUrl })] }))] }), _jsxs("div", { className: "rounded-md border border-slate-200 p-3", children: [_jsxs("div", { className: "mb-2 flex items-center justify-between", children: [_jsx("h3", { className: "text-sm font-semibold", children: "Generate Sample Language" }), _jsx("button", { type: "button", className: "rounded-md border border-slate-300 px-3 py-1 text-xs font-medium hover:bg-slate-50 disabled:opacity-60", onClick: () => void generateSamples(), disabled: !selectedVoiceId || isGenerating, children: isGenerating ? "Generating..." : "Generate Sample Language" })] }), !selectedVoiceId && (_jsx("p", { className: "text-xs text-slate-500", children: "Create this brand voice first, then generate AI suggestions." }))] }), generatedSamples && (_jsx(GeneratedSamplesPanel, { samples: generatedSamples, onPin: pinExample, onReplacePreview: (type, text) => setPreviewOverride((prev) => ({
+                                            ...prev,
+                                            [type]: text
+                                        })) }))] })] })) : (_jsx(SimulationLab, { brandVoiceId: selectedVoiceId, request: request }))] })] }));
 }
-ReactDOM.createRoot(document.getElementById("root")).render(_jsx(React.StrictMode, { children: _jsx(QueryClientProvider, { client: queryClient, children: _jsx(BrowserRouter, { children: _jsx(ShellLayout, { children: _jsxs(Routes, { children: [_jsx(Route, { path: "/", element: _jsx(Navigate, { to: "/traits", replace: true }) }), _jsx(Route, { path: "/traits", element: _jsx(TraitsPage, {}) }), _jsx(Route, { path: "/programs", element: _jsx(ProgramsPage, {}) }), _jsx(Route, { path: "/brand-voice", element: _jsx(BrandVoicePage, {}) }), _jsx(Route, { path: "*", element: _jsx(Navigate, { to: "/traits", replace: true }) })] }) }) }) }) }));
+const rootElement = document.getElementById("root");
+if (rootElement) {
+    ReactDOM.createRoot(rootElement).render(_jsx(React.StrictMode, { children: _jsx(QueryClientProvider, { client: queryClient, children: _jsx(BrowserRouter, { children: _jsx(ShellLayout, { children: _jsxs(Routes, { children: [_jsx(Route, { path: "/", element: _jsx(Navigate, { to: "/traits", replace: true }) }), _jsx(Route, { path: "/traits", element: _jsx(TraitsPage, {}) }), _jsx(Route, { path: "/programs", element: _jsx(ProgramsPage, {}) }), _jsx(Route, { path: "/brand-voice", element: _jsx(BrandVoicePage, {}) }), _jsx(Route, { path: "*", element: _jsx(Navigate, { to: "/traits", replace: true }) })] }) }) }) }) }));
+}

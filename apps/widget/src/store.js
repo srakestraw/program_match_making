@@ -5,10 +5,14 @@ export const useWidgetStore = create((set) => ({
     mode: null,
     transcript: [],
     scorecard: null,
+    scoringSnapshot: null,
+    programFit: null,
     setSessionId: (sessionId) => set({ sessionId }),
     setProgramId: (programId) => set({ programId }),
     setMode: (mode) => set({ mode }),
     setScorecard: (scorecard) => set({ scorecard }),
+    setScoringSnapshot: (scoringSnapshot) => set({ scoringSnapshot }),
+    setProgramFit: (programFit) => set({ programFit }),
     addTranscriptTurn: (turn) => set((state) => {
         const normalized = turn.text.trim();
         if (!normalized)
@@ -28,6 +32,8 @@ export const useWidgetStore = create((set) => ({
         programId: null,
         mode: null,
         transcript: [],
-        scorecard: null
+        scorecard: null,
+        scoringSnapshot: null,
+        programFit: null
     })
 }));

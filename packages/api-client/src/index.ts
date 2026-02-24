@@ -24,7 +24,55 @@ export const transcriptTurnSchema = z.object({
 });
 
 const sessionSchema = z.object({ id: z.string(), status: z.string(), startedAt: z.string() });
-const completeSessionSchema = z.object({ id: z.string(), status: z.string(), endedAt: z.string().nullable() });
+const scoringSnapshotSchema = z.object({
+  traits: z.array(
+    z.object({
+      traitId: z.string(),
+      traitName: z.string(),
+      score_1_to_5: z.number().nullable(),
+      confidence: z.enum(["low", "medium", "high"]).nullable(),
+      evidence: z.array(z.string()),
+      rationale: z.string().nullable(),
+      status: z.enum(["unanswered", "active", "complete"])
+    })
+  )
+});
+
+const programFitSchema = z.object({
+  programs: z.array(
+    z.object({
+      programId: z.string(),
+      programName: z.string(),
+      fitScore_0_to_100: z.number(),
+      topTraits: z.array(
+        z.object({
+          traitName: z.string(),
+          delta: z.number()
+        })
+      )
+    })
+  ),
+  selectedProgramId: z.string().nullable()
+});
+
+const liveInsightSchema = z.object({
+  scoring_snapshot: scoringSnapshotSchema,
+  program_fit: programFitSchema
+});
+
+const sessionWithInsightsSchema = sessionSchema.extend({
+  scoring_snapshot: scoringSnapshotSchema.optional(),
+  program_fit: programFitSchema.optional()
+});
+
+const completeSessionSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  endedAt: z.string().nullable(),
+  done: z.boolean().optional(),
+  scoring_snapshot: scoringSnapshotSchema.optional(),
+  program_fit: programFitSchema.optional()
+});
 
 const publicProgramSchema = z.object({
   id: z.string(),
@@ -57,9 +105,15 @@ const scorecardSchema = z.object({
       bucket: bucketSchema,
       score0to5: z.number(),
       evidence: z.array(z.string()),
-      confidence: z.number()
+      confidence: z.number(),
+      rationale: z.string().nullable().optional()
     })
   )
+});
+
+const scorecardWithInsightsSchema = scorecardSchema.extend({
+  scoring_snapshot: scoringSnapshotSchema,
+  program_fit: programFitSchema
 });
 
 const advisorLeadListItemSchema = z.object({
@@ -257,6 +311,8 @@ export type TranscriptTurnInput = z.infer<typeof transcriptTurnSchema>;
 export type PublicProgram = z.infer<typeof publicProgramSchema>;
 export type ProgramQuestion = z.infer<typeof programQuestionSchema>;
 export type Scorecard = z.infer<typeof scorecardSchema>;
+export type ScoringSnapshot = z.infer<typeof scoringSnapshotSchema>;
+export type ProgramFit = z.infer<typeof programFitSchema>;
 export type LeadStatus = z.infer<typeof leadStatusSchema>;
 export type AdvisorLeadListItem = z.infer<typeof advisorLeadListItemSchema>;
 export type AdvisorLeadDetail = z.infer<typeof advisorLeadDetailSchema>;
@@ -332,7 +388,7 @@ export const createApiClient = ({ baseUrl }: ApiClientConfig) => {
 
   return {
     createSession: (mode: "voice" | "chat" | "quiz" = "voice", options?: { programId?: string; candidateId?: string }) =>
-      post("/api/sessions", { mode, ...options }, sessionSchema),
+      post("/api/sessions", { mode, ...options }, sessionWithInsightsSchema),
     appendTranscript: (sessionId: string, turns: TranscriptTurnInput[]) => post(`/api/sessions/${sessionId}/transcript`, { turns }),
     completeSession: (sessionId: string) => post(`/api/sessions/${sessionId}/complete`, undefined, completeSessionSchema),
     getRealtimeToken: () =>
@@ -414,6 +470,7 @@ export const createApiClient = ({ baseUrl }: ApiClientConfig) => {
       programId: string;
       transcriptTurns?: TranscriptTurnInput[];
       responses?: Array<{ questionId: string; answer: string }>;
+      activeTraitId?: string;
     }) =>
       post(
         `/api/sessions/${input.sessionId}/score`,
@@ -421,9 +478,38 @@ export const createApiClient = ({ baseUrl }: ApiClientConfig) => {
           mode: input.mode,
           programId: input.programId,
           transcriptTurns: input.transcriptTurns,
-          responses: input.responses
+          responses: input.responses,
+          activeTraitId: input.activeTraitId
         },
-        z.object({ data: scorecardSchema })
+        z.object({ data: scorecardWithInsightsSchema })
+      ),
+    scoreSessionTurn: (input: {
+      sessionId: string;
+      mode: "chat" | "quiz";
+      programId: string;
+      transcriptTurns?: TranscriptTurnInput[];
+      responses?: Array<{ questionId: string; answer: string }>;
+      activeTraitId?: string;
+    }) =>
+      post(
+        "/api/voice/session/turn",
+        {
+          sessionId: input.sessionId,
+          mode: input.mode,
+          programId: input.programId,
+          transcriptTurns: input.transcriptTurns,
+          responses: input.responses,
+          activeTraitId: input.activeTraitId
+        },
+        z.object({ data: scorecardWithInsightsSchema })
+      ),
+    startVoiceSession: (mode: "voice" | "chat" | "quiz", options?: { programId?: string; candidateId?: string }) =>
+      post("/api/voice/session/start", { mode, ...options }, sessionWithInsightsSchema),
+    endVoiceSession: (sessionId: string) =>
+      post(
+        "/api/voice/session/end",
+        { sessionId },
+        z.object({ id: z.string(), status: z.string(), endedAt: z.string().nullable(), done: z.boolean().optional() }).and(liveInsightSchema.partial())
       ),
     getAdvisorPrograms: () => get("/api/advisor/programs", z.object({ data: z.array(z.object({ id: z.string(), name: z.string() })) })),
     getAdvisorLeads: (filters?: {

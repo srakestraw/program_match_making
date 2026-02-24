@@ -3,9 +3,18 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate, useSearchParams } from "react-router-dom";
 import { QueryClient, QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
 import { Button, Card } from "@pmm/ui";
-import { createApiClient, type ProgramQuestion, type PublicProgram, type TranscriptTurnInput } from "@pmm/api-client";
+import {
+  createApiClient,
+  type ProgramQuestion,
+  type ProgramFit,
+  type PublicProgram,
+  type ScoringSnapshot,
+  type TranscriptTurnInput
+} from "@pmm/api-client";
 import { RealtimeSession, type ConnectionState, type TranscriptTurn } from "@pmm/voice";
 import { useWidgetStore } from "./store";
+import { ProgramFloatField } from "./components/ProgramFloatField";
+import { TraitScorePanel } from "./components/TraitScorePanel";
 import "./styles.css";
 
 const queryClient = new QueryClient();
@@ -59,6 +68,23 @@ const useOnlineStatus = () => {
 
   return isOnline;
 };
+
+const LiveInsightsSidebar = ({
+  snapshot,
+  programFit,
+  activeTraitId,
+  done = false
+}: {
+  snapshot: ScoringSnapshot | null;
+  programFit: ProgramFit | null;
+  activeTraitId?: string | null;
+  done?: boolean;
+}) => (
+  <aside className="space-y-3">
+    <TraitScorePanel traits={snapshot?.traits ?? []} activeTraitId={activeTraitId ?? null} done={done} />
+    <ProgramFloatField programs={programFit?.programs ?? []} selectedProgramId={programFit?.selectedProgramId ?? null} done={done} />
+  </aside>
+);
 
 const WidgetSetup = () => {
   const [searchParams] = useSearchParams();
@@ -421,8 +447,22 @@ const ChatFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
   const [pendingScoreRetry, setPendingScoreRetry] = useState(false);
   const isOnline = useOnlineStatus();
 
-  const { transcript, sessionId, setSessionId, addTranscriptTurn, setMode, setProgramId, setScorecard, clear } = useWidgetStore();
+  const {
+    transcript,
+    sessionId,
+    scoringSnapshot,
+    programFit,
+    setSessionId,
+    addTranscriptTurn,
+    setMode,
+    setProgramId,
+    setScorecard,
+    setScoringSnapshot,
+    setProgramFit,
+    clear
+  } = useWidgetStore();
   const transcriptRef = useRef<TranscriptTurnInput[]>([]);
+  const [activeTraitId, setActiveTraitId] = useState<string | null>(null);
 
   const questionsQuery = useQuery({
     queryKey: ["program-questions", programId, "chat"],
@@ -432,7 +472,7 @@ const ChatFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
     }
   });
 
-  const createSessionMutation = useMutation({ mutationFn: () => api.createSession("chat", { programId }) });
+  const createSessionMutation = useMutation({ mutationFn: () => api.startVoiceSession("chat", { programId }) });
   const appendTranscriptMutation = useMutation({
     mutationFn: ({ id, turns }: { id: string; turns: TranscriptTurnInput[] }) => api.appendTranscript(id, turns)
   });
@@ -443,7 +483,18 @@ const ChatFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
         sessionId: sessionId!,
         mode: "chat",
         programId,
-        transcriptTurns: transcriptRef.current
+        transcriptTurns: transcriptRef.current,
+        activeTraitId: activeTraitId ?? undefined
+      })
+  });
+  const scoreTurnMutation = useMutation({
+    mutationFn: (traitId: string | undefined) =>
+      api.scoreSessionTurn({
+        sessionId: sessionId!,
+        mode: "chat",
+        programId,
+        transcriptTurns: transcriptRef.current,
+        activeTraitId: traitId
       })
   });
 
@@ -454,6 +505,8 @@ const ChatFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
       await completeSessionMutation.mutateAsync(sessionId);
       const score = await scoreSessionMutation.mutateAsync();
       setScorecard(score.data);
+      setScoringSnapshot(score.data.scoring_snapshot);
+      setProgramFit(score.data.program_fit);
       setPendingScoreRetry(false);
       navigate("/widget/results");
     } catch (finalizeError) {
@@ -466,7 +519,9 @@ const ChatFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
     clear();
     setProgramId(programId);
     setMode("chat");
-  }, [clear, programId, setMode, setProgramId]);
+    setScoringSnapshot(null);
+    setProgramFit(null);
+  }, [clear, programId, setMode, setProgramId, setProgramFit, setScoringSnapshot]);
 
   const pushTurn = async (id: string, speaker: "candidate" | "assistant", text: string) => {
     const turn = { id, speaker, text, ts: new Date().toISOString() };
@@ -491,8 +546,11 @@ const ChatFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
     try {
       const session = await createSessionMutation.mutateAsync();
       setSessionId(session.id);
+      setScoringSnapshot(session.scoring_snapshot ?? null);
+      setProgramFit(session.program_fit ?? null);
       setStarted(true);
       setCurrentIndex(0);
+      setActiveTraitId(questions[0]?.traitId ?? null);
 
       await pushTurn(transcriptId("assistant"), "assistant", questions[0].prompt);
     } catch (sessionError) {
@@ -512,6 +570,11 @@ const ChatFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
 
     try {
       await pushTurn(transcriptId("candidate"), "candidate", answer);
+      setActiveTraitId(question.traitId);
+      const liveScore = await scoreTurnMutation.mutateAsync(question.traitId);
+      setScorecard(liveScore.data);
+      setScoringSnapshot(liveScore.data.scoring_snapshot);
+      setProgramFit(liveScore.data.program_fit);
 
       const nextIndex = currentIndex + 1;
       if (nextIndex >= questions.length) {
@@ -529,8 +592,9 @@ const ChatFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
   const questions = questionsQuery.data ?? [];
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl items-center px-4 py-10">
-      <Card>
+    <main className="mx-auto min-h-screen max-w-7xl px-4 py-8">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]">
+        <Card>
         <section className="space-y-4">
           <h2 className="text-2xl font-semibold">Chat Interview</h2>
           {!started && (
@@ -577,7 +641,10 @@ const ChatFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
                   }}
                   placeholder="Type your answer"
                 />
-                <Button onClick={submitAnswer} disabled={!isOnline || appendTranscriptMutation.isPending || scoreSessionMutation.isPending}>
+                <Button
+                  onClick={submitAnswer}
+                  disabled={!isOnline || appendTranscriptMutation.isPending || scoreSessionMutation.isPending || scoreTurnMutation.isPending}
+                >
                   Send
                 </Button>
               </div>
@@ -592,7 +659,9 @@ const ChatFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
           {!isOnline && <p className="text-sm text-red-700">You are offline. Reconnect to continue.</p>}
           {error && <p className="text-sm text-red-700">{error}</p>}
         </section>
-      </Card>
+        </Card>
+        <LiveInsightsSidebar snapshot={scoringSnapshot} programFit={programFit} activeTraitId={activeTraitId} />
+      </div>
     </main>
   );
 };
@@ -605,9 +674,22 @@ const QuizFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
   const [pendingScoreRetry, setPendingScoreRetry] = useState(false);
   const isOnline = useOnlineStatus();
 
-  const { sessionId, setSessionId, addTranscriptTurn, setProgramId, setMode, setScorecard, clear } = useWidgetStore();
+  const {
+    sessionId,
+    scoringSnapshot,
+    programFit,
+    setSessionId,
+    addTranscriptTurn,
+    setProgramId,
+    setMode,
+    setScorecard,
+    setScoringSnapshot,
+    setProgramFit,
+    clear
+  } = useWidgetStore();
   const responsesRef = useRef<Array<{ questionId: string; answer: string }>>([]);
   const transcriptRef = useRef<TranscriptTurnInput[]>([]);
+  const [activeTraitId, setActiveTraitId] = useState<string | null>(null);
 
   const questionsQuery = useQuery({
     queryKey: ["program-questions", programId, "quiz"],
@@ -617,7 +699,7 @@ const QuizFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
     }
   });
 
-  const createSessionMutation = useMutation({ mutationFn: () => api.createSession("quiz", { programId }) });
+  const createSessionMutation = useMutation({ mutationFn: () => api.startVoiceSession("quiz", { programId }) });
   const appendTranscriptMutation = useMutation({
     mutationFn: ({ id, turns }: { id: string; turns: TranscriptTurnInput[] }) => api.appendTranscript(id, turns)
   });
@@ -629,7 +711,19 @@ const QuizFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
         mode: "quiz",
         programId,
         transcriptTurns: transcriptRef.current,
-        responses: responsesRef.current
+        responses: responsesRef.current,
+        activeTraitId: activeTraitId ?? undefined
+      })
+  });
+  const scoreTurnMutation = useMutation({
+    mutationFn: (traitId: string | undefined) =>
+      api.scoreSessionTurn({
+        sessionId: sessionId!,
+        mode: "quiz",
+        programId,
+        transcriptTurns: transcriptRef.current,
+        responses: responsesRef.current,
+        activeTraitId: traitId
       })
   });
 
@@ -640,6 +734,8 @@ const QuizFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
       await completeSessionMutation.mutateAsync(sessionId);
       const score = await scoreSessionMutation.mutateAsync();
       setScorecard(score.data);
+      setScoringSnapshot(score.data.scoring_snapshot);
+      setProgramFit(score.data.program_fit);
       setPendingScoreRetry(false);
       navigate("/widget/results");
     } catch (finalizeError) {
@@ -652,7 +748,9 @@ const QuizFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
     clear();
     setProgramId(programId);
     setMode("quiz");
-  }, [clear, programId, setMode, setProgramId]);
+    setScoringSnapshot(null);
+    setProgramFit(null);
+  }, [clear, programId, setMode, setProgramFit, setProgramId, setScoringSnapshot]);
 
   const pushTurn = async (speaker: "candidate" | "assistant", text: string) => {
     const turn = { id: transcriptId(speaker), speaker, text, ts: new Date().toISOString() };
@@ -677,8 +775,11 @@ const QuizFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
     try {
       const session = await createSessionMutation.mutateAsync();
       setSessionId(session.id);
+      setScoringSnapshot(session.scoring_snapshot ?? null);
+      setProgramFit(session.program_fit ?? null);
       setStarted(true);
       setCurrentIndex(0);
+      setActiveTraitId(questions[0]?.traitId ?? null);
       responsesRef.current = [];
       transcriptRef.current = [];
       await pushTurn("assistant", questions[0].prompt);
@@ -692,6 +793,11 @@ const QuizFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
       const cleanAnswer = sanitizeOptionLabel(option);
       responsesRef.current.push({ questionId: question.id, answer: cleanAnswer });
       await pushTurn("candidate", cleanAnswer);
+      setActiveTraitId(question.traitId);
+      const liveScore = await scoreTurnMutation.mutateAsync(question.traitId);
+      setScorecard(liveScore.data);
+      setScoringSnapshot(liveScore.data.scoring_snapshot);
+      setProgramFit(liveScore.data.program_fit);
 
       const questions = questionsQuery.data ?? [];
       const nextIndex = currentIndex + 1;
@@ -712,7 +818,8 @@ const QuizFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
   const currentQuestion = questions[currentIndex];
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl items-center px-4 py-10">
+    <main className="mx-auto min-h-screen max-w-7xl px-4 py-8">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]">
       <Card>
         <section className="space-y-4">
           <h2 className="text-2xl font-semibold">Quiz</h2>
@@ -743,7 +850,7 @@ const QuizFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
                     type="button"
                     className="rounded-md border border-slate-300 bg-white px-4 py-2 text-left text-sm hover:border-slate-900"
                     onClick={() => void selectAnswer(currentQuestion, option)}
-                    disabled={!isOnline || appendTranscriptMutation.isPending || scoreSessionMutation.isPending}
+                    disabled={!isOnline || appendTranscriptMutation.isPending || scoreSessionMutation.isPending || scoreTurnMutation.isPending}
                   >
                     {sanitizeOptionLabel(option)}
                   </button>
@@ -761,6 +868,8 @@ const QuizFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
           {error && <p className="text-sm text-red-700">{error}</p>}
         </section>
       </Card>
+      <LiveInsightsSidebar snapshot={scoringSnapshot} programFit={programFit} activeTraitId={activeTraitId} />
+      </div>
     </main>
   );
 };
@@ -774,6 +883,8 @@ const confidenceLabel = (value: number) => {
 const ResultsPage = () => {
   const navigate = useNavigate();
   const scorecard = useWidgetStore((state) => state.scorecard);
+  const scoringSnapshot = useWidgetStore((state) => state.scoringSnapshot);
+  const programFit = useWidgetStore((state) => state.programFit);
   const mode = useWidgetStore((state) => state.mode);
   const sessionId = useWidgetStore((state) => state.sessionId);
   const programId = useWidgetStore((state) => state.programId);
@@ -894,7 +1005,8 @@ const ResultsPage = () => {
   );
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl items-center px-4 py-10">
+    <main className="mx-auto min-h-screen max-w-7xl px-4 py-8">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]">
       <Card>
         <h2 className="mb-3 text-2xl font-semibold">Results</h2>
 
@@ -933,6 +1045,8 @@ const ResultsPage = () => {
                         {item.traitName}: {item.score0to5.toFixed(2)} / 5
                       </p>
                       <p>Confidence: {confidenceLabel(item.confidence)}</p>
+                      {(item.evidence ?? []).length > 0 && <p className="mt-1 text-xs text-slate-600">Evidence: {item.evidence.slice(0, 2).join(" | ")}</p>}
+                      {item.rationale && <p className="mt-1 text-xs text-slate-600">Why this score: {item.rationale}</p>}
                     </div>
                   ))}
                 </div>
@@ -946,6 +1060,8 @@ const ResultsPage = () => {
           </section>
         )}
       </Card>
+      <LiveInsightsSidebar snapshot={scoringSnapshot} programFit={programFit} done />
+      </div>
     </main>
   );
 };

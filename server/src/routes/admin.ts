@@ -1,15 +1,41 @@
 import { Router } from "express";
-import { Prisma, ProgramTraitPriorityBucket, TonePreset, TraitCategory, TraitQuestionType } from "@prisma/client";
+import {
+  ConversationPersona,
+  ConversationScenarioStage,
+  ConversationTurnRole,
+  Prisma,
+  ProgramTraitPriorityBucket,
+  TraitCategory,
+  TraitQuestionType
+} from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
+import {
+  brandVoiceDefaults,
+  buildBrandVoicePrompt,
+  createBrandVoiceSchema,
+  generateSamplesSchema,
+  normalizeCanonicalExamples,
+  normalizeToneProfile,
+  updateBrandVoiceSchema
+} from "../lib/brandVoice.js";
+import { generateBrandVoiceSamples } from "../lib/brandVoiceSamples.js";
+import {
+  calculateStabilityScore,
+  composeAssistantReply,
+  findAvoidHits,
+  pressureTestPrompts
+} from "../lib/simulationLab.js";
+import { synthesizeVoiceSample } from "../lib/simulationVoice.js";
 
 const idParamSchema = z.object({ id: z.string().min(1) });
 const questionIdParamSchema = z.object({ questionId: z.string().min(1) });
 
 const traitCategorySchema = z.nativeEnum(TraitCategory);
-const tonePresetSchema = z.nativeEnum(TonePreset);
 const traitQuestionTypeSchema = z.enum(["chat", "quiz"]);
 const bucketSchema = z.nativeEnum(ProgramTraitPriorityBucket);
+const conversationStageSchema = z.nativeEnum(ConversationScenarioStage);
+const conversationPersonaSchema = z.nativeEnum(ConversationPersona);
 
 const createTraitSchema = z.object({
   name: z.string().trim().min(1).max(120),
@@ -59,16 +85,28 @@ const saveProgramTraitsSchema = z.object({
   )
 });
 
-const createBrandVoiceSchema = z.object({
-  name: z.string().trim().min(1).max(120),
-  tonePreset: tonePresetSchema,
-  doList: z.string().trim().max(2000).nullable().optional(),
-  dontList: z.string().trim().max(2000).nullable().optional(),
-  samplePhrases: z.string().trim().max(2000).nullable().optional()
+const createSimulationSchema = z
+  .object({
+    scenarioId: z.string().min(1).optional(),
+    persona: conversationPersonaSchema,
+    customScenario: z.string().trim().min(1).max(4000).optional()
+  })
+  .refine((value) => Boolean(value.scenarioId || value.customScenario), {
+    message: "scenarioId or customScenario is required"
+  });
+
+const createSimulationTurnSchema = z.object({
+  userMessage: z.string().trim().min(1).max(4000).optional()
 });
 
-const updateBrandVoiceSchema = createBrandVoiceSchema.partial().refine((value) => Object.keys(value).length > 0, {
-  message: "At least one field is required"
+const createVoiceSampleSchema = z.object({
+  turnId: z.string().min(1),
+  voiceName: z.string().trim().max(120).optional()
+});
+
+const testBrandVoiceSchema = z.object({
+  voiceName: z.string().trim().min(1).max(120),
+  text: z.string().trim().min(1).max(2000)
 });
 
 const toNull = (value?: string | null) => {
@@ -137,17 +175,90 @@ const formatProgram = (program: {
 const formatBrandVoice = (voice: {
   id: string;
   name: string;
-  tonePreset: TonePreset;
-  doList: string | null;
-  dontList: string | null;
-  samplePhrases: string | null;
+  primaryTone: string;
+  ttsVoiceName: string;
+  toneModifiers: string[];
+  toneProfile: Prisma.JsonValue;
+  styleFlags: string[];
+  avoidFlags: string[];
+  canonicalExamples: Prisma.JsonValue;
   createdAt: Date;
   updatedAt: Date;
 }) => ({
-  ...voice,
+  id: voice.id,
+  name: voice.name,
+  primaryTone: voice.primaryTone,
+  ttsVoiceName: voice.ttsVoiceName,
+  toneModifiers: Array.isArray(voice.toneModifiers) ? voice.toneModifiers : [],
+  toneProfile: normalizeToneProfile(voice.toneProfile),
+  styleFlags: Array.isArray(voice.styleFlags) ? voice.styleFlags : [],
+  avoidFlags: Array.isArray(voice.avoidFlags) ? voice.avoidFlags : [],
+  canonicalExamples: normalizeCanonicalExamples(voice.canonicalExamples),
   createdAt: voice.createdAt.toISOString(),
   updatedAt: voice.updatedAt.toISOString()
 });
+
+const formatSimulationScenario = (scenario: {
+  id: string;
+  title: string;
+  stage: ConversationScenarioStage;
+  persona: ConversationPersona | null;
+  seedPrompt: string;
+  isPreset: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}) => ({
+  id: scenario.id,
+  title: scenario.title,
+  stage: scenario.stage,
+  persona: scenario.persona,
+  seedPrompt: scenario.seedPrompt,
+  isPreset: scenario.isPreset,
+  createdAt: scenario.createdAt.toISOString(),
+  updatedAt: scenario.updatedAt.toISOString()
+});
+
+const formatSimulation = (simulation: {
+  id: string;
+  brandVoiceId: string;
+  scenarioId: string | null;
+  persona: ConversationPersona;
+  customScenario: string | null;
+  stabilityScore: number | null;
+  createdAt: Date;
+}) => ({
+  id: simulation.id,
+  brandVoiceId: simulation.brandVoiceId,
+  scenarioId: simulation.scenarioId,
+  persona: simulation.persona,
+  customScenario: simulation.customScenario,
+  stabilityScore: simulation.stabilityScore,
+  createdAt: simulation.createdAt.toISOString()
+});
+
+const formatTurn = (turn: {
+  id: string;
+  simulationId: string;
+  role: ConversationTurnRole;
+  content: string;
+  createdAt: Date;
+  order: number;
+}) => ({
+  id: turn.id,
+  simulationId: turn.simulationId,
+  role: turn.role,
+  content: turn.content,
+  createdAt: turn.createdAt.toISOString(),
+  order: turn.order
+});
+
+const summarizeAvoidHits = (hits: Array<{ token: string }>) => {
+  const counts = new Map<string, number>();
+  for (const hit of hits) {
+    counts.set(hit.token, (counts.get(hit.token) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([token, count]) => ({ token, count }));
+};
 
 const parseError = (error: unknown) => {
   if (error instanceof z.ZodError) {
@@ -518,13 +629,32 @@ adminRouter.get("/brand-voices", async (_req, res) => {
 adminRouter.post("/brand-voices", async (req, res) => {
   try {
     const body = createBrandVoiceSchema.parse(req.body);
+
+    const primaryTone = body.primaryTone ?? brandVoiceDefaults.primaryTone;
+    const ttsVoiceName = body.ttsVoiceName ?? brandVoiceDefaults.ttsVoiceName;
+    const toneModifiers =
+      body.toneModifiers && body.toneModifiers.length > 0 ? body.toneModifiers : [...brandVoiceDefaults.toneModifiers];
+    const toneProfile = body.toneProfile ?? { ...brandVoiceDefaults.toneProfile };
+    const styleFlags =
+      body.styleFlags && body.styleFlags.length > 0
+        ? body.styleFlags
+        : [...brandVoiceDefaults.styleFlags];
+    const avoidFlags =
+      body.avoidFlags && body.avoidFlags.length > 0
+        ? body.avoidFlags
+        : [...brandVoiceDefaults.avoidFlags];
+    const canonicalExamples = body.canonicalExamples ?? [];
+
     const voice = await prisma.brandVoice.create({
       data: {
         name: body.name,
-        tonePreset: body.tonePreset,
-        doList: toNull(body.doList),
-        dontList: toNull(body.dontList),
-        samplePhrases: toNull(body.samplePhrases)
+        primaryTone,
+        ttsVoiceName,
+        toneModifiers,
+        toneProfile,
+        styleFlags,
+        avoidFlags,
+        canonicalExamples
       }
     });
 
@@ -538,18 +668,396 @@ adminRouter.put("/brand-voices/:id", async (req, res) => {
   try {
     const { id } = idParamSchema.parse(req.params);
     const body = updateBrandVoiceSchema.parse(req.body);
+    const existing = await prisma.brandVoice.findUnique({ where: { id } });
+    if (!existing) {
+      res.status(404).json({ error: "Brand voice not found" });
+      return;
+    }
+
+    const existingStyleFlags = Array.isArray(existing.styleFlags) ? existing.styleFlags : [];
+    const existingAvoidFlags = Array.isArray(existing.avoidFlags) ? existing.avoidFlags : [];
+    const existingCanonicalExamples = normalizeCanonicalExamples(existing.canonicalExamples);
+
     const voice = await prisma.brandVoice.update({
       where: { id },
       data: {
         ...(body.name !== undefined ? { name: body.name } : {}),
-        ...(body.tonePreset !== undefined ? { tonePreset: body.tonePreset } : {}),
-        ...(body.doList !== undefined ? { doList: toNull(body.doList) } : {}),
-        ...(body.dontList !== undefined ? { dontList: toNull(body.dontList) } : {}),
-        ...(body.samplePhrases !== undefined ? { samplePhrases: toNull(body.samplePhrases) } : {})
+        ...(body.primaryTone !== undefined ? { primaryTone: body.primaryTone } : {}),
+        ...(body.ttsVoiceName !== undefined ? { ttsVoiceName: body.ttsVoiceName } : {}),
+        ...(body.toneModifiers !== undefined ? { toneModifiers: body.toneModifiers } : {}),
+        ...(body.toneProfile !== undefined ? { toneProfile: body.toneProfile ?? { ...brandVoiceDefaults.toneProfile } } : {}),
+        ...(body.styleFlags !== undefined
+          ? { styleFlags: body.styleFlags.length > 0 ? body.styleFlags : existingStyleFlags.length > 0 ? existingStyleFlags : [...brandVoiceDefaults.styleFlags] }
+          : {}),
+        ...(body.avoidFlags !== undefined
+          ? { avoidFlags: body.avoidFlags.length > 0 ? body.avoidFlags : existingAvoidFlags.length > 0 ? existingAvoidFlags : [...brandVoiceDefaults.avoidFlags] }
+          : {}),
+        ...(body.canonicalExamples !== undefined
+          ? {
+              canonicalExamples:
+                body.canonicalExamples.length > 0
+                  ? body.canonicalExamples
+                  : existingCanonicalExamples.length > 0
+                  ? existingCanonicalExamples
+                  : []
+            }
+          : {})
       }
     });
 
     res.json({ data: formatBrandVoice(voice) });
+  } catch (error) {
+    res.status(400).json({ error: parseError(error) });
+  }
+});
+
+adminRouter.post("/brand-voices/:id/generate-samples", async (req, res) => {
+  try {
+    const { id } = idParamSchema.parse(req.params);
+    const body = generateSamplesSchema.parse(req.body ?? {});
+    const voice = await prisma.brandVoice.findUnique({ where: { id } });
+
+    if (!voice) {
+      res.status(404).json({ error: "Brand voice not found" });
+      return;
+    }
+
+    const prompt = buildBrandVoicePrompt({
+      name: voice.name,
+      primaryTone: voice.primaryTone,
+      toneModifiers: Array.isArray(voice.toneModifiers) ? voice.toneModifiers : [],
+      toneProfile: normalizeToneProfile(voice.toneProfile),
+      styleFlags: Array.isArray(voice.styleFlags) ? voice.styleFlags : [],
+      avoidFlags: Array.isArray(voice.avoidFlags) ? voice.avoidFlags : [],
+      canonicalExamples: normalizeCanonicalExamples(voice.canonicalExamples),
+      context: body.context
+    });
+
+    const samples = await generateBrandVoiceSamples(prompt);
+    res.json({ samples });
+  } catch (error) {
+    res.status(400).json({ error: parseError(error) });
+  }
+});
+
+adminRouter.post("/brand-voices/test-voice", async (req, res) => {
+  try {
+    const body = testBrandVoiceSchema.parse(req.body ?? {});
+    const voiceResult = await synthesizeVoiceSample({
+      text: body.text,
+      voiceName: body.voiceName
+    });
+
+    res.status(201).json({
+      data: {
+        provider: voiceResult.provider,
+        voiceName: body.voiceName,
+        audioUrl: voiceResult.audioUrl
+      }
+    });
+  } catch (error) {
+    res.status(400).json({ error: parseError(error) });
+  }
+});
+
+adminRouter.get("/simulation-scenarios", async (req, res) => {
+  try {
+    const query = z
+      .object({
+        stage: conversationStageSchema.optional()
+      })
+      .parse(req.query);
+
+    const scenarios = await prisma.conversationScenario.findMany({
+      where: {
+        ...(query.stage ? { stage: query.stage } : {})
+      },
+      orderBy: [{ stage: "asc" }, { title: "asc" }]
+    });
+
+    res.json({ data: scenarios.map(formatSimulationScenario) });
+  } catch (error) {
+    res.status(400).json({ error: parseError(error) });
+  }
+});
+
+adminRouter.post("/brand-voices/:id/simulations", async (req, res) => {
+  try {
+    const { id } = idParamSchema.parse(req.params);
+    const body = createSimulationSchema.parse(req.body ?? {});
+    const brandVoice = await prisma.brandVoice.findUnique({ where: { id } });
+
+    if (!brandVoice) {
+      res.status(404).json({ error: "Brand voice not found" });
+      return;
+    }
+
+    let scenario: {
+      id: string;
+      seedPrompt: string;
+    } | null = null;
+    if (body.scenarioId) {
+      scenario = await prisma.conversationScenario.findUnique({
+        where: { id: body.scenarioId },
+        select: { id: true, seedPrompt: true }
+      });
+      if (!scenario) {
+        res.status(404).json({ error: "Scenario not found" });
+        return;
+      }
+    }
+
+    const initialUserContent = body.customScenario ?? scenario?.seedPrompt ?? "";
+
+    const created = await prisma.$transaction(async (tx) => {
+      const simulation = await tx.conversationSimulation.create({
+        data: {
+          brandVoiceId: id,
+          scenarioId: scenario?.id ?? null,
+          persona: body.persona,
+          customScenario: body.customScenario ?? null
+        }
+      });
+
+      const firstTurn = await tx.conversationTurn.create({
+        data: {
+          simulationId: simulation.id,
+          role: ConversationTurnRole.USER,
+          content: initialUserContent,
+          order: 0
+        }
+      });
+
+      return { simulation, firstTurn };
+    });
+
+    res.status(201).json({
+      simulation: formatSimulation(created.simulation),
+      turns: [formatTurn(created.firstTurn)]
+    });
+  } catch (error) {
+    res.status(400).json({ error: parseError(error) });
+  }
+});
+
+adminRouter.post("/simulations/:id/turns", async (req, res) => {
+  try {
+    const { id } = idParamSchema.parse(req.params);
+    const body = createSimulationTurnSchema.parse(req.body ?? {});
+
+    const simulation = await prisma.conversationSimulation.findUnique({
+      where: { id },
+      include: {
+        scenario: true,
+        brandVoice: true,
+        turns: {
+          orderBy: { order: "asc" }
+        }
+      }
+    });
+
+    if (!simulation) {
+      res.status(404).json({ error: "Simulation not found" });
+      return;
+    }
+
+    let nextOrder = simulation.turns.length;
+    let latestUserMessage = body.userMessage?.trim();
+    if (!latestUserMessage) {
+      latestUserMessage = simulation.customScenario ?? simulation.scenario?.seedPrompt ?? "Please continue.";
+    }
+
+    let userTurn:
+      | {
+          id: string;
+          simulationId: string;
+          role: ConversationTurnRole;
+          content: string;
+          createdAt: Date;
+          order: number;
+        }
+      | undefined;
+
+    if (body.userMessage?.trim()) {
+      userTurn = await prisma.conversationTurn.create({
+        data: {
+          simulationId: simulation.id,
+          role: ConversationTurnRole.USER,
+          content: latestUserMessage,
+          order: nextOrder
+        }
+      });
+      nextOrder += 1;
+    }
+
+    const assistantText = composeAssistantReply({
+      brandVoice: simulation.brandVoice,
+      persona: simulation.persona,
+      scenarioTitle: simulation.scenario?.title,
+      scenarioContext: simulation.customScenario ?? simulation.scenario?.seedPrompt ?? undefined,
+      latestUserMessage
+    });
+    const avoidHits = findAvoidHits(assistantText, simulation.brandVoice.avoidFlags ?? []);
+    const stabilityScore = calculateStabilityScore(assistantText, avoidHits.length);
+
+    const assistantTurn = await prisma.conversationTurn.create({
+      data: {
+        simulationId: simulation.id,
+        role: ConversationTurnRole.ASSISTANT,
+        content: assistantText,
+        order: nextOrder
+      }
+    });
+
+    await prisma.conversationSimulation.update({
+      where: { id: simulation.id },
+      data: { stabilityScore }
+    });
+
+    res.json({
+      ...(userTurn ? { userTurn: formatTurn(userTurn) } : {}),
+      assistantTurn: formatTurn(assistantTurn),
+      stabilityScore,
+      avoidHits: [...new Set(avoidHits.map((hit) => hit.token))],
+      highlightedRanges: avoidHits.map((hit) => ({ start: hit.index, end: hit.index + hit.length }))
+    });
+  } catch (error) {
+    res.status(400).json({ error: parseError(error) });
+  }
+});
+
+adminRouter.post("/simulations/:id/voice-samples", async (req, res) => {
+  try {
+    const { id } = idParamSchema.parse(req.params);
+    const body = createVoiceSampleSchema.parse(req.body ?? {});
+    const turn = await prisma.conversationTurn.findUnique({
+      where: { id: body.turnId }
+    });
+
+    if (!turn || turn.simulationId !== id || turn.role !== ConversationTurnRole.ASSISTANT) {
+      res.status(400).json({ error: "turnId must reference an assistant turn in this simulation" });
+      return;
+    }
+
+    const simulation = await prisma.conversationSimulation.findUnique({
+      where: { id },
+      include: {
+        brandVoice: {
+          select: {
+            ttsVoiceName: true
+          }
+        }
+      }
+    });
+    const resolvedVoiceName = body.voiceName ?? simulation?.brandVoice.ttsVoiceName ?? brandVoiceDefaults.ttsVoiceName;
+
+    const voiceResult = await synthesizeVoiceSample({
+      text: turn.content,
+      voiceName: resolvedVoiceName
+    });
+
+    const created = await prisma.voiceSample.create({
+      data: {
+        simulationId: id,
+        turnId: body.turnId,
+        voiceName: resolvedVoiceName,
+        provider: voiceResult.provider,
+        audioUrl: voiceResult.audioUrl
+      }
+    });
+
+    res.status(201).json({
+      data: {
+        id: created.id,
+        simulationId: created.simulationId,
+        turnId: created.turnId,
+        provider: created.provider,
+        voiceName: created.voiceName,
+        audioUrl: created.audioUrl,
+        createdAt: created.createdAt.toISOString()
+      }
+    });
+  } catch (error) {
+    res.status(400).json({ error: parseError(error) });
+  }
+});
+
+adminRouter.post("/simulations/:id/pressure-test", async (req, res) => {
+  try {
+    const { id } = idParamSchema.parse(req.params);
+    const simulation = await prisma.conversationSimulation.findUnique({
+      where: { id },
+      include: {
+        scenario: true,
+        brandVoice: true,
+        turns: {
+          orderBy: { order: "asc" }
+        }
+      }
+    });
+
+    if (!simulation) {
+      res.status(404).json({ error: "Simulation not found" });
+      return;
+    }
+
+    let nextOrder = simulation.turns.length;
+    const collectedHits: Array<{ token: string }> = [];
+    const scores: number[] = [];
+
+    for (const prompt of pressureTestPrompts) {
+      await prisma.conversationTurn.create({
+        data: {
+          simulationId: simulation.id,
+          role: ConversationTurnRole.USER,
+          content: prompt,
+          order: nextOrder
+        }
+      });
+      nextOrder += 1;
+
+      const assistantText = composeAssistantReply({
+        brandVoice: simulation.brandVoice,
+        persona: simulation.persona,
+        scenarioTitle: simulation.scenario?.title,
+        scenarioContext: simulation.customScenario ?? simulation.scenario?.seedPrompt ?? undefined,
+        latestUserMessage: prompt
+      });
+      const avoidHits = findAvoidHits(assistantText, simulation.brandVoice.avoidFlags ?? []);
+      const score = calculateStabilityScore(assistantText, avoidHits.length);
+      scores.push(score);
+      collectedHits.push(...avoidHits.map((hit) => ({ token: hit.token })));
+
+      await prisma.conversationTurn.create({
+        data: {
+          simulationId: simulation.id,
+          role: ConversationTurnRole.ASSISTANT,
+          content: assistantText,
+          order: nextOrder
+        }
+      });
+      nextOrder += 1;
+    }
+
+    const aggregatedScore =
+      scores.length > 0 ? Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length) : null;
+    if (aggregatedScore !== null) {
+      await prisma.conversationSimulation.update({
+        where: { id: simulation.id },
+        data: { stabilityScore: aggregatedScore }
+      });
+    }
+
+    const transcript = await prisma.conversationTurn.findMany({
+      where: { simulationId: simulation.id },
+      orderBy: { order: "asc" }
+    });
+
+    res.json({
+      transcript: transcript.map(formatTurn),
+      aggregatedScore,
+      avoidHitsSummary: summarizeAvoidHits(collectedHits)
+    });
   } catch (error) {
     res.status(400).json({ error: parseError(error) });
   }

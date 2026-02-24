@@ -10,7 +10,7 @@
 - Build everything: `pnpm build`
 - Typecheck everything: `pnpm typecheck`
 - Prisma generate: `pnpm db:generate`
-- Prisma migrate (local SQLite): `pnpm db:migrate`
+- Prisma migrate (RDS PostgreSQL): `pnpm db:migrate`
 
 ## Service Ports
 - Server: `http://localhost:4000`

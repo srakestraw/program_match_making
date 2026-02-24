@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { TranscriptTurn } from "@pmm/voice";
-import type { Scorecard } from "@pmm/api-client";
+import type { ProgramFit, Scorecard, ScoringSnapshot } from "@pmm/api-client";
 
 type InterviewMode = "voice" | "chat" | "quiz";
 
@@ -10,10 +10,14 @@ type WidgetStore = {
   mode: InterviewMode | null;
   transcript: TranscriptTurn[];
   scorecard: Scorecard | null;
+  scoringSnapshot: ScoringSnapshot | null;
+  programFit: ProgramFit | null;
   setSessionId: (sessionId: string | null) => void;
   setProgramId: (programId: string | null) => void;
   setMode: (mode: InterviewMode | null) => void;
   setScorecard: (scorecard: Scorecard | null) => void;
+  setScoringSnapshot: (scoringSnapshot: ScoringSnapshot | null) => void;
+  setProgramFit: (programFit: ProgramFit | null) => void;
   addTranscriptTurn: (turn: TranscriptTurn) => void;
   clear: () => void;
 };
@@ -24,10 +28,14 @@ export const useWidgetStore = create<WidgetStore>((set) => ({
   mode: null,
   transcript: [],
   scorecard: null,
+  scoringSnapshot: null,
+  programFit: null,
   setSessionId: (sessionId) => set({ sessionId }),
   setProgramId: (programId) => set({ programId }),
   setMode: (mode) => set({ mode }),
   setScorecard: (scorecard) => set({ scorecard }),
+  setScoringSnapshot: (scoringSnapshot) => set({ scoringSnapshot }),
+  setProgramFit: (programFit) => set({ programFit }),
   addTranscriptTurn: (turn) =>
     set((state) => {
       const normalized = turn.text.trim();
@@ -50,6 +58,8 @@ export const useWidgetStore = create<WidgetStore>((set) => ({
       programId: null,
       mode: null,
       transcript: [],
-      scorecard: null
+      scorecard: null,
+      scoringSnapshot: null,
+      programFit: null
     })
 }));

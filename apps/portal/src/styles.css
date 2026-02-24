@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  background: radial-gradient(circle at top, #e2e8f0 0%, #f8fafc 40%, #ffffff 100%);
+}

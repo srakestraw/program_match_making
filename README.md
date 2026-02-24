@@ -1,10 +1,11 @@
 # Program Match Making (Monorepo)
 
-V1 monorepo for Program Match Making with three apps and one Express server:
+V1 monorepo for Program Match Making with four apps and one Express server:
+- Portal app (launcher for local app surfaces)
 - Admin app (Traits, Programs, Brand Voice stubs)
 - Widget app (Voice NOW vertical slice)
 - Advisor app (candidate management stub)
-- Express + Prisma + SQLite backend
+- Express + Prisma + PostgreSQL (AWS RDS) backend
 
 ## Tech
 - Monorepo: pnpm workspaces + Turborepo
@@ -12,7 +13,7 @@ V1 monorepo for Program Match Making with three apps and one Express server:
 - State: TanStack Query + Zustand
 - Validation: Zod
 - Backend: Node + Express + TypeScript
-- Persistence: Prisma + SQLite
+- Persistence: Prisma + PostgreSQL (AWS RDS)
 - Voice: OpenAI Realtime WebRTC with server-minted ephemeral client secret
 
 ## Prerequisites
@@ -28,45 +29,54 @@ V1 monorepo for Program Match Making with three apps and one Express server:
    ```bash
    cp .env.example .env
    ```
-3. Set `OPENAI_API_KEY` in `.env`.
-   Optional hardening env vars:
+3. Set `OPENAI_API_KEY` and `DATABASE_URL` in `.env`.
+   - `DATABASE_URL`: RDS PostgreSQL connection string (see `.env.example` for format)
+   - Optional hardening env vars:
    - `WIDGET_ALLOWED_ORIGINS` (comma-separated origins)
    - `JSON_BODY_LIMIT` (default `100kb`)
    - `PUBLIC_RATE_LIMIT_WINDOW_MS`, `PUBLIC_RATE_LIMIT_TOKEN_MAX`, `PUBLIC_RATE_LIMIT_LEAD_MAX`, `PUBLIC_RATE_LIMIT_SCORE_MAX`
    - `OPENAI_TIMEOUT_MS`, `OPENAI_MAX_RETRIES`
    - `LOG_LEVEL`
-4. Generate Prisma client and create SQLite schema:
+4. Generate Prisma client and apply migrations:
    ```bash
    pnpm db:generate
    pnpm db:migrate
    ```
-   `db:migrate` applies checked-in SQL migrations:
-   - `server/prisma/migrations/202602241620_admin_foundation/migration.sql`
-   - `server/prisma/migrations/202602241900_step3_scorecards/migration.sql`
-   - `server/prisma/migrations/202602241980_step4_candidate_leads/migration.sql`
-   - `server/prisma/migrations/202602242040_step5_indexes/migration.sql`
-   - `server/prisma/migrations/202602242230_step6_phone_calls/migration.sql`
-   - `server/prisma/migrations/202602242355_step7_sms/migration.sql`
+   `db:migrate` runs `prisma migrate deploy` against the database in `DATABASE_URL`.
+   Ensure `server/.env` or root `.env` has `DATABASE_URL` set (RDS PostgreSQL).
+   Latest schema updates include:
+   - live trait scoring metadata columns (`traitQuestionId`, `rationale`, `scoredAt`) on `TraitScore`
+   - BrandVoice fields (`primaryTone`, `ttsVoiceName`, `toneModifiers`, `toneProfile`, `styleFlags`, `avoidFlags`, `canonicalExamples`)
+   - Simulation Lab persistence (`ConversationScenario`, `ConversationSimulation`, `ConversationTurn`, `VoiceSample`) and enums
 5. Start all apps and server:
    ```bash
    pnpm dev
    ```
-6. Seed dev data (optional, recommended for QA):
-   ```bash
-   pnpm --filter @pmm/server seed
-   ```
+6. Database seeding is disabled. Create traits, programs, and brand voices via the Admin app. To clear all data and start from scratch: `pnpm --filter @pmm/server reset-seed-data`. To create the GSU Graduate School brand voice: `pnpm --filter @pmm/server seed:gsu-voice`.
 7. Remove seeded/mock admin data:
    ```bash
    pnpm --filter @pmm/server cleanup:mock
    ```
 
+## AWS RDS (Prototype)
+
+The prototype uses a single RDS PostgreSQL instance for dev and production. Credentials are in `.env` (gitignored).
+
+- **Instance**: `pmm-postgres` (db.t3.micro, PostgreSQL 16)
+- **Database**: `pmm`
+- **Endpoint**: `pmm-postgres.c6lasiyg653o.us-east-1.rds.amazonaws.com:5432`
+
+To create a new RDS instance via AWS CLI (security group, subnet group, and instance), see the setup that was used. Ensure `DATABASE_URL` in `.env` and `server/.env` matches your instance.
+
 ## Per-App Dev Commands
 - Server: `pnpm --filter @pmm/server dev`
+- Portal app: `pnpm --filter @pmm/portal dev`
 - Admin app: `pnpm --filter @pmm/admin dev`
 - Widget app: `pnpm --filter @pmm/widget dev`
 - Advisor app: `pnpm --filter @pmm/advisor dev`
 
 ## App URLs
+- Portal: `http://localhost:3000`
 - Admin: `http://localhost:5173`
 - Widget: `http://localhost:5174/widget`
 - Advisor: `http://localhost:5175`
@@ -92,9 +102,12 @@ V1 monorepo for Program Match Making with three apps and one Express server:
 ## API Endpoints
 - `POST /api/realtime/token`: mints ephemeral realtime session secret using `OPENAI_API_KEY`.
 - `POST /api/sessions`: create a `CandidateSession` in `active` state.
+- `POST /api/voice/session/start`: alias start endpoint with optional `scoring_snapshot` + `program_fit`.
 - `POST /api/sessions/:id/transcript`: append transcript turns.
 - `POST /api/sessions/:id/complete`: mark session complete and set `endedAt`.
 - `POST /api/sessions/:id/score`: score and persist a scorecard for `chat` or `quiz`.
+- `POST /api/voice/session/turn`: alias turn-scoring endpoint (returns `scoring_snapshot` + `program_fit`).
+- `POST /api/voice/session/end`: alias end endpoint with final `scoring_snapshot` + `program_fit`.
 - `GET/POST /api/admin/traits`
 - `GET/PUT/DELETE /api/admin/traits/:id`
 - `GET/POST /api/admin/traits/:id/questions`
@@ -104,6 +117,12 @@ V1 monorepo for Program Match Making with three apps and one Express server:
 - `GET/PUT /api/admin/programs/:id/traits`
 - `GET/POST /api/admin/brand-voices`
 - `PUT/DELETE /api/admin/brand-voices/:id`
+- `POST /api/admin/brand-voices/:id/generate-samples`
+- `GET /api/admin/simulation-scenarios`
+- `POST /api/admin/brand-voices/:id/simulations`
+- `POST /api/admin/simulations/:id/turns`
+- `POST /api/admin/simulations/:id/voice-samples`
+- `POST /api/admin/simulations/:id/pressure-test`
 - `GET /api/public/programs`
 - `GET /api/public/programs/:id`
 - `GET /api/public/programs/:id/questions?type=chat|quiz`
@@ -205,9 +224,14 @@ V1 monorepo for Program Match Making with three apps and one Express server:
 - `TraitQuestion { id, traitId, type, prompt, optionsJson, scoringHints, createdAt, updatedAt }`
 - `Program { id, name, description, degreeLevel, department, createdAt, updatedAt }`
 - `ProgramTrait { id, programId, traitId, bucket, sortOrder, notes }`
-- `BrandVoice { id, name, tonePreset, doList, dontList, samplePhrases, createdAt, updatedAt }`
+- `BrandVoice` — [Full doc](docs/brand-voice-data-model.md): `id`, `name`, `primaryTone`, `ttsVoiceName`, `toneModifiers[]`, `toneProfile` (json), `styleFlags[]`, `avoidFlags[]`, `canonicalExamples` (json), `createdAt`, `updatedAt`
+- `ConversationScenario { id, title, stage, persona?, seedPrompt, isPreset, createdAt, updatedAt }`
+- `ConversationSimulation { id, brandVoiceId, scenarioId?, persona, customScenario?, stabilityScore?, createdAt }`
+- `ConversationTurn { id, simulationId, role, content, order, createdAt }`
+- `VoiceSample { id, simulationId, turnId, provider, voiceName?, audioUrl, createdAt }`
 - `Scorecard { id, sessionId, programId, overallScore, createdAt }`
 - `TraitScore { id, scorecardId, traitId, bucket, score0to5, confidence, evidenceJson }`
+- `TraitScore { id, scorecardId, traitId, traitQuestionId, bucket, score0to5, confidence, evidenceJson, rationale, scoredAt, createdAt, updatedAt }`
 - `Candidate { id, firstName, lastName, email, phone, preferredChannel, createdAt, updatedAt }`
 - `Lead { id, candidateId, programId, source, status, owner, notes, lastContactedAt, createdAt, updatedAt }`
 

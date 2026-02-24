@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boardStateToProgramTraitRows, scoreCandidateSession } from "./index.js";
+import { boardStateToProgramTraitRows, generateBrandVoicePreview, scoreCandidateSession } from "./index.js";
 
 describe("boardStateToProgramTraitRows", () => {
   it("maps bucket board state to ordered rows with sortOrder per bucket", () => {
@@ -44,5 +44,50 @@ describe("scoreCandidateSession", () => {
     });
 
     expect(result.overallScore).toBeCloseTo(3);
+  });
+});
+
+describe("generateBrandVoicePreview", () => {
+  it("is deterministic for the same input", () => {
+    const input = {
+      name: "Admissions Voice",
+      primaryTone: "professional",
+      toneModifiers: ["encouraging"],
+      toneProfile: {
+        formality: 80,
+        warmth: 65,
+        directness: 70,
+        confidence: 75,
+        energy: 55
+      },
+      styleFlags: ["clear", "credible"],
+      avoidFlags: ["jargon_heavy"],
+      seedText: "graduate outcomes"
+    };
+
+    expect(generateBrandVoicePreview(input)).toEqual(generateBrandVoicePreview(input));
+  });
+
+  it("maps profile bands into stable phrase choices", () => {
+    const preview = generateBrandVoicePreview({
+      name: "Student Success Voice",
+      primaryTone: "friendly",
+      toneModifiers: [],
+      toneProfile: {
+        formality: 20,
+        warmth: 90,
+        directness: 20,
+        confidence: 20,
+        energy: 80
+      },
+      styleFlags: ["supportive"],
+      avoidFlags: ["overly_salesy"],
+      seedText: "career readiness"
+    });
+
+    expect(preview.headline).toContain("smart way");
+    expect(preview.cta).toContain("Learn more");
+    expect(preview.email_intro).toContain("Supportive tone");
+    expect(preview.description).toContain("Avoiding overly salesy");
   });
 });

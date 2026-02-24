@@ -9,11 +9,15 @@
     "start": "node dist/index.js",
     "typecheck": "tsc -b --noEmit",
     "lint": "echo 'no lint configured'",
-    "test": "DATABASE_URL=file:./test.db pnpm prisma:migrate && DATABASE_URL=file:./test.db vitest run",
+    "test": "pnpm prisma:migrate && vitest run",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "DATABASE_URL=${DATABASE_URL:-file:./dev.db} prisma db execute --schema prisma/schema.prisma --file prisma/migrations/202602241620_admin_foundation/migration.sql && DATABASE_URL=${DATABASE_URL:-file:./dev.db} prisma db execute --schema prisma/schema.prisma --file prisma/migrations/202602241900_step3_scorecards/migration.sql && (DATABASE_URL=${DATABASE_URL:-file:./dev.db} prisma db execute --schema prisma/schema.prisma --file prisma/migrations/202602241980_step4_candidate_leads/migration.sql 2>/dev/null || true) && DATABASE_URL=${DATABASE_URL:-file:./dev.db} prisma db execute --schema prisma/schema.prisma --file prisma/migrations/202602242040_step5_indexes/migration.sql && (DATABASE_URL=${DATABASE_URL:-file:./dev.db} prisma db execute --schema prisma/schema.prisma --file prisma/migrations/202602242230_step6_phone_calls/migration.sql 2>/dev/null || true) && (DATABASE_URL=${DATABASE_URL:-file:./dev.db} prisma db execute --schema prisma/schema.prisma --file prisma/migrations/202602242355_step7_sms/migration.sql 2>/dev/null || true)",
+    "prisma:migrate": "prisma migrate deploy",
     "seed": "tsx src/scripts/seed.ts",
-    "cleanup:mock": "tsx src/scripts/cleanup-mock-data.ts"
+    "seed:data-science": "tsx src/scripts/seed-data-science-msa.ts",
+    "reset-seed-data": "tsx src/scripts/reset-seed-data.ts",
+    "delete-all-traits": "tsx src/scripts/delete-all-traits.ts",
+    "cleanup:mock": "tsx src/scripts/cleanup-mock-data.ts",
+    "seed:gsu-voice": "tsx src/scripts/seed-gsu-brand-voice.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.2.1",
