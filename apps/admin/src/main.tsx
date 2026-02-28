@@ -28,6 +28,9 @@ import { ToneSelector } from "./components/brand-voice/ToneSelector";
 import { ToneSliders } from "./components/brand-voice/ToneSliders";
 import { TraitProgramsAccordion, TraitProgramsPanel } from "./components/trait-detail/TraitProgramsPanel";
 import { TraitPickerModal } from "./components/trait-picker/TraitPickerModal";
+import { AdminWidgetEmbedPage } from "./components/widget/AdminWidgetEmbedPage";
+import { AdminWidgetPreviewPage } from "./components/widget/AdminWidgetPreviewPage";
+import { WidgetDropdown } from "./components/widget/WidgetDropdown";
 import {
   BoardTrait,
   ProgramBoardState,
@@ -530,13 +533,411 @@ function ListBuilder({
   );
 }
 
+function TraitHeader({
+  name,
+  category,
+  status,
+  editorStatusLabel,
+  isSaving,
+  onSave,
+  onDelete,
+  showDelete
+}: {
+  name: string;
+  category: TraitCategory;
+  status: TraitStatus;
+  editorStatusLabel: string | null;
+  isSaving: boolean;
+  onSave: () => void;
+  onDelete: () => void;
+  showDelete: boolean;
+}) {
+  return (
+    <header className="sticky top-2 z-10 rounded-md border border-slate-200 bg-white/95 p-4 backdrop-blur">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="truncate text-2xl font-semibold text-slate-900">{name.trim() || "New Trait"}</h1>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-600">
+            <span>{category}</span>
+            <span aria-hidden>·</span>
+            <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${traitStatusTone[status]}`}>
+              <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
+              {status.replaceAll("_", " ")}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          {editorStatusLabel && <p className="text-xs text-slate-500">{editorStatusLabel}</p>}
+          <Button type="button" disabled={isSaving} onClick={onSave}>
+            Save Changes
+          </Button>
+          {showDelete && (
+            <button type="button" className="text-sm text-red-600 hover:text-red-700" onClick={onDelete}>
+              Delete
+            </button>
+          )}
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function TraitDefinitionSection({
+  form,
+  setForm,
+  titleInputRef,
+  actionableMissing,
+  showActivationNotice
+}: {
+  form: TraitFormState;
+  setForm: React.Dispatch<React.SetStateAction<TraitFormState>>;
+  titleInputRef: React.MutableRefObject<HTMLInputElement | null>;
+  actionableMissing: string[];
+  showActivationNotice: boolean;
+}) {
+  return (
+    <section className="space-y-4 rounded-md border border-slate-200 bg-white p-5">
+      <h2 className="text-xl font-semibold text-slate-900">Definition</h2>
+      <div className="space-y-5">
+        <div>
+          <label className={labelClass} htmlFor="trait-title-input">
+            Name
+          </label>
+          <input
+            id="trait-title-input"
+            ref={titleInputRef}
+            required
+            className={inputClass}
+            value={form.name}
+            onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
+          />
+          <FieldMeta value={form.name} />
+        </div>
+        <div>
+          <label className={labelClass}>Category</label>
+          <select
+            className={inputClass}
+            value={form.category}
+            onChange={(event) => setForm((prev) => ({ ...prev, category: event.target.value as TraitCategory }))}
+          >
+            {traitCategories.map((category) => (
+              <option key={category} value={category}>
+                {category}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={labelClass} htmlFor="trait-status-select">
+            Status
+          </label>
+          <select
+            id="trait-status-select"
+            className={inputClass}
+            value={form.status}
+            onChange={(event) => setForm((prev) => ({ ...prev, status: event.target.value as TraitStatus }))}
+          >
+            {traitStatusOptions.map((status) => (
+              <option key={status} value={status}>
+                {status.replaceAll("_", " ")}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <div className="mb-1 flex items-center justify-between">
+            <label className={labelClass}>Definition</label>
+            <button
+              type="button"
+              className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
+              onClick={() =>
+                setForm((prev) => ({
+                  ...prev,
+                  definition: buildDefinitionDraft(prev.name, prev.category)
+                }))
+              }
+            >
+              AI Draft Definition
+            </button>
+          </div>
+          <textarea
+            className={inputClass}
+            value={form.definition}
+            onChange={(event) => setForm((prev) => ({ ...prev, definition: event.target.value }))}
+          />
+          <FieldMeta value={form.definition} />
+        </div>
+      </div>
+
+      {showActivationNotice && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <p className="font-medium">This trait won&apos;t affect scoring until Active.</p>
+          {actionableMissing.length > 0 && (
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
+              {actionableMissing.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function TraitRubricEditor({
+  isEditing,
+  generatingRubric,
+  onGenerateRubricWithAi,
+  positiveSignals,
+  negativeSignals,
+  setForm
+}: {
+  isEditing: boolean;
+  generatingRubric: boolean;
+  onGenerateRubricWithAi: () => void;
+  positiveSignals: string[];
+  negativeSignals: string[];
+  setForm: React.Dispatch<React.SetStateAction<TraitFormState>>;
+}) {
+  return (
+    <section className="space-y-4 border-b border-slate-200/80 pb-6">
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-semibold text-slate-900">Scoring Signals</h3>
+        {isEditing && (
+          <button
+            type="button"
+            className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-60"
+            disabled={generatingRubric}
+            onClick={onGenerateRubricWithAi}
+          >
+            {generatingRubric ? "Generating…" : "Generate with AI"}
+          </button>
+        )}
+      </div>
+      {!isEditing && <p className="text-xs text-slate-500">Save the trait first to use &quot;Generate with AI&quot;.</p>}
+      <ListBuilder
+        label="Positive Signals"
+        items={positiveSignals}
+        placeholder="Add a positive signal"
+        emptyText="No positive signals yet."
+        addButtonLabel="+ Add signal"
+        suggestionButtonLabel="Generate 3 positive signals"
+        onSuggestion={() =>
+          setForm((prev) => ({
+            ...prev,
+            rubricPositiveSignals: joinListText(buildSignalSuggestions("positive", prev.name))
+          }))
+        }
+        onChange={(items) => setForm((prev) => ({ ...prev, rubricPositiveSignals: joinListText(items) }))}
+      />
+      <ListBuilder
+        label="Negative Signals"
+        items={negativeSignals}
+        placeholder="Add a negative signal"
+        emptyText="No negative signals yet."
+        addButtonLabel="+ Add signal"
+        suggestionButtonLabel="Generate 3 negative signals"
+        onSuggestion={() =>
+          setForm((prev) => ({
+            ...prev,
+            rubricNegativeSignals: joinListText(buildSignalSuggestions("negative", prev.name))
+          }))
+        }
+        onChange={(items) => setForm((prev) => ({ ...prev, rubricNegativeSignals: joinListText(items) }))}
+      />
+      {positiveSignals.length === 0 && negativeSignals.length === 0 && (
+        <p className="text-xs text-slate-500">Add at least 3 positive and 2 negative signals to activate.</p>
+      )}
+    </section>
+  );
+}
+
+function TraitQuestionsEditor({
+  selectedTrait,
+  generatingQuestions,
+  onGenerateQuestionsWithAi,
+  questionForm,
+  setQuestionForm,
+  submitQuestion,
+  questions,
+  deleteQuestion,
+  quizOptions
+}: {
+  selectedTrait: Trait | null;
+  generatingQuestions: boolean;
+  onGenerateQuestionsWithAi: () => void;
+  questionForm: { id: string; prompt: string; type: "chat" | "quiz"; optionsText: string };
+  setQuestionForm: React.Dispatch<
+    React.SetStateAction<{ id: string; prompt: string; type: "chat" | "quiz"; optionsText: string }>
+  >;
+  submitQuestion: (event: React.FormEvent) => Promise<void>;
+  questions: TraitQuestion[];
+  deleteQuestion: (id: string) => Promise<void>;
+  quizOptions: string[];
+}) {
+  if (!selectedTrait) {
+    return <p className="text-sm text-slate-500">Select a trait to manage interview questions.</p>;
+  }
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-semibold text-slate-900">Interview Questions</h3>
+        <button
+          type="button"
+          className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-60"
+          disabled={generatingQuestions}
+          onClick={onGenerateQuestionsWithAi}
+        >
+          {generatingQuestions ? "Generating…" : "Generate with AI"}
+        </button>
+      </div>
+      <p className="text-sm text-slate-500">Questions elicit evidence. Scoring uses rubric signals.</p>
+      <form className="space-y-4" onSubmit={(event) => void submitQuestion(event)}>
+        <div>
+          <div className="mb-1 flex items-center justify-between">
+            <label className={labelClass}>Prompt</label>
+            <button
+              type="button"
+              className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
+              onClick={() =>
+                setQuestionForm((prev) => ({
+                  ...prev,
+                  prompt: buildQuestionPromptDraft(selectedTrait, prev.type)
+                }))
+              }
+            >
+              AI Draft Prompt
+            </button>
+          </div>
+          <textarea
+            required
+            className={inputClass}
+            value={questionForm.prompt}
+            onChange={(event) => setQuestionForm((prev) => ({ ...prev, prompt: event.target.value }))}
+          />
+          <FieldMeta value={questionForm.prompt} />
+        </div>
+        <div>
+          <label className={labelClass}>Type</label>
+          <select
+            className={inputClass}
+            value={questionForm.type}
+            onChange={(event) => setQuestionForm((prev) => ({ ...prev, type: event.target.value as "chat" | "quiz" }))}
+          >
+            <option value="chat">Chat</option>
+            <option value="quiz">Quiz</option>
+          </select>
+        </div>
+        {questionForm.type === "quiz" && (
+          <ListBuilder
+            label="Quiz Options"
+            items={quizOptions}
+            placeholder="Add a quiz option"
+            emptyText="No options yet."
+            addButtonLabel="+ Add option"
+            onChange={(items) => setQuestionForm((prev) => ({ ...prev, optionsText: joinListText(items) }))}
+          />
+        )}
+        <div className="flex items-center gap-3">
+          <Button type="submit">{questionForm.id ? "Save Question" : "Add Question"}</Button>
+          <button
+            type="button"
+            className="text-sm text-slate-600 hover:text-slate-800"
+            onClick={() => setQuestionForm({ id: "", prompt: "", type: "chat", optionsText: "" })}
+          >
+            Reset
+          </button>
+        </div>
+      </form>
+
+      <div className="space-y-1 pt-2">
+        {questions.length === 0 && <p className="text-xs text-slate-500">No interview questions yet. Add Question to get started.</p>}
+        {questions.map((question) => (
+          <div key={question.id} className="border-b border-slate-200/80 py-3">
+            <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+              {question.type.toUpperCase()}
+            </span>
+            <p className="mt-1 text-sm text-slate-900">{question.prompt}</p>
+            {question.options.length > 0 && <p className="mt-1 text-xs text-slate-500">Options: {question.options.join(", ")}</p>}
+            <div className="mt-2 flex items-center gap-3 text-xs">
+              <button
+                type="button"
+                className="text-slate-600 hover:text-slate-900"
+                onClick={() =>
+                  setQuestionForm({
+                    id: question.id,
+                    prompt: question.prompt,
+                    type: question.type,
+                    optionsText: question.options.join("\n")
+                  })
+                }
+              >
+                Edit
+              </button>
+              <button type="button" className="text-red-600 hover:text-red-700" onClick={() => void deleteQuestion(question.id)}>
+                Delete
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function TraitScoringInterviewSection({ children }: { children: React.ReactNode }) {
+  return (
+    <section className="space-y-6 rounded-md border border-slate-200 bg-white p-5">
+      <h2 className="text-xl font-semibold text-slate-900">Scoring &amp; Interview</h2>
+      {children}
+    </section>
+  );
+}
+
+function TraitProgramsSidebar({
+  selectedTrait,
+  selectedTraitPrograms,
+  selectedTraitProgramsLoading,
+  selectedTraitProgramsError,
+  onManage,
+  onProgramClick
+}: {
+  selectedTrait: Trait | null;
+  selectedTraitPrograms: TraitProgramAssociation[];
+  selectedTraitProgramsLoading: boolean;
+  selectedTraitProgramsError: string | null;
+  onManage: () => void;
+  onProgramClick: (programId: string) => void;
+}) {
+  if (!selectedTrait) {
+    return null;
+  }
+
+  return (
+    <aside
+      className="hidden w-full min-w-[240px] max-w-[340px] self-start overflow-auto lg:block lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)]"
+      aria-label="Used in programs"
+    >
+      <TraitProgramsPanel
+        programs={selectedTraitPrograms}
+        loading={selectedTraitProgramsLoading}
+        error={selectedTraitProgramsError}
+        onManage={onManage}
+        onProgramClick={onProgramClick}
+      />
+    </aside>
+  );
+}
+
 function ShellLayout({ children }: { children: React.ReactNode }) {
   return (
     <AppShell>
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-7xl items-center justify-between p-4">
           <h1 className="text-xl font-semibold">Program Match Admin</h1>
-          <nav className="flex gap-2">
+          <nav className="flex items-center gap-2">
             <Link className={navLinkClass} to="/traits">
               Traits
             </Link>
@@ -546,6 +947,7 @@ function ShellLayout({ children }: { children: React.ReactNode }) {
             <Link className={navLinkClass} to="/brand-voice">
               Brand Voice
             </Link>
+            <WidgetDropdown />
           </nav>
         </div>
       </header>
@@ -764,19 +1166,8 @@ export function TraitsPage() {
     setEditorSaveStatus("idle");
   };
 
-  const resetTraitForm = () => {
-    if (selectedTrait) {
-      const nextForm = toTraitFormState(selectedTrait);
-      setForm(nextForm);
-      setBaselineForm(nextForm);
-      return;
-    }
-    setForm({ ...emptyTraitForm });
-    setBaselineForm({ ...emptyTraitForm });
-  };
-
-  const submitTrait = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const submitTrait = async (event?: React.FormEvent) => {
+    event?.preventDefault();
     setTraitError(null);
     setTraitNotice(null);
     setActivationMissing([]);
@@ -935,8 +1326,11 @@ export function TraitsPage() {
     }
   };
 
+  const actionableMissing = Array.from(new Set(activationMissing.length > 0 ? activationMissing : draftCompleteness.missing));
+  const showActivationNotice = form.status !== "ACTIVE" || actionableMissing.length > 0;
+
   return (
-    <div className="grid gap-4 lg:grid-cols-[320px_1fr_1fr]">
+    <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
       <Card>
         <h2 className="mb-3 text-lg font-semibold">Traits Library</h2>
         <div className="space-y-2">
@@ -985,7 +1379,7 @@ export function TraitsPage() {
         </div>
       </Card>
 
-      <div className="lg:col-span-2 flex flex-col gap-6">
+      <div className="flex flex-col gap-6">
         {/* Mobile: collapsible Programs accordion above main content */}
         {selectedTrait && (
           <div className="lg:hidden">
@@ -1002,318 +1396,66 @@ export function TraitsPage() {
           </div>
         )}
 
-        <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(260px,380px)]">
-          {/* Main editor column: form (Basics, Rubric) + Questions */}
-          <div className="min-w-0 flex flex-col gap-8">
-            <form className="space-y-8" onSubmit={(event) => void submitTrait(event)}>
-              <div className="flex flex-col gap-3 border-b border-slate-200/80 pb-6 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0 flex-1">
-                  <label htmlFor="trait-title-input" className="sr-only">
-                    Name
-                  </label>
-                  <input
-                    id="trait-title-input"
-                    ref={titleInputRef}
-                    required
-                    className="w-full border-0 bg-transparent px-0 text-3xl font-semibold text-slate-900 outline-none placeholder:text-slate-300 focus-visible:ring-0"
-                    placeholder="New Trait"
-                    value={form.name}
-                    onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                  />
-                  <p className="mt-2 text-sm text-slate-500">
-                    {form.category} · {form.status.replaceAll("_", " ")}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-4 self-start">
-                  {editorStatusLabel && <p className="text-xs text-slate-500">{editorStatusLabel}</p>}
-                </div>
-              </div>
-
-              {(form.status !== "ACTIVE" || !draftCompleteness.isComplete || activationMissing.length > 0) && (
-            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-              <p className="font-medium">
-                {form.status !== "ACTIVE"
-                  ? "This trait will not affect scoring until it is Active."
-                  : "This trait is incomplete and cannot be used for scoring until it is Active."}
-              </p>
-              {(activationMissing.length > 0 || !draftCompleteness.isComplete) && (
-                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
-                  {(activationMissing.length > 0 ? activationMissing : draftCompleteness.missing).map((item) => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
-
-          <section className="space-y-4">
-            <h2 className="text-xl font-semibold text-slate-900">Basics</h2>
-            <div className="space-y-5">
-              <div>
-                <label className={labelClass}>Name</label>
-                <input
-                  required
-                  className={inputClass}
-                  value={form.name}
-                  onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                />
-                <FieldMeta value={form.name} />
-              </div>
-              <div>
-                <label className={labelClass}>Category</label>
-                <select
-                  className={inputClass}
-                  value={form.category}
-                  onChange={(event) => setForm((prev) => ({ ...prev, category: event.target.value as TraitCategory }))}
-                >
-                  {traitCategories.map((category) => (
-                    <option key={category} value={category}>
-                      {category}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className={labelClass} htmlFor="trait-status-select">Status</label>
-                <select
-                  id="trait-status-select"
-                  className={inputClass}
-                  value={form.status}
-                  onChange={(event) => setForm((prev) => ({ ...prev, status: event.target.value as TraitStatus }))}
-                >
-                  {traitStatusOptions.map((status) => (
-                    <option key={status} value={status}>
-                      {status.replaceAll("_", " ")}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <div className="mb-1 flex items-center justify-between">
-                  <label className={labelClass}>Definition</label>
-                  <button
-                    type="button"
-                    className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
-                    onClick={() =>
-                      setForm((prev) => ({
-                        ...prev,
-                        definition: buildDefinitionDraft(prev.name, prev.category)
-                      }))
-                    }
-                  >
-                    AI Draft Definition
-                  </button>
-                </div>
-                <textarea
-                  className={inputClass}
-                  value={form.definition}
-                  onChange={(event) => setForm((prev) => ({ ...prev, definition: event.target.value }))}
-                />
-                <FieldMeta value={form.definition} />
-              </div>
-            </div>
-          </section>
-
-          <section className="space-y-4 border-t border-slate-200/80 pt-8">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-semibold text-slate-900">Rubric</h2>
-              {isEditing && (
-                <button
-                  type="button"
-                  className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-60"
-                  disabled={generatingRubric}
-                  onClick={() => void generateRubricWithAi()}
-                >
-                  {generatingRubric ? "Generating…" : "Generate with AI"}
-                </button>
-              )}
-            </div>
-            {!isEditing && <p className="text-xs text-slate-500">Save the trait first to use &quot;Generate with AI&quot;.</p>}
-            <ListBuilder
-              label="Positive Signals"
-              items={positiveSignals}
-              placeholder="Add a positive signal"
-              emptyText="No positive signals yet."
-              addButtonLabel="+ Add signal"
-              suggestionButtonLabel="Generate 3 positive signals"
-              onSuggestion={() =>
-                setForm((prev) => ({
-                  ...prev,
-                  rubricPositiveSignals: joinListText(buildSignalSuggestions("positive", prev.name))
-                }))
-              }
-              onChange={(items) => setForm((prev) => ({ ...prev, rubricPositiveSignals: joinListText(items) }))}
-            />
-            <ListBuilder
-              label="Negative Signals"
-              items={negativeSignals}
-              placeholder="Add a negative signal"
-              emptyText="No negative signals yet."
-              addButtonLabel="+ Add signal"
-              suggestionButtonLabel="Generate 3 negative signals"
-              onSuggestion={() =>
-                setForm((prev) => ({
-                  ...prev,
-                  rubricNegativeSignals: joinListText(buildSignalSuggestions("negative", prev.name))
-                }))
-              }
-              onChange={(items) => setForm((prev) => ({ ...prev, rubricNegativeSignals: joinListText(items) }))}
-            />
-            {positiveSignals.length === 0 && negativeSignals.length === 0 && (
-              <p className="text-xs text-slate-500">Add at least 3 positive and 2 negative signals to activate.</p>
-            )}
-          </section>
-
-          <div className="flex items-center gap-3 border-t border-slate-200/80 pt-6">
-            <Button type="submit">{isEditing ? "Save Changes" : "Create Trait"}</Button>
-            <button type="button" className="text-sm text-slate-600 hover:text-slate-800" onClick={resetTraitForm}>
-              Reset
-            </button>
-            {selectedTrait && (
-              <button
-                type="button"
-                className="ml-auto text-sm text-red-600 hover:text-red-700"
-                onClick={() => void deleteTrait(selectedTrait.id)}
-              >
-                Delete
-              </button>
-            )}
-          </div>
-          {traitNotice && <p className="text-sm text-emerald-700">{traitNotice}</p>}
-          {traitError && <p className="text-sm text-red-700">{traitError}</p>}
-        </form>
-
-        <section className="space-y-6 border-t border-slate-200/80 pt-8 lg:border-t-0 lg:pt-0">
-          <div className="flex items-center justify-between border-b border-slate-200/80 pb-4">
-            <h2 className="text-xl font-semibold text-slate-900">Questions</h2>
-            {selectedTrait && (
-              <button
-                type="button"
-                className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-60"
-                disabled={generatingQuestions}
-                onClick={() => void generateQuestionsWithAi()}
-              >
-                {generatingQuestions ? "Generating…" : "Generate with AI"}
-              </button>
-            )}
-          </div>
-          {!selectedTrait ? (
-            <p className="text-sm text-slate-500">Select a trait to manage questions.</p>
-          ) : (
-            <>
-              <p className="text-sm text-slate-500">Questions elicit evidence. Scoring is based on rubric signals.</p>
-              <form className="space-y-4" onSubmit={(event) => void submitQuestion(event)}>
-                <div>
-                  <div className="mb-1 flex items-center justify-between">
-                    <label className={labelClass}>Prompt</label>
-                    <button
-                      type="button"
-                      className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
-                      onClick={() =>
-                        setQuestionForm((prev) => ({
-                          ...prev,
-                          prompt: buildQuestionPromptDraft(selectedTrait, prev.type)
-                        }))
-                      }
-                    >
-                      AI Draft Prompt
-                    </button>
-                  </div>
-                  <textarea
-                    required
-                    className={inputClass}
-                    value={questionForm.prompt}
-                    onChange={(event) => setQuestionForm((prev) => ({ ...prev, prompt: event.target.value }))}
-                  />
-                  <FieldMeta value={questionForm.prompt} />
-                </div>
-                <div>
-                  <label className={labelClass}>Type</label>
-                  <select
-                    className={inputClass}
-                    value={questionForm.type}
-                    onChange={(event) => setQuestionForm((prev) => ({ ...prev, type: event.target.value as "chat" | "quiz" }))}
-                  >
-                    <option value="chat">Chat</option>
-                    <option value="quiz">Quiz</option>
-                  </select>
-                </div>
-                {questionForm.type === "quiz" && (
-                  <ListBuilder
-                    label="Quiz Options"
-                    items={quizOptions}
-                    placeholder="Add a quiz option"
-                    emptyText="No options yet."
-                    addButtonLabel="+ Add option"
-                    onChange={(items) => setQuestionForm((prev) => ({ ...prev, optionsText: joinListText(items) }))}
-                  />
-                )}
-                <div className="flex items-center gap-3">
-                  <Button type="submit">{questionForm.id ? "Save Question" : "+ Add question"}</Button>
-                  <button
-                    type="button"
-                    className="text-sm text-slate-600 hover:text-slate-800"
-                    onClick={() => setQuestionForm({ id: "", prompt: "", type: "chat", optionsText: "" })}
-                  >
-                    Reset
-                  </button>
-                </div>
-              </form>
-
-              <div className="space-y-1 pt-2">
-                {questions.length === 0 && <p className="text-xs text-slate-500">No questions yet. Add Question to get started.</p>}
-                {questions.map((question) => (
-                  <div key={question.id} className="border-b border-slate-200/80 py-3">
-                    <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
-                      {question.type.toUpperCase()}
-                    </span>
-                    <p className="mt-1 text-sm text-slate-900">{question.prompt}</p>
-                    {question.options.length > 0 && <p className="mt-1 text-xs text-slate-500">Options: {question.options.join(", ")}</p>}
-                    <div className="mt-2 flex items-center gap-3 text-xs">
-                      <button
-                        type="button"
-                        className="text-slate-600 hover:text-slate-900"
-                        onClick={() =>
-                          setQuestionForm({
-                            id: question.id,
-                            prompt: question.prompt,
-                            type: question.type,
-                            optionsText: question.options.join("\n")
-                          })
-                        }
-                      >
-                        Edit
-                      </button>
-                      <button type="button" className="text-red-600 hover:text-red-700" onClick={() => void deleteQuestion(question.id)}>
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </section>
-          </div>
-
-          {/* Desktop: sticky Programs panel (secondary column) */}
-          {selectedTrait && (
-            <aside
-              className="hidden w-full min-w-[260px] max-w-[420px] self-start overflow-auto lg:block lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)]"
-              aria-label="Programs using this trait"
-            >
-              <TraitProgramsPanel
-                programs={selectedTraitPrograms}
-                loading={selectedTraitProgramsLoading}
-                error={selectedTraitProgramsError}
-                onManage={() => setProgramDrawerTraitId(selectedTrait.id)}
-                onProgramClick={(programId) => {
-                  window.sessionStorage.setItem("pmm:selectedProgramId", programId);
-                  navigate("/programs");
-                }}
+        <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(240px,320px)]">
+          <div className="min-w-0">
+            <div className="space-y-6">
+              <TraitHeader
+                name={form.name}
+                category={form.category}
+                status={form.status}
+                editorStatusLabel={editorStatusLabel}
+                isSaving={editorSaveStatus === "saving" || isCreatingDraft}
+                onSave={() => void submitTrait()}
+                onDelete={() => selectedTrait && void deleteTrait(selectedTrait.id)}
+                showDelete={Boolean(selectedTrait)}
               />
-            </aside>
-          )}
+
+              <TraitDefinitionSection
+                form={form}
+                setForm={setForm}
+                titleInputRef={titleInputRef}
+                actionableMissing={actionableMissing}
+                showActivationNotice={showActivationNotice}
+              />
+
+              <TraitScoringInterviewSection>
+                <TraitRubricEditor
+                  isEditing={isEditing}
+                  generatingRubric={generatingRubric}
+                  onGenerateRubricWithAi={() => void generateRubricWithAi()}
+                  positiveSignals={positiveSignals}
+                  negativeSignals={negativeSignals}
+                  setForm={setForm}
+                />
+                <TraitQuestionsEditor
+                  selectedTrait={selectedTrait}
+                  generatingQuestions={generatingQuestions}
+                  onGenerateQuestionsWithAi={() => void generateQuestionsWithAi()}
+                  questionForm={questionForm}
+                  setQuestionForm={setQuestionForm}
+                  submitQuestion={submitQuestion}
+                  questions={questions}
+                  deleteQuestion={deleteQuestion}
+                  quizOptions={quizOptions}
+                />
+              </TraitScoringInterviewSection>
+
+              {traitNotice && <p className="text-sm text-emerald-700">{traitNotice}</p>}
+              {traitError && <p className="text-sm text-red-700">{traitError}</p>}
+            </div>
+          </div>
+
+          <TraitProgramsSidebar
+            selectedTrait={selectedTrait}
+            selectedTraitPrograms={selectedTraitPrograms}
+            selectedTraitProgramsLoading={selectedTraitProgramsLoading}
+            selectedTraitProgramsError={selectedTraitProgramsError}
+            onManage={() => selectedTrait && setProgramDrawerTraitId(selectedTrait.id)}
+            onProgramClick={(programId) => {
+              window.sessionStorage.setItem("pmm:selectedProgramId", programId);
+              navigate("/programs");
+            }}
+          />
         </div>
       </div>
       <TraitProgramsDrawer
@@ -2373,13 +2515,13 @@ export function ProgramsPage() {
                   setProgramForm((prev) => ({ ...prev, isActive: nextValue }));
                   void toggleProgramActive(selectedProgram.id, nextValue);
                 }}
-                className={`relative inline-flex h-6 w-12 items-center overflow-hidden rounded-full p-0.5 transition-colors ${
+                className={`relative inline-flex h-6 w-12 shrink-0 items-center rounded-full p-0.5 transition-colors ${
                   programForm.isActive ? "bg-emerald-600" : "bg-slate-300"
                 } disabled:cursor-not-allowed disabled:opacity-60`}
               >
                 <span
-                  className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
-                    programForm.isActive ? "translate-x-6" : "translate-x-0"
+                  className={`inline-block h-5 w-5 shrink-0 transform rounded-full bg-white transition-transform ${
+                    programForm.isActive ? "translate-x-[22px]" : "translate-x-0"
                   }`}
                 />
               </button>
@@ -3063,6 +3205,8 @@ if (rootElement && !isTestRuntime) {
               <Route path="/traits" element={<TraitsPage />} />
               <Route path="/programs" element={<ProgramsPage />} />
               <Route path="/brand-voice" element={<BrandVoicePage />} />
+              <Route path="/widget/embed" element={<AdminWidgetEmbedPage />} />
+              <Route path="/widget/preview" element={<AdminWidgetPreviewPage />} />
               <Route path="*" element={<Navigate to="/traits" replace />} />
             </Routes>
           </ShellLayout>
