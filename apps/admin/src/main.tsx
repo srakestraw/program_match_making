@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   BrandVoiceSampleType,
   CanonicalExample,
+  computeProgramStatus,
   ToneProfile,
   ProgramTraitPriorityBucket,
   programTraitPriorityBuckets,
@@ -25,6 +26,7 @@ import { GeneratedSamplesPanel } from "./components/brand-voice/GeneratedSamples
 import { SimulationLab } from "./components/brand-voice/SimulationLab";
 import { ToneSelector } from "./components/brand-voice/ToneSelector";
 import { ToneSliders } from "./components/brand-voice/ToneSliders";
+import { TraitProgramsAccordion, TraitProgramsPanel } from "./components/trait-detail/TraitProgramsPanel";
 import { TraitPickerModal } from "./components/trait-picker/TraitPickerModal";
 import {
   BoardTrait,
@@ -44,14 +46,38 @@ type Trait = {
   id: string;
   name: string;
   category: TraitCategory;
+  status: TraitStatus;
   definition: string | null;
   rubricScaleMin: number;
   rubricScaleMax: number;
   rubricPositiveSignals: string | null;
   rubricNegativeSignals: string | null;
   rubricFollowUps: string | null;
+  completeness: TraitCompleteness;
+  programSummary?: {
+    count: number;
+    topPrograms: Array<{
+      programId: string;
+      programName: string;
+      bucket: ProgramTraitPriorityBucket;
+      weight: number;
+    }>;
+  };
   createdAt: string;
   updatedAt: string;
+};
+
+type TraitStatus = "DRAFT" | "IN_REVIEW" | "ACTIVE" | "DEPRECATED";
+
+type TraitCompleteness = {
+  isComplete: boolean;
+  percentComplete: number;
+  missing: string[];
+  counts: {
+    positiveSignals: number;
+    negativeSignals: number;
+    questions: number;
+  };
 };
 
 type TraitQuestion = {
@@ -67,6 +93,7 @@ type TraitQuestion = {
 type TraitFormState = {
   name: string;
   category: TraitCategory;
+  status: TraitStatus;
   definition: string;
   rubricPositiveSignals: string;
   rubricNegativeSignals: string;
@@ -79,6 +106,7 @@ type Program = {
   description: string | null;
   degreeLevel: string | null;
   department: string | null;
+  isActive: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -90,6 +118,14 @@ type ProgramTrait = {
   sortOrder: number;
   notes: string | null;
   trait: Trait;
+};
+
+type TraitProgramAssociation = {
+  programId: string;
+  programName: string;
+  bucket: ProgramTraitPriorityBucket;
+  weight: number;
+  updatedAt: string;
 };
 
 type BrandVoice = {
@@ -109,6 +145,35 @@ const inputClass = "w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
 const labelClass = "mb-1 block text-xs font-medium uppercase tracking-wide text-slate-600";
 const subtleButtonClass = "rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50";
 const openAiVoiceOptions = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
+const traitStatusOptions: TraitStatus[] = ["DRAFT", "IN_REVIEW", "ACTIVE", "DEPRECATED"];
+const traitStatusRank: Record<TraitStatus, number> = {
+  ACTIVE: 0,
+  IN_REVIEW: 1,
+  DRAFT: 2,
+  DEPRECATED: 3
+};
+const traitStatusTone: Record<TraitStatus, string> = {
+  ACTIVE: "bg-emerald-100 text-emerald-800",
+  IN_REVIEW: "bg-amber-100 text-amber-800",
+  DRAFT: "bg-slate-200 text-slate-700",
+  DEPRECATED: "bg-rose-100 text-rose-700"
+};
+const traitListStatusMeta: Record<"ACTIVE" | "DRAFT" | "ARCHIVED", { label: string; dotClassName: string; textClassName: string }> = {
+  ACTIVE: { label: "Active", dotClassName: "bg-emerald-500", textClassName: "text-emerald-700" },
+  DRAFT: { label: "Draft", dotClassName: "bg-slate-400", textClassName: "text-slate-600" },
+  ARCHIVED: { label: "Archived", dotClassName: "bg-rose-500", textClassName: "text-rose-700" }
+};
+const programListStatusMeta: Record<"DRAFT" | "ACTIVE" | "INACTIVE", { label: string; dotClassName: string; textClassName: string }> = {
+  DRAFT: { label: "Draft", dotClassName: "bg-slate-400", textClassName: "text-slate-600" },
+  ACTIVE: { label: "Active", dotClassName: "bg-emerald-500", textClassName: "text-emerald-700" },
+  INACTIVE: { label: "Inactive", dotClassName: "bg-slate-400", textClassName: "text-slate-600" }
+};
+
+class ApiError extends Error {
+  code?: string;
+  missing?: string[];
+  details?: unknown;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBaseUrl}${path}`, {
@@ -123,7 +188,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       throw new Error(errorPayload);
     }
     if (errorPayload && typeof errorPayload === "object" && typeof errorPayload.message === "string") {
-      throw new Error(errorPayload.message);
+      const apiError = new ApiError(errorPayload.message);
+      if (typeof errorPayload.code === "string") {
+        apiError.code = errorPayload.code;
+      }
+      if (Array.isArray(errorPayload.missing)) {
+        apiError.missing = (errorPayload.missing as unknown[]).filter((item): item is string => typeof item === "string");
+      }
+      if ("details" in errorPayload) {
+        apiError.details = errorPayload.details;
+      }
+      throw apiError;
     }
     throw new Error("Request failed");
   }
@@ -195,6 +270,7 @@ function qualityHint(value: string): { label: string; className: string } {
 const emptyTraitForm: TraitFormState = {
   name: "",
   category: "ACADEMIC",
+  status: "DRAFT",
   definition: "",
   rubricPositiveSignals: "",
   rubricNegativeSignals: "",
@@ -205,6 +281,7 @@ function toTraitFormState(trait: Trait): TraitFormState {
   return {
     name: trait.name,
     category: trait.category,
+    status: trait.status,
     definition: trait.definition ?? "",
     rubricPositiveSignals: trait.rubricPositiveSignals ?? "",
     rubricNegativeSignals: trait.rubricNegativeSignals ?? "",
@@ -212,11 +289,141 @@ function toTraitFormState(trait: Trait): TraitFormState {
   };
 }
 
+function normalizeTrait(trait: Partial<Trait> & { id: string; name: string; category: TraitCategory }): Trait {
+  const status: TraitStatus = trait.status ?? "DRAFT";
+  const completeness =
+    trait.completeness ??
+    computeDraftCompleteness(
+      {
+        name: trait.name,
+        category: trait.category,
+        status,
+        definition: trait.definition ?? "",
+        rubricPositiveSignals: trait.rubricPositiveSignals ?? "",
+        rubricNegativeSignals: trait.rubricNegativeSignals ?? "",
+        rubricFollowUps: trait.rubricFollowUps ?? ""
+      },
+      0
+    );
+  return {
+    id: trait.id,
+    name: trait.name,
+    category: trait.category,
+    status,
+    definition: trait.definition ?? null,
+    rubricScaleMin: trait.rubricScaleMin ?? 0,
+    rubricScaleMax: trait.rubricScaleMax ?? 5,
+    rubricPositiveSignals: trait.rubricPositiveSignals ?? null,
+    rubricNegativeSignals: trait.rubricNegativeSignals ?? null,
+    rubricFollowUps: trait.rubricFollowUps ?? null,
+    completeness,
+    programSummary: trait.programSummary
+      ? {
+          count: Number(trait.programSummary.count ?? 0),
+          topPrograms: Array.isArray(trait.programSummary.topPrograms)
+            ? trait.programSummary.topPrograms.map((item) => ({
+                programId: String(item.programId),
+                programName: String(item.programName),
+                bucket: item.bucket as ProgramTraitPriorityBucket,
+                weight: Number(item.weight ?? 0)
+              }))
+            : []
+        }
+      : undefined,
+    createdAt: trait.createdAt ?? new Date().toISOString(),
+    updatedAt: trait.updatedAt ?? new Date().toISOString()
+  };
+}
+
+function normalizeProgram(program: Partial<Program> & { id: string; name: string }): Program {
+  const nowIso = new Date().toISOString();
+  return {
+    id: program.id,
+    name: program.name,
+    description: program.description ?? null,
+    degreeLevel: program.degreeLevel ?? null,
+    department: program.department ?? null,
+    isActive: typeof program.isActive === "boolean" ? program.isActive : false,
+    createdAt: program.createdAt ?? nowIso,
+    updatedAt: program.updatedAt ?? nowIso
+  };
+}
+
+function normalizeTraitProgramAssociation(
+  item: Partial<TraitProgramAssociation> & { programId: string }
+): TraitProgramAssociation {
+  const nowIso = new Date().toISOString();
+  const parsedWeight = Number(item.weight ?? 0);
+  const safeWeight = Number.isFinite(parsedWeight) ? Math.max(0, Math.min(1, parsedWeight)) : 0;
+  const bucket = programTraitPriorityBuckets.includes(item.bucket as ProgramTraitPriorityBucket)
+    ? (item.bucket as ProgramTraitPriorityBucket)
+    : "IMPORTANT";
+  return {
+    programId: String(item.programId),
+    programName: typeof item.programName === "string" && item.programName.trim().length > 0 ? item.programName : "Unknown program",
+    bucket,
+    weight: safeWeight,
+    updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : nowIso
+  };
+}
+
+function computeDraftCompleteness(input: TraitFormState, questionsCount: number): TraitCompleteness {
+  const positiveCount = splitListText(input.rubricPositiveSignals).length;
+  const negativeCount = splitListText(input.rubricNegativeSignals).length;
+  const questionCount = Math.max(0, questionsCount);
+  const checks = [
+    input.name.trim().length > 0,
+    Boolean(input.category),
+    input.definition.trim().length > 0,
+    positiveCount >= 3,
+    negativeCount >= 2,
+    questionCount >= 1
+  ];
+  const missing: string[] = [];
+  if (!checks[0]) missing.push("Name is required");
+  if (!checks[1]) missing.push("Category is required");
+  if (!checks[2]) missing.push("Definition is required");
+  if (!checks[3]) missing.push("At least 3 positive signals are required");
+  if (!checks[4]) missing.push("At least 2 negative signals are required");
+  if (!checks[5]) missing.push("At least 1 question is required");
+
+  return {
+    isComplete: missing.length === 0,
+    percentComplete: Math.round((checks.filter(Boolean).length / checks.length) * 100),
+    missing,
+    counts: {
+      positiveSignals: positiveCount,
+      negativeSignals: negativeCount,
+      questions: questionCount
+    }
+  };
+}
+
+function mapTraitListStatus(status: TraitStatus): "ACTIVE" | "DRAFT" | "ARCHIVED" {
+  if (status === "ACTIVE") return "ACTIVE";
+  if (status === "DEPRECATED") return "ARCHIVED";
+  return "DRAFT";
+}
+
+function mapProgramListStatus(program: Program): "DRAFT" | "ACTIVE" | "INACTIVE" {
+  return computeProgramStatus(program);
+}
+
+function computeListCompletenessRatio(trait: Trait): number {
+  const definitionComplete = (trait.definition ?? "").trim().length > 0;
+  const rubricSignalCount = trait.completeness.counts.positiveSignals + trait.completeness.counts.negativeSignals;
+  const rubricGeneratedCount = splitListText(trait.rubricFollowUps ?? "").length;
+  const rubricComplete = rubricSignalCount > 0 || rubricGeneratedCount > 0;
+  const hasQuestion = trait.completeness.counts.questions > 0;
+  const passedChecks = [definitionComplete, rubricComplete, hasQuestion].filter(Boolean).length;
+  return Math.round((passedChecks / 3) * 100);
+}
+
 function FieldMeta({ value }: { value: string }) {
   const hint = qualityHint(value);
   return (
-    <div className="mt-1 flex items-center justify-between text-xs">
-      <span className="text-slate-500">{value.length} characters</span>
+    <div className="mt-1 flex items-center justify-end gap-2 text-xs text-slate-500">
+      <span>{value.length} characters</span>
       <span className={hint.className}>{hint.label}</span>
     </div>
   );
@@ -245,6 +452,7 @@ function ListBuilder({
   placeholder,
   onChange,
   emptyText,
+  addButtonLabel = "Add",
   suggestionButtonLabel,
   onSuggestion
 }: {
@@ -253,6 +461,7 @@ function ListBuilder({
   placeholder: string;
   onChange: (items: string[]) => void;
   emptyText: string;
+  addButtonLabel?: string;
   suggestionButtonLabel?: string;
   onSuggestion?: () => void;
 }) {
@@ -269,20 +478,20 @@ function ListBuilder({
 
   return (
     <div>
-      <div className="mb-1 flex items-center justify-between">
-        <label className={labelClass}>{label}</label>
+      <div className="mb-2 flex items-center justify-between">
+        <label className="text-sm font-semibold text-slate-800">{label}</label>
         {suggestionButtonLabel && onSuggestion && (
-          <button type="button" className={subtleButtonClass} onClick={onSuggestion}>
+          <button type="button" className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100" onClick={onSuggestion}>
             {suggestionButtonLabel}
           </button>
         )}
       </div>
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         {items.length === 0 && <p className="text-xs text-slate-500">{emptyText}</p>}
         {items.map((item, index) => (
-          <div key={`${label}-${index}`} className="flex items-start gap-2">
+          <div key={`${label}-${index}`} className="flex items-center gap-2 py-1">
             <input
-              className={inputClass}
+              className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
               value={item}
               onChange={(event) => {
                 const next = [...items];
@@ -292,16 +501,16 @@ function ListBuilder({
             />
             <button
               type="button"
-              className="mt-2 text-xs text-red-700 underline"
+              className="text-xs text-red-600 hover:text-red-700"
               onClick={() => onChange(items.filter((_, itemIndex) => itemIndex !== index))}
             >
               Remove
             </button>
           </div>
         ))}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 pt-1">
           <input
-            className={inputClass}
+            className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
             placeholder={placeholder}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -312,9 +521,9 @@ function ListBuilder({
               }
             }}
           />
-          <Button type="button" onClick={addItem}>
-            Add
-          </Button>
+          <button type="button" className="text-sm font-medium text-slate-700 hover:text-slate-900" onClick={addItem}>
+            {addButtonLabel}
+          </button>
         </div>
       </div>
     </div>
@@ -345,7 +554,8 @@ function ShellLayout({ children }: { children: React.ReactNode }) {
   );
 }
 
-function TraitsPage() {
+export function TraitsPage() {
+  const navigate = useNavigate();
   const [traits, setTraits] = useState<Trait[]>([]);
   const [questions, setQuestions] = useState<TraitQuestion[]>([]);
   const [loading, setLoading] = useState(false);
@@ -362,13 +572,48 @@ function TraitsPage() {
   });
   const [traitNotice, setTraitNotice] = useState<string | null>(null);
   const [traitError, setTraitError] = useState<string | null>(null);
+  const [activationMissing, setActivationMissing] = useState<string[]>([]);
+  const [generatingRubric, setGeneratingRubric] = useState(false);
+  const [generatingQuestions, setGeneratingQuestions] = useState(false);
+  const [programDrawerTraitId, setProgramDrawerTraitId] = useState<string | null>(null);
+  const [selectedTraitPrograms, setSelectedTraitPrograms] = useState<TraitProgramAssociation[]>([]);
+  const [selectedTraitProgramsLoading, setSelectedTraitProgramsLoading] = useState(false);
+  const [selectedTraitProgramsError, setSelectedTraitProgramsError] = useState<string | null>(null);
+  const [isCreatingDraft, setIsCreatingDraft] = useState(false);
+  const [editorSaveStatus, setEditorSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
+  const focusTitleOnSelectRef = useRef(false);
+  const createDraftRequestIdRef = useRef(0);
+  const isMountedRef = useRef(true);
   const positiveSignals = useMemo(() => splitListText(form.rubricPositiveSignals), [form.rubricPositiveSignals]);
   const negativeSignals = useMemo(() => splitListText(form.rubricNegativeSignals), [form.rubricNegativeSignals]);
   const quizOptions = useMemo(() => splitListText(questionForm.optionsText), [questionForm.optionsText]);
   const traitFormDirty = useMemo(() => JSON.stringify(form) !== JSON.stringify(baselineForm), [form, baselineForm]);
+  const draftCompleteness = useMemo(() => computeDraftCompleteness(form, questions.length), [form, questions.length]);
+  const editorStatusLabel = useMemo(() => {
+    if (isCreatingDraft || editorSaveStatus === "saving") {
+      return "Saving...";
+    }
+    if (traitFormDirty) {
+      return "Unsaved changes";
+    }
+    if (editorSaveStatus === "saved") {
+      return "Saved";
+    }
+    return null;
+  }, [editorSaveStatus, isCreatingDraft, traitFormDirty]);
 
   const selectedTrait = traits.find((trait) => trait.id === selectedTraitId) ?? null;
   const isEditing = Boolean(selectedTraitId && selectedTrait);
+  const sortedTraits = useMemo(
+    () =>
+      [...traits].sort((a, b) => {
+        const statusDiff = traitStatusRank[a.status] - traitStatusRank[b.status];
+        if (statusDiff !== 0) return statusDiff;
+        return a.name.localeCompare(b.name);
+      }),
+    [traits]
+  );
 
   const loadTraits = async () => {
     setLoading(true);
@@ -381,8 +626,9 @@ function TraitsPage() {
         query.set("category", categoryFilter);
       }
 
+      query.set("include", "programSummary");
       const payload = await request<{ data: Trait[] }>(`/api/admin/traits?${query.toString()}`);
-      setTraits(payload.data);
+      setTraits(payload.data.map((trait) => normalizeTrait(trait)));
       if (payload.data.length === 0) {
         setSelectedTraitId(null);
       } else if (selectedTraitId && !payload.data.some((trait) => trait.id === selectedTraitId)) {
@@ -398,6 +644,28 @@ function TraitsPage() {
     setQuestions(payload.data);
   };
 
+  const loadTraitPrograms = async (traitId: string) => {
+    setSelectedTraitProgramsLoading(true);
+    setSelectedTraitProgramsError(null);
+    try {
+      const payload = await request<{ data: Array<Partial<TraitProgramAssociation> & { programId: string }> }>(
+        `/api/admin/traits/${traitId}/programs`
+      );
+      setSelectedTraitPrograms(payload.data.map((item) => normalizeTraitProgramAssociation(item)));
+    } catch (error) {
+      setSelectedTraitPrograms([]);
+      setSelectedTraitProgramsError(error instanceof Error ? error.message : "Failed to load associated programs.");
+    } finally {
+      setSelectedTraitProgramsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
   useEffect(() => {
     void loadTraits();
   }, [search, categoryFilter]);
@@ -405,9 +673,22 @@ function TraitsPage() {
   useEffect(() => {
     if (!selectedTraitId) {
       setQuestions([]);
+      setSelectedTraitPrograms([]);
+      setSelectedTraitProgramsError(null);
+      setSelectedTraitProgramsLoading(false);
       return;
     }
     void loadQuestions(selectedTraitId);
+    void loadTraitPrograms(selectedTraitId);
+  }, [selectedTraitId]);
+
+  useEffect(() => {
+    if (!selectedTraitId || !focusTitleOnSelectRef.current) return;
+    focusTitleOnSelectRef.current = false;
+    window.setTimeout(() => {
+      titleInputRef.current?.focus();
+      titleInputRef.current?.select();
+    }, 0);
   }, [selectedTraitId]);
 
   const canLeaveTraitForm = () => {
@@ -417,16 +698,53 @@ function TraitsPage() {
     return window.confirm("You have unsaved trait changes. Discard them and continue?");
   };
 
-  const startCreateTrait = () => {
+  const startCreateTrait = async () => {
+    if (isCreatingDraft) return;
     if (!canLeaveTraitForm()) {
       return;
     }
-    setSelectedTraitId(null);
-    setForm({ ...emptyTraitForm });
-    setBaselineForm({ ...emptyTraitForm });
-    setQuestionForm({ id: "", prompt: "", type: "chat", optionsText: "" });
+    const requestId = createDraftRequestIdRef.current + 1;
+    createDraftRequestIdRef.current = requestId;
+    setIsCreatingDraft(true);
+    setEditorSaveStatus("saving");
     setTraitNotice(null);
     setTraitError(null);
+    try {
+      const created = await request<{ data: Trait }>("/api/admin/traits", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "Untitled trait",
+          category: emptyTraitForm.category,
+          status: "DRAFT"
+        })
+      });
+      if (!isMountedRef.current || createDraftRequestIdRef.current !== requestId) {
+        return;
+      }
+      const normalized = normalizeTrait(created.data);
+      const nextForm = toTraitFormState(normalized);
+      setTraits((prev) => [normalized, ...prev.filter((item) => item.id !== normalized.id)]);
+      setSelectedTraitId(normalized.id);
+      setForm(nextForm);
+      setBaselineForm(nextForm);
+      setQuestionForm({ id: "", prompt: "", type: "chat", optionsText: "" });
+      setActivationMissing([]);
+      setTraitNotice("Saved");
+      setEditorSaveStatus("saved");
+      focusTitleOnSelectRef.current = true;
+      await loadTraits();
+      await loadQuestions(normalized.id);
+    } catch (error) {
+      if (!isMountedRef.current || createDraftRequestIdRef.current !== requestId) {
+        return;
+      }
+      setTraitError(error instanceof Error ? error.message : "Could not create draft trait.");
+      setEditorSaveStatus("error");
+    } finally {
+      if (isMountedRef.current && createDraftRequestIdRef.current === requestId) {
+        setIsCreatingDraft(false);
+      }
+    }
   };
 
   const startEditTrait = (trait: Trait) => {
@@ -442,6 +760,8 @@ function TraitsPage() {
     setBaselineForm(nextForm);
     setTraitNotice(null);
     setTraitError(null);
+    setActivationMissing([]);
+    setEditorSaveStatus("idle");
   };
 
   const resetTraitForm = () => {
@@ -459,6 +779,8 @@ function TraitsPage() {
     event.preventDefault();
     setTraitError(null);
     setTraitNotice(null);
+    setActivationMissing([]);
+    setEditorSaveStatus("saving");
 
     try {
       const body = {
@@ -475,7 +797,7 @@ function TraitsPage() {
         const nextForm = toTraitFormState(updated.data);
         setForm(nextForm);
         setBaselineForm(nextForm);
-        setTraitNotice("Trait saved.");
+        setTraitNotice("Saved");
       } else {
         const created = await request<{ data: Trait }>("/api/admin/traits", {
           method: "POST",
@@ -485,15 +807,24 @@ function TraitsPage() {
         setSelectedTraitId(created.data.id);
         setForm(nextForm);
         setBaselineForm(nextForm);
-        setTraitNotice("Trait created.");
+        setTraitNotice("Saved");
       }
+      setEditorSaveStatus("saved");
 
       await loadTraits();
       if (selectedTraitId) {
         await loadQuestions(selectedTraitId);
       }
     } catch (error) {
-      setTraitError(error instanceof Error ? error.message : "Failed to save trait.");
+      if (error instanceof ApiError && error.code === "TRAIT_INCOMPLETE") {
+        setTraitError("Trait incomplete");
+        setActivationMissing(error.missing ?? []);
+        setForm((prev) => ({ ...prev, status: baselineForm.status }));
+        setEditorSaveStatus("error");
+      } else {
+        setTraitError(error instanceof Error ? error.message : "Failed to save trait.");
+        setEditorSaveStatus("error");
+      }
     }
   };
 
@@ -553,13 +884,70 @@ function TraitsPage() {
     }
   };
 
+  const generateRubricWithAi = async () => {
+    if (!selectedTraitId) {
+      return;
+    }
+    setGeneratingRubric(true);
+    setTraitError(null);
+    try {
+      const payload = await request<{
+        data: { positiveSignals: string[]; negativeSignals: string[]; followUps: string[] };
+      }>(`/api/admin/traits/${selectedTraitId}/generate-signals`, { method: "POST" });
+      const { positiveSignals: pos, negativeSignals: neg, followUps: follow } = payload.data;
+      setForm((prev) => ({
+        ...prev,
+        rubricPositiveSignals: joinListText(pos ?? []),
+        rubricNegativeSignals: joinListText(neg ?? []),
+        rubricFollowUps: joinListText(follow ?? [])
+      }));
+    } catch (error) {
+      setTraitError(error instanceof Error ? error.message : "Failed to generate rubric with AI.");
+    } finally {
+      setGeneratingRubric(false);
+    }
+  };
+
+  const generateQuestionsWithAi = async () => {
+    if (!selectedTraitId) {
+      return;
+    }
+    setGeneratingQuestions(true);
+    setTraitError(null);
+    try {
+      const payload = await request<{
+        data: { chatPrompt: string; quizPrompt: string; quizOptions: string[] };
+      }>(`/api/admin/traits/${selectedTraitId}/generate-questions`, { method: "POST" });
+      const { chatPrompt, quizPrompt, quizOptions } = payload.data;
+      await request<{ data: TraitQuestion }>(`/api/admin/traits/${selectedTraitId}/questions`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: chatPrompt, type: "chat" })
+      });
+      await request<{ data: TraitQuestion }>(`/api/admin/traits/${selectedTraitId}/questions`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: quizPrompt, type: "quiz", options: quizOptions ?? [] })
+      });
+      await loadQuestions(selectedTraitId);
+    } catch (error) {
+      setTraitError(error instanceof Error ? error.message : "Failed to generate questions with AI.");
+    } finally {
+      setGeneratingQuestions(false);
+    }
+  };
+
   return (
     <div className="grid gap-4 lg:grid-cols-[320px_1fr_1fr]">
       <Card>
         <h2 className="mb-3 text-lg font-semibold">Traits Library</h2>
         <div className="space-y-2">
-          <button type="button" className={`${subtleButtonClass} w-full`} onClick={startCreateTrait}>
-            + New Trait
+          <button
+            type="button"
+            className={`${subtleButtonClass} w-full disabled:cursor-not-allowed disabled:opacity-60`}
+            onClick={startCreateTrait}
+            disabled={isCreatingDraft}
+            aria-busy={isCreatingDraft ? "true" : undefined}
+          >
+            {isCreatingDraft ? "Saving..." : "+ New Trait"}
           </button>
           <input className={inputClass} placeholder="Search traits..." value={search} onChange={(event) => setSearch(event.target.value)} />
           <select
@@ -577,93 +965,176 @@ function TraitsPage() {
         </div>
         <div className="mt-4 space-y-2">
           {loading && <p className="text-sm text-slate-500">Loading...</p>}
-          {!loading && traits.length === 0 && <p className="text-sm text-slate-500">No traits yet. Create your first trait.</p>}
-          {traits.map((trait) => (
-            <button
+          {!loading && sortedTraits.length === 0 && (
+            <p className="text-sm text-slate-500">
+              {search.trim() || categoryFilter !== "ALL"
+                ? "No traits match your search or category filter."
+                : "No traits yet. Create your first trait."}
+            </p>
+          )}
+          {sortedTraits.map((trait) => (
+            <TraitLibraryRow
               key={trait.id}
-              type="button"
-              onClick={() => startEditTrait(trait)}
-              className={`w-full rounded-md border p-2 text-left text-sm ${
-                selectedTraitId === trait.id ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white"
-              }`}
-            >
-              <div className="font-semibold">{trait.name}</div>
-              <div className="text-xs text-slate-500">{trait.category}</div>
-            </button>
+              trait={trait}
+              loading={loading}
+              selected={selectedTraitId === trait.id}
+              onSelect={() => startEditTrait(trait)}
+              onOpenPrograms={() => setProgramDrawerTraitId(trait.id)}
+            />
           ))}
         </div>
       </Card>
 
-      <Card>
-        <div className="mb-3 flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-semibold">{isEditing ? `Edit Trait: ${selectedTrait?.name ?? ""}` : "Create New Trait"}</h2>
-            <p className="text-xs text-slate-500">{isEditing ? "Editing existing trait" : "Creating a new trait"}</p>
+      <div className="lg:col-span-2 flex flex-col gap-6">
+        {/* Mobile: collapsible Programs accordion above main content */}
+        {selectedTrait && (
+          <div className="lg:hidden">
+            <TraitProgramsAccordion
+              programs={selectedTraitPrograms}
+              loading={selectedTraitProgramsLoading}
+              error={selectedTraitProgramsError}
+              onManage={() => setProgramDrawerTraitId(selectedTrait.id)}
+              onProgramClick={(programId) => {
+                window.sessionStorage.setItem("pmm:selectedProgramId", programId);
+                navigate("/programs");
+              }}
+            />
           </div>
-          {selectedTrait && (
-            <div className="flex gap-2">
-              <button type="button" className="text-xs text-red-700 underline" onClick={() => void deleteTrait(selectedTrait.id)}>
-                Delete trait
-              </button>
+        )}
+
+        <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(260px,380px)]">
+          {/* Main editor column: form (Basics, Rubric) + Questions */}
+          <div className="min-w-0 flex flex-col gap-8">
+            <form className="space-y-8" onSubmit={(event) => void submitTrait(event)}>
+              <div className="flex flex-col gap-3 border-b border-slate-200/80 pb-6 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0 flex-1">
+                  <label htmlFor="trait-title-input" className="sr-only">
+                    Name
+                  </label>
+                  <input
+                    id="trait-title-input"
+                    ref={titleInputRef}
+                    required
+                    className="w-full border-0 bg-transparent px-0 text-3xl font-semibold text-slate-900 outline-none placeholder:text-slate-300 focus-visible:ring-0"
+                    placeholder="New Trait"
+                    value={form.name}
+                    onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
+                  />
+                  <p className="mt-2 text-sm text-slate-500">
+                    {form.category} · {form.status.replaceAll("_", " ")}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-4 self-start">
+                  {editorStatusLabel && <p className="text-xs text-slate-500">{editorStatusLabel}</p>}
+                </div>
+              </div>
+
+              {(form.status !== "ACTIVE" || !draftCompleteness.isComplete || activationMissing.length > 0) && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <p className="font-medium">
+                {form.status !== "ACTIVE"
+                  ? "This trait will not affect scoring until it is Active."
+                  : "This trait is incomplete and cannot be used for scoring until it is Active."}
+              </p>
+              {(activationMissing.length > 0 || !draftCompleteness.isComplete) && (
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
+                  {(activationMissing.length > 0 ? activationMissing : draftCompleteness.missing).map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
-        </div>
-        <form className="space-y-3" onSubmit={(event) => void submitTrait(event)}>
-          <CollapsibleSection title="Basics">
-            <div>
-              <label className={labelClass}>Name</label>
-              <input
-                required
-                className={inputClass}
-                value={form.name}
-                onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-              />
-              <FieldMeta value={form.name} />
+
+          <section className="space-y-4">
+            <h2 className="text-xl font-semibold text-slate-900">Basics</h2>
+            <div className="space-y-5">
+              <div>
+                <label className={labelClass}>Name</label>
+                <input
+                  required
+                  className={inputClass}
+                  value={form.name}
+                  onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
+                />
+                <FieldMeta value={form.name} />
+              </div>
+              <div>
+                <label className={labelClass}>Category</label>
+                <select
+                  className={inputClass}
+                  value={form.category}
+                  onChange={(event) => setForm((prev) => ({ ...prev, category: event.target.value as TraitCategory }))}
+                >
+                  {traitCategories.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className={labelClass} htmlFor="trait-status-select">Status</label>
+                <select
+                  id="trait-status-select"
+                  className={inputClass}
+                  value={form.status}
+                  onChange={(event) => setForm((prev) => ({ ...prev, status: event.target.value as TraitStatus }))}
+                >
+                  {traitStatusOptions.map((status) => (
+                    <option key={status} value={status}>
+                      {status.replaceAll("_", " ")}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <div className="mb-1 flex items-center justify-between">
+                  <label className={labelClass}>Definition</label>
+                  <button
+                    type="button"
+                    className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                    onClick={() =>
+                      setForm((prev) => ({
+                        ...prev,
+                        definition: buildDefinitionDraft(prev.name, prev.category)
+                      }))
+                    }
+                  >
+                    AI Draft Definition
+                  </button>
+                </div>
+                <textarea
+                  className={inputClass}
+                  value={form.definition}
+                  onChange={(event) => setForm((prev) => ({ ...prev, definition: event.target.value }))}
+                />
+                <FieldMeta value={form.definition} />
+              </div>
             </div>
-            <div>
-              <label className={labelClass}>Category</label>
-              <select
-                className={inputClass}
-                value={form.category}
-                onChange={(event) => setForm((prev) => ({ ...prev, category: event.target.value as TraitCategory }))}
-              >
-                {traitCategories.map((category) => (
-                  <option key={category} value={category}>
-                    {category}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <div className="mb-1 flex items-center justify-between">
-                <label className={labelClass}>Definition</label>
+          </section>
+
+          <section className="space-y-4 border-t border-slate-200/80 pt-8">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-semibold text-slate-900">Rubric</h2>
+              {isEditing && (
                 <button
                   type="button"
-                  className={subtleButtonClass}
-                  onClick={() =>
-                    setForm((prev) => ({
-                      ...prev,
-                      definition: buildDefinitionDraft(prev.name, prev.category)
-                    }))
-                  }
+                  className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-60"
+                  disabled={generatingRubric}
+                  onClick={() => void generateRubricWithAi()}
                 >
-                  AI Draft Definition
+                  {generatingRubric ? "Generating…" : "Generate with AI"}
                 </button>
-              </div>
-              <textarea
-                className={inputClass}
-                value={form.definition}
-                onChange={(event) => setForm((prev) => ({ ...prev, definition: event.target.value }))}
-              />
-              <FieldMeta value={form.definition} />
+              )}
             </div>
-          </CollapsibleSection>
-          <CollapsibleSection title="Rubric Signals">
+            {!isEditing && <p className="text-xs text-slate-500">Save the trait first to use &quot;Generate with AI&quot;.</p>}
             <ListBuilder
               label="Positive Signals"
               items={positiveSignals}
               placeholder="Add a positive signal"
               emptyText="No positive signals yet."
+              addButtonLabel="+ Add signal"
               suggestionButtonLabel="Generate 3 positive signals"
               onSuggestion={() =>
                 setForm((prev) => ({
@@ -678,6 +1149,7 @@ function TraitsPage() {
               items={negativeSignals}
               placeholder="Add a negative signal"
               emptyText="No negative signals yet."
+              addButtonLabel="+ Add signal"
               suggestionButtonLabel="Generate 3 negative signals"
               onSuggestion={() =>
                 setForm((prev) => ({
@@ -687,36 +1159,56 @@ function TraitsPage() {
               }
               onChange={(items) => setForm((prev) => ({ ...prev, rubricNegativeSignals: joinListText(items) }))}
             />
-          </CollapsibleSection>
-          <div className="flex gap-2">
+            {positiveSignals.length === 0 && negativeSignals.length === 0 && (
+              <p className="text-xs text-slate-500">Add at least 3 positive and 2 negative signals to activate.</p>
+            )}
+          </section>
+
+          <div className="flex items-center gap-3 border-t border-slate-200/80 pt-6">
             <Button type="submit">{isEditing ? "Save Changes" : "Create Trait"}</Button>
-            <button type="button" className="text-sm underline" onClick={resetTraitForm}>
+            <button type="button" className="text-sm text-slate-600 hover:text-slate-800" onClick={resetTraitForm}>
               Reset
             </button>
+            {selectedTrait && (
+              <button
+                type="button"
+                className="ml-auto text-sm text-red-600 hover:text-red-700"
+                onClick={() => void deleteTrait(selectedTrait.id)}
+              >
+                Delete
+              </button>
+            )}
           </div>
           {traitNotice && <p className="text-sm text-emerald-700">{traitNotice}</p>}
           {traitError && <p className="text-sm text-red-700">{traitError}</p>}
         </form>
-      </Card>
 
-      <Card>
-        <h2 className="mb-3 text-lg font-semibold">Trait Questions</h2>
-        {!selectedTrait ? (
-          <p className="text-sm text-slate-500">Select a trait to manage questions after creating it.</p>
-        ) : (
-          <>
-            <p className="mb-3 text-sm text-slate-600">{selectedTrait.name}</p>
-            <form className="space-y-3" onSubmit={(event) => void submitQuestion(event)}>
-              <CollapsibleSection title="Question Details">
-                <p className="mb-2 text-xs text-slate-500">
-                  Questions elicit evidence. Scoring is based on the trait&apos;s rubric signals.
-                </p>
+        <section className="space-y-6 border-t border-slate-200/80 pt-8 lg:border-t-0 lg:pt-0">
+          <div className="flex items-center justify-between border-b border-slate-200/80 pb-4">
+            <h2 className="text-xl font-semibold text-slate-900">Questions</h2>
+            {selectedTrait && (
+              <button
+                type="button"
+                className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-60"
+                disabled={generatingQuestions}
+                onClick={() => void generateQuestionsWithAi()}
+              >
+                {generatingQuestions ? "Generating…" : "Generate with AI"}
+              </button>
+            )}
+          </div>
+          {!selectedTrait ? (
+            <p className="text-sm text-slate-500">Select a trait to manage questions.</p>
+          ) : (
+            <>
+              <p className="text-sm text-slate-500">Questions elicit evidence. Scoring is based on rubric signals.</p>
+              <form className="space-y-4" onSubmit={(event) => void submitQuestion(event)}>
                 <div>
                   <div className="mb-1 flex items-center justify-between">
                     <label className={labelClass}>Prompt</label>
                     <button
                       type="button"
-                      className={subtleButtonClass}
+                      className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
                       onClick={() =>
                         setQuestionForm((prev) => ({
                           ...prev,
@@ -746,60 +1238,531 @@ function TraitsPage() {
                     <option value="quiz">Quiz</option>
                   </select>
                 </div>
-              </CollapsibleSection>
-              {questionForm.type === "quiz" && (
-                <CollapsibleSection title="Quiz Options" defaultOpen={false}>
+                {questionForm.type === "quiz" && (
                   <ListBuilder
-                    label="Options"
+                    label="Quiz Options"
                     items={quizOptions}
                     placeholder="Add a quiz option"
                     emptyText="No options yet."
+                    addButtonLabel="+ Add option"
                     onChange={(items) => setQuestionForm((prev) => ({ ...prev, optionsText: joinListText(items) }))}
                   />
-                </CollapsibleSection>
-              )}
-              <div className="flex gap-2">
-                <Button type="submit">{questionForm.id ? "Save Question" : "Add Question"}</Button>
-                <button
-                  type="button"
-                  className="text-sm underline"
-                  onClick={() => setQuestionForm({ id: "", prompt: "", type: "chat", optionsText: "" })}
-                >
-                  Reset
-                </button>
-              </div>
-            </form>
-            <div className="mt-4 space-y-2">
-              {questions.map((question) => (
-                <div key={question.id} className="rounded-md border border-slate-200 p-2">
-                  <div className="text-xs text-slate-500">{question.type.toUpperCase()}</div>
-                  <div className="text-sm font-medium">{question.prompt}</div>
-                  {question.options.length > 0 && <div className="text-xs text-slate-600">Options: {question.options.join(", ")}</div>}
-                  <div className="mt-2 flex gap-2 text-xs">
-                    <button
-                      type="button"
-                      className="underline"
-                      onClick={() =>
-                        setQuestionForm({
-                          id: question.id,
-                          prompt: question.prompt,
-                          type: question.type,
-                          optionsText: question.options.join("\n")
-                        })
-                      }
-                    >
-                      Edit
-                    </button>
-                    <button type="button" className="text-red-700 underline" onClick={() => void deleteQuestion(question.id)}>
-                      Delete
-                    </button>
-                  </div>
+                )}
+                <div className="flex items-center gap-3">
+                  <Button type="submit">{questionForm.id ? "Save Question" : "+ Add question"}</Button>
+                  <button
+                    type="button"
+                    className="text-sm text-slate-600 hover:text-slate-800"
+                    onClick={() => setQuestionForm({ id: "", prompt: "", type: "chat", optionsText: "" })}
+                  >
+                    Reset
+                  </button>
                 </div>
-              ))}
+              </form>
+
+              <div className="space-y-1 pt-2">
+                {questions.length === 0 && <p className="text-xs text-slate-500">No questions yet. Add Question to get started.</p>}
+                {questions.map((question) => (
+                  <div key={question.id} className="border-b border-slate-200/80 py-3">
+                    <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                      {question.type.toUpperCase()}
+                    </span>
+                    <p className="mt-1 text-sm text-slate-900">{question.prompt}</p>
+                    {question.options.length > 0 && <p className="mt-1 text-xs text-slate-500">Options: {question.options.join(", ")}</p>}
+                    <div className="mt-2 flex items-center gap-3 text-xs">
+                      <button
+                        type="button"
+                        className="text-slate-600 hover:text-slate-900"
+                        onClick={() =>
+                          setQuestionForm({
+                            id: question.id,
+                            prompt: question.prompt,
+                            type: question.type,
+                            optionsText: question.options.join("\n")
+                          })
+                        }
+                      >
+                        Edit
+                      </button>
+                      <button type="button" className="text-red-600 hover:text-red-700" onClick={() => void deleteQuestion(question.id)}>
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </section>
+          </div>
+
+          {/* Desktop: sticky Programs panel (secondary column) */}
+          {selectedTrait && (
+            <aside
+              className="hidden w-full min-w-[260px] max-w-[420px] self-start overflow-auto lg:block lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)]"
+              aria-label="Programs using this trait"
+            >
+              <TraitProgramsPanel
+                programs={selectedTraitPrograms}
+                loading={selectedTraitProgramsLoading}
+                error={selectedTraitProgramsError}
+                onManage={() => setProgramDrawerTraitId(selectedTrait.id)}
+                onProgramClick={(programId) => {
+                  window.sessionStorage.setItem("pmm:selectedProgramId", programId);
+                  navigate("/programs");
+                }}
+              />
+            </aside>
+          )}
+        </div>
+      </div>
+      <TraitProgramsDrawer
+        open={programDrawerTraitId !== null}
+        trait={traits.find((trait) => trait.id === programDrawerTraitId) ?? null}
+        onClose={() => setProgramDrawerTraitId(null)}
+        onProgramOpen={(programId) => {
+          window.sessionStorage.setItem("pmm:selectedProgramId", programId);
+          navigate("/programs");
+        }}
+        onAssociationsChanged={() => {
+          void loadTraits();
+          if (selectedTraitId === programDrawerTraitId && programDrawerTraitId) {
+            void loadTraitPrograms(programDrawerTraitId);
+          }
+        }}
+      />
+    </div>
+  );
+}
+
+function TraitLibraryRow({
+  trait,
+  selected,
+  onSelect,
+  loading,
+  onOpenPrograms
+}: {
+  trait: Trait;
+  selected: boolean;
+  loading: boolean;
+  onSelect: () => void;
+  onOpenPrograms: () => void;
+}) {
+  const status = mapTraitListStatus(trait.status);
+  const statusMeta = traitListStatusMeta[status];
+  const programCount = trait.programSummary?.count ?? 0;
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+      data-testid={`trait-row-${trait.id}`}
+      aria-current={selected ? "true" : undefined}
+      className={`group relative w-full overflow-hidden rounded-md border px-3 py-2 text-left text-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-700 ${
+        selected ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white hover:bg-slate-50"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-semibold text-slate-900">{trait.name}</div>
+          <div className="mt-0.5 truncate text-xs text-slate-500">{trait.category}</div>
+          {!loading && (
+            <button
+              type="button"
+              className="mt-1 text-xs font-medium text-slate-600 hover:text-slate-900"
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenPrograms();
+              }}
+            >
+              {programCount === 0 ? "Not linked" : `${programCount} program${programCount === 1 ? "" : "s"}`}
+            </button>
+          )}
+          {loading && <span className="mt-1 inline-block h-4 w-24 animate-pulse rounded bg-slate-200" />}
+        </div>
+        <div className={`mt-0.5 inline-flex shrink-0 items-center gap-1 text-[11px] font-medium ${statusMeta.textClassName}`}>
+          <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${statusMeta.dotClassName}`} />
+          <span>{statusMeta.label}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TraitProgramsDrawer({
+  open,
+  trait,
+  onClose,
+  onProgramOpen,
+  onAssociationsChanged
+}: {
+  open: boolean;
+  trait: Trait | null;
+  onClose: () => void;
+  onProgramOpen: (programId: string) => void;
+  onAssociationsChanged: () => void;
+}) {
+  const [associations, setAssociations] = useState<TraitProgramAssociation[]>([]);
+  const [allPrograms, setAllPrograms] = useState<Program[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [programSearch, setProgramSearch] = useState("");
+  const [selectedProgramToAdd, setSelectedProgramToAdd] = useState<string>("");
+  const [newBucket, setNewBucket] = useState<ProgramTraitPriorityBucket>("IMPORTANT");
+  const [newWeight, setNewWeight] = useState("0.50");
+
+  useEffect(() => {
+    if (!open || !trait) return;
+    const load = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const [assocPayload, programPayload] = await Promise.all([
+          request<{ data: Array<Partial<TraitProgramAssociation> & { programId: string }> }>(`/api/admin/traits/${trait.id}/programs`),
+          request<{ data: Program[] }>("/api/admin/programs")
+        ]);
+        setAssociations(assocPayload.data.map((item) => normalizeTraitProgramAssociation(item)));
+        setAllPrograms(programPayload.data.map((program) => normalizeProgram(program)));
+      } catch (loadError) {
+        setError(loadError instanceof Error ? loadError.message : "Failed to load associated programs.");
+      } finally {
+        setLoading(false);
+      }
+    };
+    void load();
+  }, [open, trait]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
+
+  const linkedProgramIds = useMemo(() => new Set(associations.map((item) => item.programId)), [associations]);
+  const availablePrograms = useMemo(() => {
+    const q = programSearch.trim().toLowerCase();
+    return allPrograms
+      .filter((program) => !linkedProgramIds.has(program.id))
+      .filter((program) => (q ? program.name.toLowerCase().includes(q) : true))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [allPrograms, linkedProgramIds, programSearch]);
+
+  useEffect(() => {
+    if (!open) return;
+    const firstOption = availablePrograms[0]?.id ?? "";
+    setSelectedProgramToAdd(firstOption);
+  }, [open, availablePrograms]);
+
+  const persistPatch = async (programId: string, patch: { bucket?: ProgramTraitPriorityBucket; weight?: number }) => {
+    if (!trait) return;
+    const previous = associations;
+    setAssociations((current) =>
+      current.map((item) =>
+        item.programId === programId
+          ? {
+              ...item,
+              ...(patch.bucket ? { bucket: patch.bucket } : {}),
+              ...(patch.weight !== undefined ? { weight: patch.weight } : {})
+            }
+          : item
+      )
+    );
+    setSaving(true);
+    setError(null);
+    try {
+      await request<{ data: TraitProgramAssociation }>(`/api/admin/traits/${trait.id}/programs/${programId}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch)
+      });
+      onAssociationsChanged();
+    } catch (patchError) {
+      setAssociations(previous);
+      setError(patchError instanceof Error ? patchError.message : "Failed to update association.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const addAssociation = async () => {
+    if (!trait || !selectedProgramToAdd) return;
+    const selectedProgram = allPrograms.find((program) => program.id === selectedProgramToAdd);
+    if (!selectedProgram) return;
+    const optimistic: TraitProgramAssociation = {
+      programId: selectedProgram.id,
+      programName: selectedProgram.name,
+      bucket: newBucket,
+      weight: Number(newWeight),
+      updatedAt: new Date().toISOString()
+    };
+    const previous = associations;
+    setAssociations((current) => [...current, optimistic]);
+    setSaving(true);
+    setError(null);
+    try {
+      const payload = await request<{ data: TraitProgramAssociation }>(`/api/admin/traits/${trait.id}/programs`, {
+        method: "POST",
+        body: JSON.stringify({
+          programId: selectedProgram.id,
+          bucket: newBucket,
+          weight: Number(newWeight)
+        })
+      });
+      setAssociations((current) =>
+        current.map((item) => (item.programId === optimistic.programId ? payload.data : item))
+      );
+      setProgramSearch("");
+      setNewBucket("IMPORTANT");
+      setNewWeight("0.50");
+      onAssociationsChanged();
+    } catch (addError) {
+      setAssociations(previous);
+      setError(addError instanceof Error ? addError.message : "Failed to add program association.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeAssociation = async (programId: string) => {
+    if (!trait) return;
+    const target = associations.find((item) => item.programId === programId);
+    if (!target) return;
+    const approved = window.confirm(`Remove ${target.programName} from ${trait.name}?`);
+    if (!approved) return;
+    const previous = associations;
+    setAssociations((current) => current.filter((item) => item.programId !== programId));
+    setSaving(true);
+    setError(null);
+    try {
+      await request<{ ok: boolean }>(`/api/admin/traits/${trait.id}/programs/${programId}`, { method: "DELETE" });
+      onAssociationsChanged();
+    } catch (deleteError) {
+      setAssociations(previous);
+      setError(deleteError instanceof Error ? deleteError.message : "Failed to remove association.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!open || !trait) return null;
+
+  return (
+    <div className="fixed inset-0 z-40 flex justify-end bg-black/30" role="presentation" onClick={onClose}>
+      <aside
+        className="h-full w-full max-w-2xl overflow-y-auto bg-white p-6 shadow-xl"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Trait associated programs"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="mb-4 flex items-start justify-between gap-3 border-b border-slate-200 pb-4">
+          <div>
+            <h2 className="text-xl font-semibold text-slate-900">{trait.name}</h2>
+            <p className="text-sm text-slate-500">{trait.category}</p>
+          </div>
+          <button type="button" className="text-sm text-slate-600 hover:text-slate-900" onClick={onClose}>
+            Close
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          <div className="flex items-end gap-2">
+            <div className="min-w-0 flex-1">
+              <label className={labelClass}>Add Program</label>
+              <input
+                className={inputClass}
+                placeholder="Search programs..."
+                value={programSearch}
+                onChange={(event) => setProgramSearch(event.target.value)}
+              />
             </div>
-          </>
-        )}
-      </Card>
+            <div>
+              <label className={labelClass}>Bucket</label>
+              <select className={inputClass} value={newBucket} onChange={(event) => setNewBucket(event.target.value as ProgramTraitPriorityBucket)}>
+                {programTraitPriorityBuckets.map((bucket) => (
+                  <option key={bucket} value={bucket}>
+                    {bucket}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelClass}>Weight</label>
+              <input
+                className={inputClass}
+                type="number"
+                min={0}
+                max={1}
+                step={0.05}
+                value={newWeight}
+                onChange={(event) => setNewWeight(event.target.value)}
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              className={`${inputClass} max-w-md`}
+              value={selectedProgramToAdd}
+              onChange={(event) => setSelectedProgramToAdd(event.target.value)}
+            >
+              {availablePrograms.length === 0 && <option value="">No available programs</option>}
+              {availablePrograms.map((program) => (
+                <option key={program.id} value={program.id}>
+                  {program.name}
+                </option>
+              ))}
+            </select>
+            <Button
+              type="button"
+              disabled={saving || availablePrograms.length === 0 || !selectedProgramToAdd}
+              onClick={() => void addAssociation()}
+            >
+              Add Program
+            </Button>
+          </div>
+
+          {error && <p className="text-sm text-red-700">{error}</p>}
+
+          {loading ? (
+            <p className="text-sm text-slate-500">Loading associated programs…</p>
+          ) : associations.length === 0 ? (
+            <div className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-600">
+              <p>Not linked</p>
+              <p className="mt-1 text-xs text-slate-500">Link this trait to a program to control scoring priority.</p>
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-md border border-slate-200">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
+                  <tr>
+                    <th className="px-3 py-2 font-medium">Program</th>
+                    <th className="px-3 py-2 font-medium">Priority Bucket</th>
+                    <th className="px-3 py-2 font-medium">Weight</th>
+                    <th className="px-3 py-2 font-medium">Updated At</th>
+                    <th className="px-3 py-2 font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {associations.map((item) => (
+                    <tr key={item.programId} className="border-t border-slate-200">
+                      <td className="px-3 py-2">
+                        <button
+                          type="button"
+                          className="text-slate-700 underline hover:text-slate-900"
+                          onClick={() => onProgramOpen(item.programId)}
+                        >
+                          {item.programName}
+                        </button>
+                      </td>
+                      <td className="px-3 py-2">
+                        <select
+                          className="rounded-md border border-slate-300 px-2 py-1 text-xs"
+                          value={item.bucket}
+                          onChange={(event) =>
+                            void persistPatch(item.programId, { bucket: event.target.value as ProgramTraitPriorityBucket })
+                          }
+                        >
+                          {programTraitPriorityBuckets.map((bucket) => (
+                            <option key={bucket} value={bucket}>
+                              {bucket}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          className="w-20 rounded-md border border-slate-300 px-2 py-1 text-xs"
+                          type="number"
+                          min={0}
+                          max={1}
+                          step={0.05}
+                          defaultValue={item.weight.toFixed(2)}
+                          onBlur={(event) => {
+                            const parsed = Number(event.target.value);
+                            if (!Number.isFinite(parsed)) {
+                              event.target.value = item.weight.toFixed(2);
+                              return;
+                            }
+                            const clamped = Math.max(0, Math.min(1, parsed));
+                            event.target.value = clamped.toFixed(2);
+                            if (Math.abs(clamped - item.weight) < 0.001) return;
+                            void persistPatch(item.programId, { weight: clamped });
+                          }}
+                        />
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-500">{new Date(item.updatedAt).toLocaleDateString()}</td>
+                      <td className="px-3 py-2">
+                        <button
+                          type="button"
+                          className="text-xs text-red-600 hover:text-red-700"
+                          onClick={() => void removeAssociation(item.programId)}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function ProgramLibraryRow({
+  program,
+  selected,
+  onSelect
+}: {
+  program: Program;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const secondary = program.department?.trim() || program.degreeLevel?.trim() || "No department";
+  const statusMeta = programListStatusMeta[mapProgramListStatus(program)];
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-current={selected ? "true" : undefined}
+      data-testid={`program-row-${program.id}`}
+      className={[
+        "group relative w-full overflow-hidden rounded-md border px-3 py-2 text-left text-sm transition-colors",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-700",
+        selected ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white hover:bg-slate-50"
+      ].join(" ")}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-semibold text-slate-900">{program.name}</div>
+          <div className="mt-0.5 truncate text-xs text-slate-500">{secondary}</div>
+        </div>
+        <div className={`mt-0.5 inline-flex shrink-0 items-center gap-1 text-[11px] font-medium ${statusMeta.textClassName}`}>
+          <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${statusMeta.dotClassName}`} />
+          <span>{statusMeta.label}</span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -814,13 +1777,14 @@ export function ProgramsPage() {
     name: "",
     description: "",
     degreeLevel: "",
-    department: ""
+    department: "",
+    isActive: false
   });
+  const [programSearch, setProgramSearch] = useState("");
+  const [debouncedProgramSearch, setDebouncedProgramSearch] = useState("");
+  const [programsLoading, setProgramsLoading] = useState(false);
+  const [isCreatingProgramDraft, setIsCreatingProgramDraft] = useState(false);
   const [traitModalOpen, setTraitModalOpen] = useState(false);
-  const [isCreatingNew, setIsCreatingNew] = useState(false);
-  const [newProgramDraft, setNewProgramDraft] = useState({ name: "", degreeLevel: "", department: "" });
-  const [isCreatingSubmitting, setIsCreatingSubmitting] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
   const [removingTrait, setRemovingTrait] = useState<BoardTrait | null>(null);
   const [removeDialogOpen, setRemoveDialogOpen] = useState(false);
   const [expandedBuckets, setExpandedBuckets] = useState<Set<ProgramTraitPriorityBucket>>(
@@ -828,6 +1792,8 @@ export function ProgramsPage() {
   );
   const cancelRemoveButtonRef = useRef<HTMLButtonElement | null>(null);
   const confirmRemoveButtonRef = useRef<HTMLButtonElement | null>(null);
+  const programNameInputRef = useRef<HTMLInputElement | null>(null);
+  const focusProgramNameOnSelectRef = useRef(false);
 
   const toggleBucketExpanded = (bucket: ProgramTraitPriorityBucket) => {
     setExpandedBuckets((prev) => {
@@ -847,31 +1813,68 @@ export function ProgramsPage() {
       programForm.name !== selectedProgram.name ||
       programForm.description !== (selectedProgram.description ?? "") ||
       programForm.degreeLevel !== (selectedProgram.degreeLevel ?? "") ||
-      programForm.department !== (selectedProgram.department ?? "")
+      programForm.department !== (selectedProgram.department ?? "") ||
+      programForm.isActive !== selectedProgram.isActive
     );
   }, [selectedProgram, programForm]);
 
   const pageDirty = programDirty || boardDirty;
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [programStatusFilter, setProgramStatusFilter] = useState<"ALL" | "INACTIVE">("ALL");
+  const [statusToast, setStatusToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [statusToggleInFlight, setStatusToggleInFlight] = useState<string | null>(null);
+  const statusToastTimerRef = useRef<number | null>(null);
+  const inactiveProgramCount = useMemo(
+    () => programs.filter((program) => mapProgramListStatus(program) === "INACTIVE").length,
+    [programs]
+  );
+  const filteredPrograms = useMemo(() => {
+    const q = debouncedProgramSearch.trim().toLowerCase();
+    const statusFiltered =
+      programStatusFilter === "INACTIVE"
+        ? programs.filter((program) => mapProgramListStatus(program) === "INACTIVE")
+        : programs;
+    const sorted = [...statusFiltered].sort((a, b) => a.name.localeCompare(b.name));
+    if (!q) return sorted;
+    return sorted.filter((program) => {
+      const nameMatch = program.name.toLowerCase().includes(q);
+      const departmentMatch = (program.department ?? "").toLowerCase().includes(q);
+      return nameMatch || departmentMatch;
+    });
+  }, [programs, debouncedProgramSearch, programStatusFilter]);
 
   const loadPrograms = async () => {
-    const payload = await request<{ data: Program[] }>("/api/admin/programs");
-    setPrograms(payload.data);
-    if (payload.data.length > 0 && !payload.data.some((program) => program.id === selectedProgramId)) {
-      setSelectedProgramId(payload.data[0]?.id ?? null);
-    }
-    if (payload.data.length === 0) {
-      setSelectedProgramId(null);
-      const empty = createEmptyProgramBoardState();
-      setBoard(empty);
-      setSavedBoard(empty);
+    setProgramsLoading(true);
+    try {
+      const payload = await request<{ data: Program[] }>("/api/admin/programs");
+      const normalizedPrograms = payload.data.map((program) => normalizeProgram(program));
+      const preferredProgramId = window.sessionStorage.getItem("pmm:selectedProgramId");
+      setPrograms(normalizedPrograms);
+      if (
+        normalizedPrograms.length > 0 &&
+        preferredProgramId &&
+        normalizedPrograms.some((program) => program.id === preferredProgramId)
+      ) {
+        setSelectedProgramId(preferredProgramId);
+        window.sessionStorage.removeItem("pmm:selectedProgramId");
+      } else if (normalizedPrograms.length > 0 && !normalizedPrograms.some((program) => program.id === selectedProgramId)) {
+        setSelectedProgramId(normalizedPrograms[0]?.id ?? null);
+      }
+      if (normalizedPrograms.length === 0) {
+        setSelectedProgramId(null);
+        const empty = createEmptyProgramBoardState();
+        setBoard(empty);
+        setSavedBoard(empty);
+      }
+    } finally {
+      setProgramsLoading(false);
     }
   };
 
   const loadTraits = async () => {
     const payload = await request<{ data: Trait[] }>("/api/admin/traits");
-    setTraits(payload.data);
+    setTraits(payload.data.map((trait) => normalizeTrait(trait)));
   };
 
   const loadProgramTraits = async (programId: string) => {
@@ -879,7 +1882,7 @@ export function ProgramsPage() {
     const nextState: ProgramBoardState = createEmptyProgramBoardState();
 
     for (const item of payload.data) {
-      nextState[item.bucket].push(item.trait);
+      nextState[item.bucket].push(normalizeTrait(item.trait));
     }
 
     setBoard(nextState);
@@ -889,6 +1892,13 @@ export function ProgramsPage() {
   useEffect(() => {
     void Promise.all([loadPrograms(), loadTraits()]);
   }, []);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedProgramSearch(programSearch);
+    }, 200);
+    return () => window.clearTimeout(timeoutId);
+  }, [programSearch]);
 
   useEffect(() => {
     if (!selectedProgramId) {
@@ -902,16 +1912,80 @@ export function ProgramsPage() {
 
   useEffect(() => {
     if (!selectedProgram) {
-      setProgramForm({ name: "", description: "", degreeLevel: "", department: "" });
+      setProgramForm({ name: "", description: "", degreeLevel: "", department: "", isActive: false });
       return;
     }
     setProgramForm({
       name: selectedProgram.name,
       description: selectedProgram.description ?? "",
       degreeLevel: selectedProgram.degreeLevel ?? "",
-      department: selectedProgram.department ?? ""
+      department: selectedProgram.department ?? "",
+      isActive: selectedProgram.isActive
     });
   }, [selectedProgram]);
+
+  useEffect(() => {
+    if (!selectedProgramId || !focusProgramNameOnSelectRef.current) return;
+    focusProgramNameOnSelectRef.current = false;
+    window.setTimeout(() => {
+      programNameInputRef.current?.focus();
+      programNameInputRef.current?.select();
+    }, 0);
+  }, [selectedProgramId]);
+
+  useEffect(() => {
+    return () => {
+      if (statusToastTimerRef.current !== null) {
+        window.clearTimeout(statusToastTimerRef.current);
+      }
+    };
+  }, []);
+
+  const showStatusToast = (toast: { type: "success" | "error"; message: string }) => {
+    if (statusToastTimerRef.current !== null) {
+      window.clearTimeout(statusToastTimerRef.current);
+    }
+    setStatusToast(toast);
+    statusToastTimerRef.current = window.setTimeout(() => {
+      setStatusToast(null);
+      statusToastTimerRef.current = null;
+    }, 2400);
+  };
+
+  const toggleProgramActive = async (programId: string, nextIsActive: boolean) => {
+    if (statusToggleInFlight) return;
+
+    const previous = programs.find((program) => program.id === programId);
+    if (!previous) return;
+
+    setStatusToggleInFlight(programId);
+    setPrograms((current) =>
+      current.map((program) =>
+        program.id === programId ? { ...program, isActive: nextIsActive, updatedAt: new Date().toISOString() } : program
+      )
+    );
+
+    try {
+      const payload = await request<{ data: Program }>(`/api/admin/programs/${programId}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ isActive: nextIsActive })
+      });
+      const normalized = normalizeProgram(payload.data);
+      setPrograms((current) => current.map((program) => (program.id === programId ? normalized : program)));
+      showStatusToast({
+        type: "success",
+        message: `Program marked ${normalized.isActive ? "Active" : "Inactive"}.`
+      });
+    } catch (error) {
+      setPrograms((current) => current.map((program) => (program.id === programId ? previous : program)));
+      showStatusToast({
+        type: "error",
+        message: error instanceof Error ? error.message : "Failed to update program status."
+      });
+    } finally {
+      setStatusToggleInFlight(null);
+    }
+  };
 
   const createProgram = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -920,46 +1994,47 @@ export function ProgramsPage() {
       body: JSON.stringify(programForm)
     });
     await loadPrograms();
-    setSelectedProgramId(payload.data.id);
+    setSelectedProgramId(normalizeProgram(payload.data).id);
   };
 
-  const startNewProgram = () => {
-    setIsCreatingNew(true);
-    setNewProgramDraft({ name: "", degreeLevel: "", department: "" });
-    setCreateError(null);
-  };
-
-  const cancelNewProgram = () => {
-    setIsCreatingNew(false);
-    setCreateError(null);
-  };
-
-  const createProgramFromDraft = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!newProgramDraft.name.trim() || !newProgramDraft.degreeLevel.trim() || !newProgramDraft.department.trim()) {
-      setCreateError("Name, Degree Level, and Department are required.");
-      return;
+  const startNewProgram = async () => {
+    if (isCreatingProgramDraft) return;
+    const untitledBase = "Untitled program";
+    const untitledNames = new Set(
+      programs
+        .map((program) => program.name)
+        .filter((name) => name === untitledBase || /^Untitled program \d+$/.test(name))
+    );
+    let draftName = untitledBase;
+    if (untitledNames.has(untitledBase)) {
+      let suffix = 2;
+      while (untitledNames.has(`${untitledBase} ${suffix}`)) {
+        suffix += 1;
+      }
+      draftName = `${untitledBase} ${suffix}`;
     }
-    setCreateError(null);
-    setIsCreatingSubmitting(true);
+    setIsCreatingProgramDraft(true);
+    setSaveError(null);
     try {
       const payload = await request<{ data: Program }>("/api/admin/programs", {
         method: "POST",
         body: JSON.stringify({
-          name: newProgramDraft.name.trim(),
+          name: draftName,
           description: "",
-          degreeLevel: newProgramDraft.degreeLevel.trim(),
-          department: newProgramDraft.department.trim()
+          degreeLevel: "",
+          department: ""
         })
       });
+      const normalizedProgram = normalizeProgram(payload.data);
+      setPrograms((prev) => [normalizedProgram, ...prev.filter((program) => program.id !== normalizedProgram.id)]);
+      focusProgramNameOnSelectRef.current = true;
+      setSelectedProgramId(normalizedProgram.id);
       await loadPrograms();
-      setSelectedProgramId(payload.data.id);
-      setIsCreatingNew(false);
-      setNewProgramDraft({ name: "", degreeLevel: "", department: "" });
     } catch (error) {
-      setCreateError(error instanceof Error ? error.message : "Failed to create program.");
+      setSaveError(error instanceof Error ? error.message : "Failed to create program.");
+      setSaveStatus("error");
     } finally {
-      setIsCreatingSubmitting(false);
+      setIsCreatingProgramDraft(false);
     }
   };
 
@@ -1065,6 +2140,55 @@ export function ProgramsPage() {
     return ids;
   }, [board]);
 
+  const nonActiveBoardTraits = useMemo(() => {
+    const items: Array<{ id: string; name: string; status: TraitStatus }> = [];
+    const seen = new Set<string>();
+    for (const bucket of programTraitPriorityBuckets) {
+      for (const trait of board[bucket]) {
+        if (seen.has(trait.id)) continue;
+        const status = trait.status ?? "DRAFT";
+        if (status !== "ACTIVE") {
+          seen.add(trait.id);
+          items.push({
+            id: trait.id,
+            name: trait.name,
+            status
+          });
+        }
+      }
+    }
+    return items;
+  }, [board]);
+
+  const programScoringReadiness = useMemo(() => {
+    const uniqueTraits = new Map<string, TraitStatus>();
+    for (const bucket of programTraitPriorityBuckets) {
+      for (const trait of board[bucket]) {
+        if (!uniqueTraits.has(trait.id)) {
+          uniqueTraits.set(trait.id, trait.status ?? "DRAFT");
+        }
+      }
+    }
+
+    const totalTraits = uniqueTraits.size;
+    const activeTraits = [...uniqueTraits.values()].filter((status) => status === "ACTIVE").length;
+    const missing: string[] = [];
+    if (totalTraits === 0) {
+      missing.push("Add at least 1 trait to the priority board.");
+    }
+    if (activeTraits === 0) {
+      missing.push("Mark at least 1 assigned trait as Active.");
+    }
+
+    return {
+      isScorable: missing.length === 0,
+      missing,
+      totalTraits,
+      activeTraits,
+      nonActiveTraits: Math.max(0, totalTraits - activeTraits)
+    };
+  }, [board]);
+
   const addTraitsToBoard = (traitIds: string[], destinationBucket: ProgramTraitPriorityBucket) => {
     if (!selectedProgramId) return;
 
@@ -1123,88 +2247,68 @@ export function ProgramsPage() {
         </Button>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[280px_320px_1fr]">
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(16rem,18rem)_minmax(18rem,22rem)_minmax(0,1fr)]">
       <Card>
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 className="text-lg font-semibold">Programs</h2>
           <button
             type="button"
-            onClick={startNewProgram}
-            disabled={isCreatingNew}
-            className="rounded-md border border-slate-300 px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            onClick={() => void startNewProgram()}
+            disabled={isCreatingProgramDraft}
+            aria-busy={isCreatingProgramDraft ? "true" : undefined}
+            className={`${subtleButtonClass} disabled:cursor-not-allowed disabled:opacity-60`}
           >
-            + New Program
+            {isCreatingProgramDraft ? "Saving..." : "+ New Program"}
           </button>
         </div>
         <div className="space-y-2">
-          {isCreatingNew && (
-            <form
-              onSubmit={(e) => void createProgramFromDraft(e)}
-              className="rounded-md border border-slate-200 bg-slate-50/80 p-3"
-            >
-              <div className="space-y-2">
-                <div>
-                  <label className={labelClass}>Name</label>
-                  <input
-                    required
-                    className={inputClass}
-                    placeholder="Program name"
-                    value={newProgramDraft.name}
-                    onChange={(e) => setNewProgramDraft((prev) => ({ ...prev, name: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass}>Degree Level</label>
-                  <input
-                    required
-                    className={inputClass}
-                    placeholder="e.g. Bachelor's"
-                    value={newProgramDraft.degreeLevel}
-                    onChange={(e) => setNewProgramDraft((prev) => ({ ...prev, degreeLevel: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass}>Department</label>
-                  <input
-                    required
-                    className={inputClass}
-                    placeholder="e.g. Engineering"
-                    value={newProgramDraft.department}
-                    onChange={(e) => setNewProgramDraft((prev) => ({ ...prev, department: e.target.value }))}
-                  />
-                </div>
-              </div>
-              {createError && <p className="mt-2 text-sm text-red-700" role="alert">{createError}</p>}
-              <div className="mt-3 flex gap-2">
-                <Button type="submit" disabled={isCreatingSubmitting}>
-                  {isCreatingSubmitting ? "Creating..." : "Create"}
-                </Button>
-                <button
-                  type="button"
-                  onClick={cancelNewProgram}
-                  disabled={isCreatingSubmitting}
-                  className={subtleButtonClass}
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
+          {inactiveProgramCount > 0 && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              <p>
+                {inactiveProgramCount} program{inactiveProgramCount !== 1 ? "s are" : " is"} Inactive and will not be used in
+                matchmaking.
+              </p>
+              <button
+                type="button"
+                className="mt-1 font-semibold underline"
+                onClick={() => setProgramStatusFilter((current) => (current === "INACTIVE" ? "ALL" : "INACTIVE"))}
+              >
+                {programStatusFilter === "INACTIVE" ? "Show all" : "Show inactive"}
+              </button>
+            </div>
           )}
-          {programs.length === 0 && !isCreatingNew && (
+          <input
+            className={inputClass}
+            placeholder="Search programs..."
+            value={programSearch}
+            onChange={(event) => setProgramSearch(event.target.value)}
+          />
+          {programStatusFilter === "INACTIVE" && (
+            <p className="text-xs text-slate-600">Filtering to Inactive programs.</p>
+          )}
+          {programsLoading && <p className="text-sm text-slate-500">Loading...</p>}
+          {!programsLoading && programs.length === 0 && (
             <p className="text-sm text-slate-500">No programs yet. Create one to begin.</p>
           )}
-          {programs.map((program) => (
-            <button
+          {!programsLoading && programs.length > 0 && filteredPrograms.length === 0 && (
+            <div className="text-sm text-slate-500">
+              <p>No programs found.</p>
+              <button
+                type="button"
+                className="mt-1 text-xs font-medium text-slate-700 hover:text-slate-900"
+                onClick={() => setProgramSearch("")}
+              >
+                Clear search
+              </button>
+            </div>
+          )}
+          {filteredPrograms.map((program) => (
+            <ProgramLibraryRow
               key={program.id}
-              type="button"
-              onClick={() => setSelectedProgramId(program.id)}
-              className={`w-full rounded-md border p-2 text-left text-sm ${
-                selectedProgramId === program.id ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white"
-              }`}
-            >
-              <div className="font-semibold">{program.name}</div>
-              {program.department && <div className="text-xs text-slate-500">{program.department}</div>}
-            </button>
+              program={program}
+              selected={selectedProgramId === program.id}
+              onSelect={() => setSelectedProgramId(program.id)}
+            />
           ))}
         </div>
       </Card>
@@ -1222,6 +2326,7 @@ export function ProgramsPage() {
           <div>
             <label className={labelClass}>Name</label>
             <input
+              ref={programNameInputRef}
               required
               className={inputClass}
               value={programForm.name}
@@ -1252,6 +2357,34 @@ export function ProgramsPage() {
               onChange={(event) => setProgramForm((prev) => ({ ...prev, department: event.target.value }))}
             />
           </div>
+          <div>
+            <label className={labelClass}>Active</label>
+            <div className="flex items-center justify-between rounded-md border border-slate-300 px-3 py-2">
+              <span className="text-sm text-slate-700">Active programs are included in matchmaking.</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={programForm.isActive}
+                aria-label="Active"
+                disabled={!selectedProgram || statusToggleInFlight === selectedProgram.id}
+                onClick={() => {
+                  if (!selectedProgram) return;
+                  const nextValue = !programForm.isActive;
+                  setProgramForm((prev) => ({ ...prev, isActive: nextValue }));
+                  void toggleProgramActive(selectedProgram.id, nextValue);
+                }}
+                className={`relative inline-flex h-6 w-12 items-center overflow-hidden rounded-full p-0.5 transition-colors ${
+                  programForm.isActive ? "bg-emerald-600" : "bg-slate-300"
+                } disabled:cursor-not-allowed disabled:opacity-60`}
+              >
+                <span
+                  className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
+                    programForm.isActive ? "translate-x-6" : "translate-x-0"
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
           <div className="flex gap-2">
             {!selectedProgram && <Button type="submit">Create Program</Button>}
             {selectedProgram && (
@@ -1264,7 +2397,7 @@ export function ProgramsPage() {
       </Card>
 
       <Card>
-        <div className="mb-3 flex items-center justify-between">
+        <div className="sticky top-0 z-10 mb-3 flex items-center justify-between bg-white pb-2">
           <h2 className="text-lg font-semibold">Trait Priority Board</h2>
           <button
             type="button"
@@ -1279,7 +2412,31 @@ export function ProgramsPage() {
         {!selectedProgram ? (
           <p className="text-sm text-slate-500">Select a program to edit board priorities.</p>
         ) : (
-          <div className="flex max-h-[32rem] flex-col gap-4 overflow-y-auto pr-1">
+          <div className="flex min-h-[20rem] flex-col gap-4 pb-2">
+            {!programScoringReadiness.isScorable && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                <p className="font-medium">This program cannot be scored yet.</p>
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
+                  {programScoringReadiness.missing.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {programScoringReadiness.isScorable && nonActiveBoardTraits.length > 0 && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                <p className="font-medium">
+                  {nonActiveBoardTraits.length} trait{nonActiveBoardTraits.length !== 1 ? "s are" : " is"} not Active and will not affect scoring.
+                </p>
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
+                  {nonActiveBoardTraits.map((trait) => (
+                    <li key={trait.id}>
+                      {trait.name} ({trait.status.replaceAll("_", " ")})
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {programTraitPriorityBuckets.map((bucket) => {
               const isExpanded = expandedBuckets.has(bucket);
               return (
@@ -1370,6 +2527,16 @@ export function ProgramsPage() {
                           <div className="min-w-0">
                             <div className="truncate font-medium">{trait.name}</div>
                             <div className="text-xs text-slate-500">{trait.category}</div>
+                            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                              <span className={`rounded-full px-2 py-0.5 text-[11px] ${traitStatusTone[trait.status as TraitStatus]}`}>
+                                {(trait.status as TraitStatus).replaceAll("_", " ")}
+                              </span>
+                              {trait.status !== "ACTIVE" && (
+                                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800">
+                                  Excluded from scoring
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                         <button
@@ -1443,6 +2610,16 @@ export function ProgramsPage() {
         />
       </Card>
       </div>
+      {statusToast && (
+        <div
+          role="status"
+          className={`fixed bottom-4 right-4 rounded-md px-4 py-2 text-sm text-white shadow-lg ${
+            statusToast.type === "success" ? "bg-emerald-700" : "bg-red-700"
+          }`}
+        >
+          {statusToast.message}
+        </div>
+      )}
     </div>
   );
 }
@@ -1874,7 +3051,8 @@ export function BrandVoicePage() {
 }
 
 const rootElement = document.getElementById("root");
-if (rootElement) {
+const isTestRuntime = import.meta.env.MODE === "test";
+if (rootElement && !isTestRuntime) {
   ReactDOM.createRoot(rootElement).render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
