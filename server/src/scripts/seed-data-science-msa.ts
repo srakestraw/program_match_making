@@ -32,21 +32,23 @@ After reviewing your application, the admissions committee will enroll you in a 
 
 Data Scientist Track - Learn to build solutions with machine learning, deep learning, and generative AI methods across business domains.
 
-• Data collection, cleaning, and processing
-• Feature exploration and engineering
-• Machine learning, deep learning, and generative AI models
-• Model selection with different performance metrics and A/B testing
-• Model interpretability and actionable recommendations
-• Innovative solution ideation for business executives with generative AI models
+Data collection, cleaning, and processing
+Feature exploration and engineering
+Machine learning, deep learning, and generative AI models
+Model selection with different performance metrics and A/B testing
+Model interpretability and actionable recommendations
+Innovative solution ideation for business executives with generative AI models
 
 Citizen Data Scientist Track - Learn to manage machine learning, deep learning, and generative AI projects to drive business solutions.
 
-• Machine learning, deep learning, and generative AI models
-• Performance evaluation and selection
-• Ability to bridge the gap between IT professionals and business stakeholders
-• Expertise in data science tools and terminology
-• Data visualization, evaluation, and interpretation
-• Confidence to leverage "data storytelling" to derive innovative solutions`;
+Machine learning, deep learning, and generative AI models
+Performance evaluation and selection
+Ability to bridge the gap between IT professionals and business stakeholders
+Expertise in data science tools and terminology
+Data visualization, evaluation, and interpretation
+Confidence to leverage "data storytelling" to derive innovative solutions
+
+Both tracks also include the option to pursue a concentration in either data science or legal analytics.`;
 
 type TraitSeed = {
   name: string;

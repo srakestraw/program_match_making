@@ -1,0 +1,18 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import React from "react";
+import { traitCategories } from "@pmm/domain";
+const categoryCounts = (traits) => {
+    const counts = {};
+    for (const trait of traits) {
+        counts[trait.category] = (counts[trait.category] ?? 0) + 1;
+    }
+    return counts;
+};
+export function CategoryRail({ traits, activeCategory, onCategoryChange }) {
+    const counts = React.useMemo(() => categoryCounts(traits), [traits]);
+    return (_jsxs("div", { className: "flex h-full flex-col bg-slate-50/40 p-3", children: [_jsx("h4", { className: "mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500", children: "Category" }), _jsxs("nav", { className: "space-y-1", "aria-label": "Trait categories", children: [_jsxs("button", { type: "button", onClick: () => onCategoryChange("ALL"), className: `w-full rounded-md px-2 py-1.5 text-left text-sm ${activeCategory === "ALL"
+                            ? "bg-slate-200/70 font-medium text-slate-800"
+                            : "text-slate-700 hover:bg-slate-100"}`, children: ["All (", traits.length, ")"] }), traitCategories.map((category) => (_jsxs("button", { type: "button", onClick: () => onCategoryChange(category), className: `w-full rounded-md px-2 py-1.5 text-left text-sm ${activeCategory === category
+                            ? "bg-slate-200/70 font-medium text-slate-800"
+                            : "text-slate-700 hover:bg-slate-100"}`, children: [category, " (", counts[category] ?? 0, ")"] }, category)))] })] }));
+}

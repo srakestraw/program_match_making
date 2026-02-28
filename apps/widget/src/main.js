@@ -26,6 +26,20 @@ const modeOptions = [
 ];
 const transcriptId = (prefix) => `${prefix}-${crypto.randomUUID()}`;
 const toTurnInput = (turns) => turns.map((turn) => ({ ts: turn.ts, speaker: turn.speaker, text: turn.text }));
+const summarizeForPrompt = (value, maxLength = 180) => {
+    const normalized = value.trim().replace(/\s+/g, " ");
+    if (normalized.length <= maxLength) {
+        return normalized;
+    }
+    return `${normalized.slice(0, maxLength).trimEnd()}...`;
+};
+const buildVoicePromptInstruction = (question, previousCandidateResponse) => {
+    const prior = previousCandidateResponse ? summarizeForPrompt(previousCandidateResponse) : null;
+    if (!prior) {
+        return `Start the interview warmly, then ask this question in your own words while preserving intent: "${question.prompt}". Keep it conversational and under two sentences.`;
+    }
+    return `In one short sentence, reference this candidate response naturally: "${prior}". Then ask the next question in your own words while preserving intent: "${question.prompt}". Keep it conversational and under two sentences.`;
+};
 const parseModeParam = (value) => {
     if (value === "voice" || value === "chat" || value === "quiz") {
         return value;
@@ -102,17 +116,52 @@ const VoiceFlow = ({ programId, onRestart }) => {
     const [connectionState, setConnectionState] = useState("idle");
     const [micReady, setMicReady] = useState(false);
     const [deviceLabel, setDeviceLabel] = useState("Unknown microphone");
+    const [activeTraitId, setActiveTraitId] = useState(null);
+    const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
     const realtimeSessionRef = useRef(null);
     const mediaStreamRef = useRef(null);
     const stepRef = useRef("start");
+    const transcriptRef = useRef([]);
+    const questionIndexRef = useRef(0);
+    const lastCandidateTurnIdRef = useRef(null);
     const isOnline = useOnlineStatus();
-    const { sessionId, transcript, setSessionId, addTranscriptTurn, setProgramId, setMode, setScorecard, clear } = useWidgetStore();
+    const { sessionId, transcript, scoringSnapshot, programFit, setSessionId, addTranscriptTurn, setProgramId, setMode, setScorecard, setScoringSnapshot, setProgramFit, clear } = useWidgetStore();
     const createSessionMutation = useMutation({ mutationFn: () => api.createSession("voice", { programId }) });
     const tokenMutation = useMutation({ mutationFn: api.getRealtimeToken });
     const appendTranscriptMutation = useMutation({
         mutationFn: ({ id, turns }) => api.appendTranscript(id, turns)
     });
     const completeSessionMutation = useMutation({ mutationFn: (id) => api.completeSession(id) });
+    const scoreSessionMutation = useMutation({
+        mutationFn: () => api.scoreSession({
+            sessionId: sessionId,
+            mode: "voice",
+            programId,
+            transcriptTurns: transcriptRef.current,
+            activeTraitId: activeTraitId ?? undefined
+        })
+    });
+    const scoreTurnMutation = useMutation({
+        mutationFn: (traitId) => api.scoreSessionTurn({
+            sessionId: sessionId,
+            mode: "voice",
+            programId,
+            transcriptTurns: transcriptRef.current,
+            activeTraitId: traitId
+        })
+    });
+    const questionsQuery = useQuery({
+        queryKey: ["program-questions", programId, "chat"],
+        queryFn: async () => {
+            const response = await api.getProgramQuestions(programId, "chat");
+            return response.data.orderedQuestions;
+        }
+    });
+    const voiceQuestions = questionsQuery.data ?? [];
+    const askQuestion = (question, previousCandidateResponse) => {
+        const instruction = buildVoicePromptInstruction(question, previousCandidateResponse);
+        realtimeSessionRef.current?.promptAssistant(instruction);
+    };
     useEffect(() => {
         stepRef.current = step;
     }, [step]);
@@ -120,7 +169,14 @@ const VoiceFlow = ({ programId, onRestart }) => {
         setProgramId(programId);
         setMode("voice");
         setScorecard(null);
-    }, [programId, setMode, setProgramId, setScorecard]);
+        setScoringSnapshot(null);
+        setProgramFit(null);
+        transcriptRef.current = [];
+        questionIndexRef.current = 0;
+        setCurrentQuestionIndex(0);
+        setActiveTraitId(null);
+        lastCandidateTurnIdRef.current = null;
+    }, [programId, setMode, setProgramId, setProgramFit, setScorecard, setScoringSnapshot]);
     const startPermissionCheck = async () => {
         setError(null);
         try {
@@ -136,8 +192,39 @@ const VoiceFlow = ({ programId, onRestart }) => {
             setStep("permissions");
         }
     };
+    const scoreCandidateTurn = async (candidateTurn) => {
+        if (lastCandidateTurnIdRef.current === candidateTurn.id) {
+            return;
+        }
+        lastCandidateTurnIdRef.current = candidateTurn.id;
+        const currentSessionId = useWidgetStore.getState().sessionId;
+        if (!currentSessionId) {
+            return;
+        }
+        const currentQuestion = voiceQuestions[questionIndexRef.current];
+        const currentTraitId = currentQuestion?.traitId ?? activeTraitId ?? undefined;
+        try {
+            const liveScore = await scoreTurnMutation.mutateAsync(currentTraitId);
+            setScorecard(liveScore.data);
+            setScoringSnapshot(liveScore.data.scoring_snapshot);
+            setProgramFit(liveScore.data.program_fit);
+        }
+        catch (scoreError) {
+            setError(scoreError instanceof Error ? scoreError.message : "Could not update voice scoring.");
+        }
+        const nextIndex = questionIndexRef.current + 1;
+        if (nextIndex >= voiceQuestions.length) {
+            return;
+        }
+        const nextQuestion = voiceQuestions[nextIndex];
+        questionIndexRef.current = nextIndex;
+        setCurrentQuestionIndex(nextIndex);
+        setActiveTraitId(nextQuestion.traitId);
+        askQuestion(nextQuestion, candidateTurn.text);
+    };
     const onTranscriptTurn = (turn) => {
         addTranscriptTurn(turn);
+        transcriptRef.current.push({ ts: turn.ts, speaker: turn.speaker, text: turn.text });
         const id = useWidgetStore.getState().sessionId;
         if (id) {
             void appendTranscriptMutation.mutateAsync({
@@ -145,10 +232,21 @@ const VoiceFlow = ({ programId, onRestart }) => {
                 turns: [{ ts: turn.ts, speaker: turn.speaker, text: turn.text }]
             });
         }
+        if (turn.speaker === "candidate") {
+            void scoreCandidateTurn(turn);
+        }
     };
     const connectRealtime = async () => {
         if (!mediaStreamRef.current || !micReady) {
             setError("Microphone is not ready.");
+            return;
+        }
+        if (questionsQuery.isLoading) {
+            setError("Loading trait prompts. Please try again in a moment.");
+            return;
+        }
+        if (voiceQuestions.length === 0) {
+            setError("No chat trait questions are configured for this program.");
             return;
         }
         setError(null);
@@ -168,6 +266,18 @@ const VoiceFlow = ({ programId, onRestart }) => {
             realtimeSession.setAudioTrack(track);
             realtimeSessionRef.current = realtimeSession;
             await realtimeSession.connect(token.client_secret.value);
+            setScoringSnapshot(createdSession.scoring_snapshot ?? null);
+            setProgramFit(createdSession.program_fit ?? null);
+            transcriptRef.current = [];
+            questionIndexRef.current = 0;
+            setCurrentQuestionIndex(0);
+            setActiveTraitId(voiceQuestions[0]?.traitId ?? null);
+            lastCandidateTurnIdRef.current = null;
+            const traitNames = Array.from(new Set(voiceQuestions.map((question) => question.traitName))).join(", ");
+            realtimeSession.updateInstructions(`You are a warm, professional interviewer. Keep the exchange conversational and concise. Focus on these traits: ${traitNames}. Ask one question at a time, and do not answer on behalf of the candidate.`);
+            if (voiceQuestions[0]) {
+                askQuestion(voiceQuestions[0]);
+            }
             setStep("session");
         }
         catch (connectError) {
@@ -180,6 +290,10 @@ const VoiceFlow = ({ programId, onRestart }) => {
             await realtimeSessionRef.current?.disconnect();
             if (sessionId) {
                 await completeSessionMutation.mutateAsync(sessionId);
+                const score = await scoreSessionMutation.mutateAsync();
+                setScorecard(score.data);
+                setScoringSnapshot(score.data.scoring_snapshot);
+                setProgramFit(score.data.program_fit);
             }
         }
         catch {
@@ -199,6 +313,10 @@ const VoiceFlow = ({ programId, onRestart }) => {
         setMode("voice");
         setConnectionState("idle");
         setMicReady(false);
+        setActiveTraitId(null);
+        setCurrentQuestionIndex(0);
+        questionIndexRef.current = 0;
+        transcriptRef.current = [];
         setError(null);
         setStep("start");
         onRestart();
@@ -214,9 +332,14 @@ const VoiceFlow = ({ programId, onRestart }) => {
             return "Error";
         return "Idle";
     }, [connectionState]);
-    return (_jsx("main", { className: "mx-auto flex min-h-screen max-w-3xl items-center px-4 py-10", children: _jsxs(Card, { children: [step === "start" && (_jsxs("section", { className: "space-y-4", children: [_jsx("h1", { className: "text-3xl font-bold", children: "Voice Interview" }), _jsx("p", { className: "text-sm text-slate-600", children: "We only capture your interview audio and transcript for evaluation. Click start when you are ready." }), _jsx(Button, { onClick: startPermissionCheck, children: "Start voice interview" })] })), step === "permissions" && (_jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "Mic and device check" }), _jsxs("p", { className: "text-sm text-slate-700", children: ["Device: ", deviceLabel] }), _jsxs("p", { className: "text-sm text-slate-700", children: ["Permission: ", micReady ? "Granted" : "Not granted"] }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: connectRealtime, disabled: !isOnline || !micReady || createSessionMutation.isPending || tokenMutation.isPending, children: "Continue to interview" }), _jsx(Button, { className: "bg-slate-500", onClick: startPermissionCheck, children: "Retry device check" })] })] })), step === "session" && (_jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "In-session voice" }), _jsxs("p", { className: "text-sm text-slate-700", children: ["Connection status: ", statusLabel] }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onMouseDown: () => realtimeSessionRef.current?.setPushToTalk(true), onMouseUp: () => realtimeSessionRef.current?.setPushToTalk(false), onMouseLeave: () => realtimeSessionRef.current?.setPushToTalk(false), onTouchStart: () => realtimeSessionRef.current?.setPushToTalk(true), onTouchEnd: () => realtimeSessionRef.current?.setPushToTalk(false), disabled: !isOnline || connectionState !== "connected", children: "Hold to talk" }), _jsx(Button, { className: "bg-slate-500", onClick: connectRealtime, disabled: !isOnline || tokenMutation.isPending, children: "Retry connection" }), _jsx(Button, { className: "bg-red-700", onClick: endSession, children: "End session" })] }), _jsxs("div", { className: "max-h-72 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3", children: [transcript.length === 0 && _jsx("p", { className: "text-sm text-slate-500", children: "Transcript appears here once the conversation starts." }), transcript.map((turn) => (_jsxs("div", { className: "rounded bg-slate-50 p-2 text-sm", children: [_jsxs("span", { className: "font-semibold capitalize", children: [turn.speaker, ":"] }), " ", turn.text] }, `${turn.id}-${turn.ts}`)))] })] })), step === "end" && (_jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "Interview complete" }), _jsxs("div", { className: "max-h-72 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3", children: [transcript.map((turn) => (_jsxs("div", { className: "rounded bg-slate-50 p-2 text-sm", children: [_jsxs("span", { className: "font-semibold capitalize", children: [turn.speaker, ":"] }), " ", turn.text] }, `${turn.id}-${turn.ts}`))), transcript.length === 0 && _jsx("p", { className: "text-sm text-slate-500", children: "No transcript captured." })] }), _jsx(Button, { onClick: () => {
-                                navigate("/widget/results");
-                            }, children: "Save and view results" }), _jsx(Button, { className: "bg-slate-500", onClick: resetFlow, children: "Start over" })] })), !isOnline && _jsx("p", { className: "mt-4 text-sm text-red-700", children: "You are offline. Reconnect to continue." }), error && _jsx("p", { className: "mt-4 text-sm text-red-700", children: error })] }) }));
+    const currentQuestion = voiceQuestions[currentQuestionIndex];
+    return (_jsx("main", { className: "mx-auto min-h-screen max-w-7xl px-4 py-8", children: _jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]", children: [_jsxs(Card, { children: [step === "start" && (_jsxs("section", { className: "space-y-4", children: [_jsx("h1", { className: "text-3xl font-bold", children: "Voice Interview" }), _jsx("p", { className: "text-sm text-slate-600", children: "We only capture your interview audio and transcript for evaluation. Click start when you are ready." }), _jsx(Button, { onClick: startPermissionCheck, children: "Start voice interview" })] })), step === "permissions" && (_jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "Mic and device check" }), _jsxs("p", { className: "text-sm text-slate-700", children: ["Device: ", deviceLabel] }), _jsxs("p", { className: "text-sm text-slate-700", children: ["Permission: ", micReady ? "Granted" : "Not granted"] }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: connectRealtime, disabled: !isOnline ||
+                                                !micReady ||
+                                                questionsQuery.isLoading ||
+                                                createSessionMutation.isPending ||
+                                                tokenMutation.isPending, children: "Continue to interview" }), _jsx(Button, { className: "bg-slate-500", onClick: startPermissionCheck, children: "Retry device check" })] })] })), step === "session" && (_jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "In-session voice" }), _jsxs("p", { className: "text-sm text-slate-700", children: ["Connection status: ", statusLabel] }), currentQuestion && (_jsxs("p", { className: "rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700", children: ["Current trait: ", _jsx("span", { className: "font-semibold", children: currentQuestion.traitName })] })), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onMouseDown: () => realtimeSessionRef.current?.setPushToTalk(true), onMouseUp: () => realtimeSessionRef.current?.setPushToTalk(false), onMouseLeave: () => realtimeSessionRef.current?.setPushToTalk(false), onTouchStart: () => realtimeSessionRef.current?.setPushToTalk(true), onTouchEnd: () => realtimeSessionRef.current?.setPushToTalk(false), disabled: !isOnline || connectionState !== "connected", children: "Hold to talk" }), _jsx(Button, { className: "bg-slate-500", onClick: connectRealtime, disabled: !isOnline || tokenMutation.isPending, children: "Retry connection" }), _jsx(Button, { className: "bg-red-700", onClick: endSession, children: "End session" })] }), _jsxs("div", { className: "max-h-72 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3", children: [transcript.length === 0 && _jsx("p", { className: "text-sm text-slate-500", children: "Transcript appears here once the conversation starts." }), transcript.map((turn) => (_jsxs("div", { className: "rounded bg-slate-50 p-2 text-sm", children: [_jsxs("span", { className: "font-semibold capitalize", children: [turn.speaker, ":"] }), " ", turn.text] }, `${turn.id}-${turn.ts}`)))] })] })), step === "end" && (_jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "Interview complete" }), _jsxs("div", { className: "max-h-72 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3", children: [transcript.map((turn) => (_jsxs("div", { className: "rounded bg-slate-50 p-2 text-sm", children: [_jsxs("span", { className: "font-semibold capitalize", children: [turn.speaker, ":"] }), " ", turn.text] }, `${turn.id}-${turn.ts}`))), transcript.length === 0 && _jsx("p", { className: "text-sm text-slate-500", children: "No transcript captured." })] }), _jsx(Button, { onClick: () => {
+                                        navigate("/widget/results");
+                                    }, children: "Save and view results" }), _jsx(Button, { className: "bg-slate-500", onClick: resetFlow, children: "Start over" })] })), !isOnline && _jsx("p", { className: "mt-4 text-sm text-red-700", children: "You are offline. Reconnect to continue." }), error && _jsx("p", { className: "mt-4 text-sm text-red-700", children: error })] }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, activeTraitId: activeTraitId, done: step === "end" })] }) }));
 };
 const ChatFlow = ({ programId, onRestart }) => {
     const navigate = useNavigate();
@@ -547,7 +670,7 @@ const ResultsPage = () => {
             .slice(0, 3);
     }, [scorecard]);
     const leadCapture = (_jsxs("div", { className: "rounded-md border border-slate-200 p-3", children: [_jsx("p", { className: "mb-2 text-sm font-semibold text-slate-900", children: "Request Info / Talk to an advisor" }), !leadSubmitted && (_jsxs("div", { className: "space-y-2", children: [_jsxs("div", { className: "grid gap-2 sm:grid-cols-2", children: [_jsx("input", { className: "rounded-md border border-slate-300 px-3 py-2 text-sm", placeholder: "First name", value: firstName, onChange: (event) => setFirstName(event.target.value) }), _jsx("input", { className: "rounded-md border border-slate-300 px-3 py-2 text-sm", placeholder: "Last name", value: lastName, onChange: (event) => setLastName(event.target.value) })] }), _jsxs("div", { className: "grid gap-2 sm:grid-cols-2", children: [_jsx("input", { className: "rounded-md border border-slate-300 px-3 py-2 text-sm", placeholder: "Email", type: "email", value: email, onChange: (event) => setEmail(event.target.value) }), _jsx("input", { className: "rounded-md border border-slate-300 px-3 py-2 text-sm", placeholder: "Phone (optional)", value: phone, onChange: (event) => setPhone(event.target.value) })] }), _jsxs("select", { className: "w-full rounded-md border border-slate-300 px-3 py-2 text-sm", value: preferredChannel, onChange: (event) => setPreferredChannel(event.target.value), children: [_jsx("option", { value: "email", children: "Email" }), _jsx("option", { value: "sms", children: "SMS" }), _jsx("option", { value: "phone", children: "Phone" })] }), _jsx(Button, { onClick: submitLead, disabled: createLeadMutation.isPending, children: createLeadMutation.isPending ? "Submitting..." : "Request Info" }), leadValidationError && _jsx("p", { className: "text-sm text-red-700", children: leadValidationError }), createLeadMutation.error && _jsx("p", { className: "text-sm text-red-700", children: "Failed to submit lead." })] })), leadSubmitted && _jsx("p", { className: "text-sm text-emerald-700", children: "Thanks - we'll reach out soon." })] }));
-    return (_jsx("main", { className: "mx-auto min-h-screen max-w-7xl px-4 py-8", children: _jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]", children: [_jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-2xl font-semibold", children: "Results" }), !scorecard && (_jsxs(_Fragment, { children: [_jsx("p", { className: "mb-4 text-sm text-slate-600", children: mode === "voice" ? "Voice scoring is not enabled in this step." : "No scorecard is available for this session." }), leadCapture, _jsx(Button, { onClick: () => navigate("/widget"), children: "Back to start" })] })), scorecard && (_jsxs("section", { className: "space-y-4", children: [_jsxs("p", { className: "text-sm text-slate-700", children: ["Overall score: ", scorecard.overallScore.toFixed(2), " / 5.00"] }), _jsxs("div", { className: "rounded-md border border-slate-200 p-3", children: [_jsx("p", { className: "mb-2 text-sm font-semibold text-slate-900", children: "Top contributing traits" }), _jsx("div", { className: "space-y-1", children: topTraits.map((trait) => (_jsxs("p", { className: "text-sm text-slate-700", children: [trait.traitName, ": ", trait.score0to5.toFixed(2), " (", trait.bucket, ")"] }, trait.traitId))) })] }), grouped.map((group) => (_jsxs("div", { className: "rounded-md border border-slate-200 p-3", children: [_jsx("p", { className: "mb-2 text-sm font-semibold text-slate-900", children: group.bucket.replaceAll("_", " ") }), _jsx("div", { className: "space-y-2", children: group.items.map((item) => (_jsxs("div", { className: "rounded bg-slate-50 p-2 text-sm text-slate-700", children: [_jsxs("p", { className: "font-semibold text-slate-900", children: [item.traitName, ": ", item.score0to5.toFixed(2), " / 5"] }), _jsxs("p", { children: ["Confidence: ", confidenceLabel(item.confidence)] }), (item.evidence ?? []).length > 0 && _jsxs("p", { className: "mt-1 text-xs text-slate-600", children: ["Evidence: ", item.evidence.slice(0, 2).join(" | ")] }), item.rationale && _jsxs("p", { className: "mt-1 text-xs text-slate-600", children: ["Why this score: ", item.rationale] })] }, item.traitId))) })] }, group.bucket))), leadCapture, _jsx(Button, { className: "bg-slate-500", onClick: () => navigate("/widget"), children: "Start over" })] }))] }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, done: true })] }) }));
+    return (_jsx("main", { className: "mx-auto min-h-screen max-w-7xl px-4 py-8", children: _jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]", children: [_jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-2xl font-semibold", children: "Results" }), !scorecard && (_jsxs(_Fragment, { children: [_jsx("p", { className: "mb-4 text-sm text-slate-600", children: "No scorecard is available for this session." }), leadCapture, _jsx(Button, { onClick: () => navigate("/widget"), children: "Back to start" })] })), scorecard && (_jsxs("section", { className: "space-y-4", children: [_jsxs("p", { className: "text-sm text-slate-700", children: ["Overall score: ", scorecard.overallScore.toFixed(2), " / 5.00"] }), _jsxs("div", { className: "rounded-md border border-slate-200 p-3", children: [_jsx("p", { className: "mb-2 text-sm font-semibold text-slate-900", children: "Top contributing traits" }), _jsx("div", { className: "space-y-1", children: topTraits.map((trait) => (_jsxs("p", { className: "text-sm text-slate-700", children: [trait.traitName, ": ", trait.score0to5.toFixed(2), " (", trait.bucket, ")"] }, trait.traitId))) })] }), grouped.map((group) => (_jsxs("div", { className: "rounded-md border border-slate-200 p-3", children: [_jsx("p", { className: "mb-2 text-sm font-semibold text-slate-900", children: group.bucket.replaceAll("_", " ") }), _jsx("div", { className: "space-y-2", children: group.items.map((item) => (_jsxs("div", { className: "rounded bg-slate-50 p-2 text-sm text-slate-700", children: [_jsxs("p", { className: "font-semibold text-slate-900", children: [item.traitName, ": ", item.score0to5.toFixed(2), " / 5"] }), _jsxs("p", { children: ["Confidence: ", confidenceLabel(item.confidence)] }), (item.evidence ?? []).length > 0 && _jsxs("p", { className: "mt-1 text-xs text-slate-600", children: ["Evidence: ", item.evidence.slice(0, 2).join(" | ")] }), item.rationale && _jsxs("p", { className: "mt-1 text-xs text-slate-600", children: ["Why this score: ", item.rationale] })] }, item.traitId))) })] }, group.bucket))), leadCapture, _jsx(Button, { className: "bg-slate-500", onClick: () => navigate("/widget"), children: "Start over" })] }))] }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, done: true })] }) }));
 };
 const App = () => (_jsx(BrowserRouter, { children: _jsxs(Routes, { children: [_jsx(Route, { path: "/", element: _jsx(Navigate, { to: "/widget", replace: true }) }), _jsx(Route, { path: "/widget", element: _jsx(WidgetSetup, {}) }), _jsx(Route, { path: "/widget/results", element: _jsx(ResultsPage, {}) })] }) }));
 ReactDOM.createRoot(document.getElementById("root")).render(_jsx(React.StrictMode, { children: _jsx(QueryClientProvider, { client: queryClient, children: _jsx(App, {}) }) }));

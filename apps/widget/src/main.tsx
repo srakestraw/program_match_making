@@ -41,6 +41,23 @@ const transcriptId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 
 const toTurnInput = (turns: TranscriptTurn[]) => turns.map((turn) => ({ ts: turn.ts, speaker: turn.speaker, text: turn.text }));
 
+const summarizeForPrompt = (value: string, maxLength = 180) => {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength).trimEnd()}...`;
+};
+
+const buildVoicePromptInstruction = (question: ProgramQuestion, previousCandidateResponse?: string) => {
+  const prior = previousCandidateResponse ? summarizeForPrompt(previousCandidateResponse) : null;
+  if (!prior) {
+    return `Start the interview warmly, then ask this question in your own words while preserving intent: "${question.prompt}". Keep it conversational and under two sentences.`;
+  }
+
+  return `In one short sentence, reference this candidate response naturally: "${prior}". Then ask the next question in your own words while preserving intent: "${question.prompt}". Keep it conversational and under two sentences.`;
+};
+
 const parseModeParam = (value: string | null): InterviewMode | null => {
   if (value === "voice" || value === "chat" || value === "quiz") {
     return value;
@@ -223,13 +240,31 @@ const VoiceFlow = ({ programId, onRestart }: { programId: string; onRestart: () 
   const [connectionState, setConnectionState] = useState<ConnectionState>("idle");
   const [micReady, setMicReady] = useState(false);
   const [deviceLabel, setDeviceLabel] = useState("Unknown microphone");
+  const [activeTraitId, setActiveTraitId] = useState<string | null>(null);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
 
   const realtimeSessionRef = useRef<RealtimeSession | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const stepRef = useRef<VoiceStep>("start");
+  const transcriptRef = useRef<TranscriptTurnInput[]>([]);
+  const questionIndexRef = useRef(0);
+  const lastCandidateTurnIdRef = useRef<string | null>(null);
   const isOnline = useOnlineStatus();
 
-  const { sessionId, transcript, setSessionId, addTranscriptTurn, setProgramId, setMode, setScorecard, clear } = useWidgetStore();
+  const {
+    sessionId,
+    transcript,
+    scoringSnapshot,
+    programFit,
+    setSessionId,
+    addTranscriptTurn,
+    setProgramId,
+    setMode,
+    setScorecard,
+    setScoringSnapshot,
+    setProgramFit,
+    clear
+  } = useWidgetStore();
 
   const createSessionMutation = useMutation({ mutationFn: () => api.createSession("voice", { programId }) });
   const tokenMutation = useMutation({ mutationFn: api.getRealtimeToken });
@@ -238,6 +273,40 @@ const VoiceFlow = ({ programId, onRestart }: { programId: string; onRestart: () 
       api.appendTranscript(id, turns)
   });
   const completeSessionMutation = useMutation({ mutationFn: (id: string) => api.completeSession(id) });
+  const scoreSessionMutation = useMutation({
+    mutationFn: () =>
+      api.scoreSession({
+        sessionId: sessionId!,
+        mode: "voice",
+        programId,
+        transcriptTurns: transcriptRef.current,
+        activeTraitId: activeTraitId ?? undefined
+      })
+  });
+  const scoreTurnMutation = useMutation({
+    mutationFn: (traitId: string | undefined) =>
+      api.scoreSessionTurn({
+        sessionId: sessionId!,
+        mode: "voice",
+        programId,
+        transcriptTurns: transcriptRef.current,
+        activeTraitId: traitId
+      })
+  });
+
+  const questionsQuery = useQuery({
+    queryKey: ["program-questions", programId, "chat"],
+    queryFn: async () => {
+      const response = await api.getProgramQuestions(programId, "chat");
+      return response.data.orderedQuestions;
+    }
+  });
+  const voiceQuestions = questionsQuery.data ?? [];
+
+  const askQuestion = (question: ProgramQuestion, previousCandidateResponse?: string) => {
+    const instruction = buildVoicePromptInstruction(question, previousCandidateResponse);
+    realtimeSessionRef.current?.promptAssistant(instruction);
+  };
 
   useEffect(() => {
     stepRef.current = step;
@@ -247,7 +316,14 @@ const VoiceFlow = ({ programId, onRestart }: { programId: string; onRestart: () 
     setProgramId(programId);
     setMode("voice");
     setScorecard(null);
-  }, [programId, setMode, setProgramId, setScorecard]);
+    setScoringSnapshot(null);
+    setProgramFit(null);
+    transcriptRef.current = [];
+    questionIndexRef.current = 0;
+    setCurrentQuestionIndex(0);
+    setActiveTraitId(null);
+    lastCandidateTurnIdRef.current = null;
+  }, [programId, setMode, setProgramId, setProgramFit, setScorecard, setScoringSnapshot]);
 
   const startPermissionCheck = async () => {
     setError(null);
@@ -264,8 +340,44 @@ const VoiceFlow = ({ programId, onRestart }: { programId: string; onRestart: () 
     }
   };
 
+  const scoreCandidateTurn = async (candidateTurn: TranscriptTurn) => {
+    if (lastCandidateTurnIdRef.current === candidateTurn.id) {
+      return;
+    }
+    lastCandidateTurnIdRef.current = candidateTurn.id;
+
+    const currentSessionId = useWidgetStore.getState().sessionId;
+    if (!currentSessionId) {
+      return;
+    }
+
+    const currentQuestion = voiceQuestions[questionIndexRef.current];
+    const currentTraitId = currentQuestion?.traitId ?? activeTraitId ?? undefined;
+
+    try {
+      const liveScore = await scoreTurnMutation.mutateAsync(currentTraitId);
+      setScorecard(liveScore.data);
+      setScoringSnapshot(liveScore.data.scoring_snapshot);
+      setProgramFit(liveScore.data.program_fit);
+    } catch (scoreError) {
+      setError(scoreError instanceof Error ? scoreError.message : "Could not update voice scoring.");
+    }
+
+    const nextIndex = questionIndexRef.current + 1;
+    if (nextIndex >= voiceQuestions.length) {
+      return;
+    }
+
+    const nextQuestion = voiceQuestions[nextIndex];
+    questionIndexRef.current = nextIndex;
+    setCurrentQuestionIndex(nextIndex);
+    setActiveTraitId(nextQuestion.traitId);
+    askQuestion(nextQuestion, candidateTurn.text);
+  };
+
   const onTranscriptTurn = (turn: TranscriptTurn) => {
     addTranscriptTurn(turn);
+    transcriptRef.current.push({ ts: turn.ts, speaker: turn.speaker, text: turn.text });
     const id = useWidgetStore.getState().sessionId;
     if (id) {
       void appendTranscriptMutation.mutateAsync({
@@ -273,11 +385,22 @@ const VoiceFlow = ({ programId, onRestart }: { programId: string; onRestart: () 
         turns: [{ ts: turn.ts, speaker: turn.speaker, text: turn.text }]
       });
     }
+    if (turn.speaker === "candidate") {
+      void scoreCandidateTurn(turn);
+    }
   };
 
   const connectRealtime = async () => {
     if (!mediaStreamRef.current || !micReady) {
       setError("Microphone is not ready.");
+      return;
+    }
+    if (questionsQuery.isLoading) {
+      setError("Loading trait prompts. Please try again in a moment.");
+      return;
+    }
+    if (voiceQuestions.length === 0) {
+      setError("No chat trait questions are configured for this program.");
       return;
     }
 
@@ -302,6 +425,21 @@ const VoiceFlow = ({ programId, onRestart }: { programId: string; onRestart: () 
       realtimeSession.setAudioTrack(track);
       realtimeSessionRef.current = realtimeSession;
       await realtimeSession.connect(token.client_secret.value);
+      setScoringSnapshot(createdSession.scoring_snapshot ?? null);
+      setProgramFit(createdSession.program_fit ?? null);
+      transcriptRef.current = [];
+      questionIndexRef.current = 0;
+      setCurrentQuestionIndex(0);
+      setActiveTraitId(voiceQuestions[0]?.traitId ?? null);
+      lastCandidateTurnIdRef.current = null;
+
+      const traitNames = Array.from(new Set(voiceQuestions.map((question) => question.traitName))).join(", ");
+      realtimeSession.updateInstructions(
+        `You are a warm, professional interviewer. Keep the exchange conversational and concise. Focus on these traits: ${traitNames}. Ask one question at a time, and do not answer on behalf of the candidate.`
+      );
+      if (voiceQuestions[0]) {
+        askQuestion(voiceQuestions[0]);
+      }
       setStep("session");
     } catch (connectError) {
       setError(connectError instanceof Error ? connectError.message : "Failed to start voice session.");
@@ -314,6 +452,10 @@ const VoiceFlow = ({ programId, onRestart }: { programId: string; onRestart: () 
       await realtimeSessionRef.current?.disconnect();
       if (sessionId) {
         await completeSessionMutation.mutateAsync(sessionId);
+        const score = await scoreSessionMutation.mutateAsync();
+        setScorecard(score.data);
+        setScoringSnapshot(score.data.scoring_snapshot);
+        setProgramFit(score.data.program_fit);
       }
     } catch {
       setError("Session ended with errors. Transcript was kept locally.");
@@ -332,6 +474,10 @@ const VoiceFlow = ({ programId, onRestart }: { programId: string; onRestart: () 
     setMode("voice");
     setConnectionState("idle");
     setMicReady(false);
+    setActiveTraitId(null);
+    setCurrentQuestionIndex(0);
+    questionIndexRef.current = 0;
+    transcriptRef.current = [];
     setError(null);
     setStep("start");
     onRestart();
@@ -345,8 +491,11 @@ const VoiceFlow = ({ programId, onRestart }: { programId: string; onRestart: () 
     return "Idle";
   }, [connectionState]);
 
+  const currentQuestion = voiceQuestions[currentQuestionIndex];
+
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl items-center px-4 py-10">
+    <main className="mx-auto min-h-screen max-w-7xl px-4 py-8">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]">
       <Card>
         {step === "start" && (
           <section className="space-y-4">
@@ -364,7 +513,16 @@ const VoiceFlow = ({ programId, onRestart }: { programId: string; onRestart: () 
             <p className="text-sm text-slate-700">Device: {deviceLabel}</p>
             <p className="text-sm text-slate-700">Permission: {micReady ? "Granted" : "Not granted"}</p>
             <div className="flex gap-2">
-              <Button onClick={connectRealtime} disabled={!isOnline || !micReady || createSessionMutation.isPending || tokenMutation.isPending}>
+              <Button
+                onClick={connectRealtime}
+                disabled={
+                  !isOnline ||
+                  !micReady ||
+                  questionsQuery.isLoading ||
+                  createSessionMutation.isPending ||
+                  tokenMutation.isPending
+                }
+              >
                 Continue to interview
               </Button>
               <Button className="bg-slate-500" onClick={startPermissionCheck}>
@@ -378,6 +536,11 @@ const VoiceFlow = ({ programId, onRestart }: { programId: string; onRestart: () 
           <section className="space-y-4">
             <h2 className="text-2xl font-semibold">In-session voice</h2>
             <p className="text-sm text-slate-700">Connection status: {statusLabel}</p>
+            {currentQuestion && (
+              <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                Current trait: <span className="font-semibold">{currentQuestion.traitName}</span>
+              </p>
+            )}
             <div className="flex gap-2">
               <Button
                 onMouseDown={() => realtimeSessionRef.current?.setPushToTalk(true)}
@@ -434,6 +597,8 @@ const VoiceFlow = ({ programId, onRestart }: { programId: string; onRestart: () 
         {!isOnline && <p className="mt-4 text-sm text-red-700">You are offline. Reconnect to continue.</p>}
         {error && <p className="mt-4 text-sm text-red-700">{error}</p>}
       </Card>
+      <LiveInsightsSidebar snapshot={scoringSnapshot} programFit={programFit} activeTraitId={activeTraitId} done={step === "end"} />
+      </div>
     </main>
   );
 };
@@ -1012,9 +1177,7 @@ const ResultsPage = () => {
 
         {!scorecard && (
           <>
-            <p className="mb-4 text-sm text-slate-600">
-              {mode === "voice" ? "Voice scoring is not enabled in this step." : "No scorecard is available for this session."}
-            </p>
+            <p className="mb-4 text-sm text-slate-600">No scorecard is available for this session.</p>
             {leadCapture}
             <Button onClick={() => navigate("/widget")}>Back to start</Button>
           </>

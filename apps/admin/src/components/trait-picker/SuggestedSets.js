@@ -1,0 +1,6 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+export function SuggestedSets({ sets, onPreview, onAddSet }) {
+    if (sets.length === 0)
+        return null;
+    return (_jsxs("div", { className: "mb-4", children: [_jsx("h4", { className: "mb-2 text-sm font-semibold text-slate-700", children: "Suggested sets" }), _jsx("div", { className: "grid gap-2 sm:grid-cols-2 lg:grid-cols-3", children: sets.map((set) => (_jsxs("div", { className: "rounded-lg border border-slate-200 bg-white p-3 shadow-sm", children: [_jsx("div", { className: "mb-2 font-medium text-slate-800", children: set.name }), _jsxs("p", { className: "mb-3 text-xs text-slate-500", children: [set.traitIds.length, " traits"] }), _jsxs("div", { className: "flex flex-wrap gap-1.5", children: [_jsx("button", { type: "button", onClick: () => onPreview(set.traitIds), className: "rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50", children: "Preview" }), _jsx("button", { type: "button", onClick: () => onAddSet(set.traitIds), className: "rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs font-medium text-white hover:bg-slate-700", children: "Add set" })] })] }, set.id))) })] }));
+}

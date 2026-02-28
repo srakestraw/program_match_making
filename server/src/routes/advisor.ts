@@ -39,7 +39,13 @@ const toNull = (value?: string | null) => {
 const parseEvidence = (raw: string) => {
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.map((entry) => String(entry)) : [];
+    if (Array.isArray(parsed)) {
+      return parsed.map((entry) => String(entry));
+    }
+    if (parsed && typeof parsed === "object" && Array.isArray((parsed as { evidence?: unknown }).evidence)) {
+      return ((parsed as { evidence: unknown[] }).evidence ?? []).map((entry) => String(entry));
+    }
+    return [];
   } catch {
     return [];
   }

@@ -175,7 +175,6 @@ model TraitQuestion {
   type         TraitQuestionType
   prompt       String
   optionsJson  String?
-  scoringHints String?
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
   trait        Trait             @relation(fields: [traitId], references: [id], onDelete: Cascade)

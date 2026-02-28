@@ -7,6 +7,7 @@ import {
   CanonicalExample,
   ToneProfile,
   ProgramTraitPriorityBucket,
+  programTraitPriorityBuckets,
   TraitCategory,
   brandVoiceAvoidFlagOptions,
   brandVoiceStyleFlagOptions,
@@ -24,6 +25,7 @@ import { GeneratedSamplesPanel } from "./components/brand-voice/GeneratedSamples
 import { SimulationLab } from "./components/brand-voice/SimulationLab";
 import { ToneSelector } from "./components/brand-voice/ToneSelector";
 import { ToneSliders } from "./components/brand-voice/ToneSliders";
+import { TraitPickerModal } from "./components/trait-picker/TraitPickerModal";
 import {
   BoardTrait,
   ProgramBoardState,
@@ -58,9 +60,17 @@ type TraitQuestion = {
   type: "chat" | "quiz";
   prompt: string;
   options: string[];
-  scoringHints: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+type TraitFormState = {
+  name: string;
+  category: TraitCategory;
+  definition: string;
+  rubricPositiveSignals: string;
+  rubricNegativeSignals: string;
+  rubricFollowUps: string;
 };
 
 type Program = {
@@ -143,18 +153,32 @@ function buildSignalSuggestions(kind: "positive" | "negative", name: string): st
     return [
       `Provides concrete examples that demonstrate ${baseName.toLowerCase()}.`,
       `Explains decisions with clear reasoning and tradeoffs.`,
-      "Shows reflection on outcomes and specific lessons learned.",
-      "Connects prior experience to future program contribution.",
-      "Communicates confidently while remaining precise and honest."
+      "Shows reflection on outcomes and specific lessons learned."
     ];
   }
   return [
     `Struggles to provide specific evidence of ${baseName.toLowerCase()}.`,
     "Uses vague or contradictory responses without clear reasoning.",
-    "Deflects responsibility and avoids discussing improvement areas.",
-    "Cannot connect past work to expected program demands.",
-    "Shows low awareness of impact, collaboration, or accountability."
+    "Deflects responsibility and avoids discussing improvement areas."
   ];
+}
+
+function buildQuestionPromptDraft(trait: Trait, type: "chat" | "quiz"): string {
+  const traitName = trait.name.trim() || "this trait";
+  const traitCategory = trait.category.toLowerCase().replaceAll("_", " ");
+  const definition = (trait.definition ?? "").trim();
+
+  if (type === "quiz") {
+    if (definition.length > 0) {
+      return `Which response best demonstrates ${traitName.toLowerCase()} based on this definition: ${definition}?`;
+    }
+    return `Which option best demonstrates strong ${traitName.toLowerCase()} in a ${traitCategory} scenario?`;
+  }
+
+  if (definition.length > 0) {
+    return `Describe a specific time when you demonstrated ${traitName.toLowerCase()}. How did your approach align with: ${definition}?`;
+  }
+  return `Describe a specific time when you demonstrated ${traitName.toLowerCase()} in a high-stakes ${traitCategory} situation. What did you do and why?`;
 }
 
 function qualityHint(value: string): { label: string; className: string } {
@@ -166,6 +190,26 @@ function qualityHint(value: string): { label: string; className: string } {
     return { label: "Good depth", className: "text-slate-600" };
   }
   return { label: "Add more detail", className: "text-amber-700" };
+}
+
+const emptyTraitForm: TraitFormState = {
+  name: "",
+  category: "ACADEMIC",
+  definition: "",
+  rubricPositiveSignals: "",
+  rubricNegativeSignals: "",
+  rubricFollowUps: ""
+};
+
+function toTraitFormState(trait: Trait): TraitFormState {
+  return {
+    name: trait.name,
+    category: trait.category,
+    definition: trait.definition ?? "",
+    rubricPositiveSignals: trait.rubricPositiveSignals ?? "",
+    rubricNegativeSignals: trait.rubricNegativeSignals ?? "",
+    rubricFollowUps: trait.rubricFollowUps ?? ""
+  };
 }
 
 function FieldMeta({ value }: { value: string }) {
@@ -308,30 +352,23 @@ function TraitsPage() {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<TraitCategory | "ALL">("ALL");
   const [selectedTraitId, setSelectedTraitId] = useState<string | null>(null);
-  const [isEditing, setIsEditing] = useState(false);
-  const [form, setForm] = useState({
-    name: "",
-    category: "ACADEMIC" as TraitCategory,
-    definition: "",
-    rubricPositiveSignals: "",
-    rubricNegativeSignals: "",
-    rubricFollowUps: ""
-  });
+  const [form, setForm] = useState<TraitFormState>({ ...emptyTraitForm });
+  const [baselineForm, setBaselineForm] = useState<TraitFormState>({ ...emptyTraitForm });
   const [questionForm, setQuestionForm] = useState({
     id: "",
     prompt: "",
     type: "chat" as "chat" | "quiz",
-    optionsText: "",
-    scoringHints: ""
+    optionsText: ""
   });
   const [traitNotice, setTraitNotice] = useState<string | null>(null);
   const [traitError, setTraitError] = useState<string | null>(null);
   const positiveSignals = useMemo(() => splitListText(form.rubricPositiveSignals), [form.rubricPositiveSignals]);
   const negativeSignals = useMemo(() => splitListText(form.rubricNegativeSignals), [form.rubricNegativeSignals]);
-  const followUps = useMemo(() => splitListText(form.rubricFollowUps), [form.rubricFollowUps]);
   const quizOptions = useMemo(() => splitListText(questionForm.optionsText), [questionForm.optionsText]);
+  const traitFormDirty = useMemo(() => JSON.stringify(form) !== JSON.stringify(baselineForm), [form, baselineForm]);
 
   const selectedTrait = traits.find((trait) => trait.id === selectedTraitId) ?? null;
+  const isEditing = Boolean(selectedTraitId && selectedTrait);
 
   const loadTraits = async () => {
     setLoading(true);
@@ -348,7 +385,7 @@ function TraitsPage() {
       setTraits(payload.data);
       if (payload.data.length === 0) {
         setSelectedTraitId(null);
-      } else if (!payload.data.some((trait) => trait.id === selectedTraitId)) {
+      } else if (selectedTraitId && !payload.data.some((trait) => trait.id === selectedTraitId)) {
         setSelectedTraitId(payload.data[0]?.id ?? null);
       }
     } finally {
@@ -373,30 +410,49 @@ function TraitsPage() {
     void loadQuestions(selectedTraitId);
   }, [selectedTraitId]);
 
-  useEffect(() => {
-    if (!selectedTrait || !isEditing) {
+  const canLeaveTraitForm = () => {
+    if (!traitFormDirty) {
+      return true;
+    }
+    return window.confirm("You have unsaved trait changes. Discard them and continue?");
+  };
+
+  const startCreateTrait = () => {
+    if (!canLeaveTraitForm()) {
       return;
     }
-    setForm({
-      name: selectedTrait.name,
-      category: selectedTrait.category,
-      definition: selectedTrait.definition ?? "",
-      rubricPositiveSignals: selectedTrait.rubricPositiveSignals ?? "",
-      rubricNegativeSignals: selectedTrait.rubricNegativeSignals ?? "",
-      rubricFollowUps: selectedTrait.rubricFollowUps ?? ""
-    });
-  }, [selectedTrait, isEditing]);
+    setSelectedTraitId(null);
+    setForm({ ...emptyTraitForm });
+    setBaselineForm({ ...emptyTraitForm });
+    setQuestionForm({ id: "", prompt: "", type: "chat", optionsText: "" });
+    setTraitNotice(null);
+    setTraitError(null);
+  };
+
+  const startEditTrait = (trait: Trait) => {
+    if (selectedTraitId === trait.id) {
+      return;
+    }
+    if (!canLeaveTraitForm()) {
+      return;
+    }
+    const nextForm = toTraitFormState(trait);
+    setSelectedTraitId(trait.id);
+    setForm(nextForm);
+    setBaselineForm(nextForm);
+    setTraitNotice(null);
+    setTraitError(null);
+  };
 
   const resetTraitForm = () => {
-    setIsEditing(false);
-    setForm({
-      name: "",
-      category: "ACADEMIC",
-      definition: "",
-      rubricPositiveSignals: "",
-      rubricNegativeSignals: "",
-      rubricFollowUps: ""
-    });
+    if (selectedTrait) {
+      const nextForm = toTraitFormState(selectedTrait);
+      setForm(nextForm);
+      setBaselineForm(nextForm);
+      return;
+    }
+    setForm({ ...emptyTraitForm });
+    setBaselineForm({ ...emptyTraitForm });
   };
 
   const submitTrait = async (event: React.FormEvent) => {
@@ -411,22 +467,27 @@ function TraitsPage() {
         rubricScaleMax: 5
       };
 
-      if (isEditing && selectedTraitId) {
-        await request<{ data: Trait }>(`/api/admin/traits/${selectedTraitId}`, {
+      if (selectedTraitId) {
+        const updated = await request<{ data: Trait }>(`/api/admin/traits/${selectedTraitId}`, {
           method: "PUT",
           body: JSON.stringify(body)
         });
+        const nextForm = toTraitFormState(updated.data);
+        setForm(nextForm);
+        setBaselineForm(nextForm);
         setTraitNotice("Trait saved.");
       } else {
         const created = await request<{ data: Trait }>("/api/admin/traits", {
           method: "POST",
           body: JSON.stringify(body)
         });
+        const nextForm = toTraitFormState(created.data);
         setSelectedTraitId(created.data.id);
+        setForm(nextForm);
+        setBaselineForm(nextForm);
         setTraitNotice("Trait created.");
       }
 
-      resetTraitForm();
       await loadTraits();
       if (selectedTraitId) {
         await loadQuestions(selectedTraitId);
@@ -440,6 +501,8 @@ function TraitsPage() {
     await request<{ ok: boolean }>(`/api/admin/traits/${id}`, { method: "DELETE" });
     if (selectedTraitId === id) {
       setSelectedTraitId(null);
+      setForm({ ...emptyTraitForm });
+      setBaselineForm({ ...emptyTraitForm });
     }
     await loadTraits();
   };
@@ -459,8 +522,7 @@ function TraitsPage() {
               .split("\n")
               .map((line) => line.trim())
               .filter(Boolean)
-          : undefined,
-      scoringHints: questionForm.scoringHints
+          : undefined
     };
 
     if (questionForm.id) {
@@ -479,8 +541,7 @@ function TraitsPage() {
       id: "",
       prompt: "",
       type: "chat",
-      optionsText: "",
-      scoringHints: ""
+      optionsText: ""
     });
     await loadQuestions(selectedTraitId);
   };
@@ -497,6 +558,9 @@ function TraitsPage() {
       <Card>
         <h2 className="mb-3 text-lg font-semibold">Traits Library</h2>
         <div className="space-y-2">
+          <button type="button" className={`${subtleButtonClass} w-full`} onClick={startCreateTrait}>
+            + New Trait
+          </button>
           <input className={inputClass} placeholder="Search traits..." value={search} onChange={(event) => setSearch(event.target.value)} />
           <select
             className={inputClass}
@@ -518,7 +582,7 @@ function TraitsPage() {
             <button
               key={trait.id}
               type="button"
-              onClick={() => setSelectedTraitId(trait.id)}
+              onClick={() => startEditTrait(trait)}
               className={`w-full rounded-md border p-2 text-left text-sm ${
                 selectedTraitId === trait.id ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white"
               }`}
@@ -532,20 +596,14 @@ function TraitsPage() {
 
       <Card>
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">{isEditing ? "Edit Trait" : "Create Trait"}</h2>
+          <div>
+            <h2 className="text-lg font-semibold">{isEditing ? `Edit Trait: ${selectedTrait?.name ?? ""}` : "Create New Trait"}</h2>
+            <p className="text-xs text-slate-500">{isEditing ? "Editing existing trait" : "Creating a new trait"}</p>
+          </div>
           {selectedTrait && (
             <div className="flex gap-2">
-              <button
-                type="button"
-                className="text-xs text-slate-600 underline"
-                onClick={() => {
-                  setIsEditing(true);
-                }}
-              >
-                Load selected
-              </button>
               <button type="button" className="text-xs text-red-700 underline" onClick={() => void deleteTrait(selectedTrait.id)}>
-                Delete selected
+                Delete trait
               </button>
             </div>
           )}
@@ -606,7 +664,7 @@ function TraitsPage() {
               items={positiveSignals}
               placeholder="Add a positive signal"
               emptyText="No positive signals yet."
-              suggestionButtonLabel="Generate 5 positive signals"
+              suggestionButtonLabel="Generate 3 positive signals"
               onSuggestion={() =>
                 setForm((prev) => ({
                   ...prev,
@@ -620,7 +678,7 @@ function TraitsPage() {
               items={negativeSignals}
               placeholder="Add a negative signal"
               emptyText="No negative signals yet."
-              suggestionButtonLabel="Generate 5 negative signals"
+              suggestionButtonLabel="Generate 3 negative signals"
               onSuggestion={() =>
                 setForm((prev) => ({
                   ...prev,
@@ -630,17 +688,8 @@ function TraitsPage() {
               onChange={(items) => setForm((prev) => ({ ...prev, rubricNegativeSignals: joinListText(items) }))}
             />
           </CollapsibleSection>
-          <CollapsibleSection title="Follow-Ups" defaultOpen={false}>
-            <ListBuilder
-              label="Follow-up Questions"
-              items={followUps}
-              placeholder="Add a follow-up question"
-              emptyText="No follow-ups yet."
-              onChange={(items) => setForm((prev) => ({ ...prev, rubricFollowUps: joinListText(items) }))}
-            />
-          </CollapsibleSection>
           <div className="flex gap-2">
-            <Button type="submit">{isEditing ? "Save Trait" : "Create Trait"}</Button>
+            <Button type="submit">{isEditing ? "Save Changes" : "Create Trait"}</Button>
             <button type="button" className="text-sm underline" onClick={resetTraitForm}>
               Reset
             </button>
@@ -653,14 +702,31 @@ function TraitsPage() {
       <Card>
         <h2 className="mb-3 text-lg font-semibold">Trait Questions</h2>
         {!selectedTrait ? (
-          <p className="text-sm text-slate-500">Select a trait to manage questions.</p>
+          <p className="text-sm text-slate-500">Select a trait to manage questions after creating it.</p>
         ) : (
           <>
             <p className="mb-3 text-sm text-slate-600">{selectedTrait.name}</p>
             <form className="space-y-3" onSubmit={(event) => void submitQuestion(event)}>
               <CollapsibleSection title="Question Details">
+                <p className="mb-2 text-xs text-slate-500">
+                  Questions elicit evidence. Scoring is based on the trait&apos;s rubric signals.
+                </p>
                 <div>
-                  <label className={labelClass}>Prompt</label>
+                  <div className="mb-1 flex items-center justify-between">
+                    <label className={labelClass}>Prompt</label>
+                    <button
+                      type="button"
+                      className={subtleButtonClass}
+                      onClick={() =>
+                        setQuestionForm((prev) => ({
+                          ...prev,
+                          prompt: buildQuestionPromptDraft(selectedTrait, prev.type)
+                        }))
+                      }
+                    >
+                      AI Draft Prompt
+                    </button>
+                  </div>
                   <textarea
                     required
                     className={inputClass}
@@ -692,23 +758,12 @@ function TraitsPage() {
                   />
                 </CollapsibleSection>
               )}
-              <CollapsibleSection title="Scoring Guidance" defaultOpen={false}>
-                <div>
-                  <label className={labelClass}>Scoring Hints</label>
-                  <textarea
-                    className={inputClass}
-                    value={questionForm.scoringHints}
-                    onChange={(event) => setQuestionForm((prev) => ({ ...prev, scoringHints: event.target.value }))}
-                  />
-                  <FieldMeta value={questionForm.scoringHints} />
-                </div>
-              </CollapsibleSection>
               <div className="flex gap-2">
                 <Button type="submit">{questionForm.id ? "Save Question" : "Add Question"}</Button>
                 <button
                   type="button"
                   className="text-sm underline"
-                  onClick={() => setQuestionForm({ id: "", prompt: "", type: "chat", optionsText: "", scoringHints: "" })}
+                  onClick={() => setQuestionForm({ id: "", prompt: "", type: "chat", optionsText: "" })}
                 >
                   Reset
                 </button>
@@ -729,8 +784,7 @@ function TraitsPage() {
                           id: question.id,
                           prompt: question.prompt,
                           type: question.type,
-                          optionsText: question.options.join("\n"),
-                          scoringHints: question.scoringHints ?? ""
+                          optionsText: question.options.join("\n")
                         })
                       }
                     >
@@ -763,18 +817,43 @@ export function ProgramsPage() {
     department: ""
   });
   const [traitModalOpen, setTraitModalOpen] = useState(false);
-  const [selectorSearch, setSelectorSearch] = useState("");
-  const [selectorCategory, setSelectorCategory] = useState<TraitCategory | "ALL">("ALL");
-  const [selectedTraitIds, setSelectedTraitIds] = useState<Set<string>>(new Set());
-  const [programNotice, setProgramNotice] = useState<string | null>(null);
-  const [programError, setProgramError] = useState<string | null>(null);
+  const [isCreatingNew, setIsCreatingNew] = useState(false);
+  const [newProgramDraft, setNewProgramDraft] = useState({ name: "", degreeLevel: "", department: "" });
+  const [isCreatingSubmitting, setIsCreatingSubmitting] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [removingTrait, setRemovingTrait] = useState<BoardTrait | null>(null);
   const [removeDialogOpen, setRemoveDialogOpen] = useState(false);
+  const [expandedBuckets, setExpandedBuckets] = useState<Set<ProgramTraitPriorityBucket>>(
+    () => new Set(["CRITICAL", "VERY_IMPORTANT", "IMPORTANT"])
+  );
   const cancelRemoveButtonRef = useRef<HTMLButtonElement | null>(null);
   const confirmRemoveButtonRef = useRef<HTMLButtonElement | null>(null);
 
+  const toggleBucketExpanded = (bucket: ProgramTraitPriorityBucket) => {
+    setExpandedBuckets((prev) => {
+      const next = new Set(prev);
+      if (next.has(bucket)) next.delete(bucket);
+      else next.add(bucket);
+      return next;
+    });
+  };
+
   const selectedProgram = programs.find((program) => program.id === selectedProgramId) ?? null;
   const boardDirty = useMemo(() => isBoardDirty(board, savedBoard), [board, savedBoard]);
+
+  const programDirty = useMemo(() => {
+    if (!selectedProgram) return false;
+    return (
+      programForm.name !== selectedProgram.name ||
+      programForm.description !== (selectedProgram.description ?? "") ||
+      programForm.degreeLevel !== (selectedProgram.degreeLevel ?? "") ||
+      programForm.department !== (selectedProgram.department ?? "")
+    );
+  }, [selectedProgram, programForm]);
+
+  const pageDirty = programDirty || boardDirty;
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const loadPrograms = async () => {
     const payload = await request<{ data: Program[] }>("/api/admin/programs");
@@ -844,16 +923,44 @@ export function ProgramsPage() {
     setSelectedProgramId(payload.data.id);
   };
 
-  const saveProgram = async (event: React.FormEvent) => {
+  const startNewProgram = () => {
+    setIsCreatingNew(true);
+    setNewProgramDraft({ name: "", degreeLevel: "", department: "" });
+    setCreateError(null);
+  };
+
+  const cancelNewProgram = () => {
+    setIsCreatingNew(false);
+    setCreateError(null);
+  };
+
+  const createProgramFromDraft = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!selectedProgramId) {
+    if (!newProgramDraft.name.trim() || !newProgramDraft.degreeLevel.trim() || !newProgramDraft.department.trim()) {
+      setCreateError("Name, Degree Level, and Department are required.");
       return;
     }
-    await request<{ data: Program }>(`/api/admin/programs/${selectedProgramId}`, {
-      method: "PUT",
-      body: JSON.stringify(programForm)
-    });
-    await loadPrograms();
+    setCreateError(null);
+    setIsCreatingSubmitting(true);
+    try {
+      const payload = await request<{ data: Program }>("/api/admin/programs", {
+        method: "POST",
+        body: JSON.stringify({
+          name: newProgramDraft.name.trim(),
+          description: "",
+          degreeLevel: newProgramDraft.degreeLevel.trim(),
+          department: newProgramDraft.department.trim()
+        })
+      });
+      await loadPrograms();
+      setSelectedProgramId(payload.data.id);
+      setIsCreatingNew(false);
+      setNewProgramDraft({ name: "", degreeLevel: "", department: "" });
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : "Failed to create program.");
+    } finally {
+      setIsCreatingSubmitting(false);
+    }
   };
 
   const deleteProgram = async (id: string) => {
@@ -880,8 +987,6 @@ export function ProgramsPage() {
       return;
     }
     setBoard((current) => removeTraitFromBoard(current, removingTrait.id).nextBoard);
-    setProgramNotice(`Removed ${removingTrait.name} from the board. Save board to persist.`);
-    setProgramError(null);
     setRemovingTrait(null);
     setRemoveDialogOpen(false);
   };
@@ -916,26 +1021,37 @@ export function ProgramsPage() {
   };
 
   const saveBoard = async () => {
-    if (!selectedProgramId) {
-      return;
-    }
+    if (!selectedProgramId) return;
+    const boardIds = toBoardIdState(board);
+    await request<{ data: unknown }>(`/api/admin/programs/${selectedProgramId}/traits`, {
+      method: "PUT",
+      body: JSON.stringify({
+        items: boardStateToProgramTraitRows(boardIds)
+      })
+    });
+    await loadProgramTraits(selectedProgramId);
+  };
 
-    setProgramNotice(null);
-    setProgramError(null);
-
+  const saveAllChanges = async () => {
+    if (!pageDirty) return;
+    setSaveError(null);
+    setSaveStatus("saving");
     try {
-      const boardIds = toBoardIdState(board);
-
-      await request<{ data: unknown }>(`/api/admin/programs/${selectedProgramId}/traits`, {
-        method: "PUT",
-        body: JSON.stringify({
-          items: boardStateToProgramTraitRows(boardIds)
-        })
-      });
-      await loadProgramTraits(selectedProgramId);
-      setProgramNotice("Program board saved.");
+      if (programDirty && selectedProgramId) {
+        await request<{ data: Program }>(`/api/admin/programs/${selectedProgramId}`, {
+          method: "PUT",
+          body: JSON.stringify(programForm)
+        });
+        await loadPrograms();
+      }
+      if (boardDirty && selectedProgramId) {
+        await saveBoard();
+      }
+      setSaveStatus("saved");
+      window.setTimeout(() => setSaveStatus("idle"), 2000);
     } catch (error) {
-      setProgramError(error instanceof Error ? error.message : "Failed to save board.");
+      setSaveError(error instanceof Error ? error.message : "Failed to save changes.");
+      setSaveStatus("error");
     }
   };
 
@@ -949,43 +1065,134 @@ export function ProgramsPage() {
     return ids;
   }, [board]);
 
-  const selectableTraits = useMemo(
-    () =>
-      traits.filter((trait) => {
-        if (assignedTraitIds.has(trait.id)) {
-          return false;
-        }
-        if (selectorCategory !== "ALL" && trait.category !== selectorCategory) {
-          return false;
-        }
-        if (selectorSearch.trim()) {
-          const q = selectorSearch.toLowerCase();
-          return trait.name.toLowerCase().includes(q) || (trait.definition ?? "").toLowerCase().includes(q);
-        }
-        return true;
-      }),
-    [traits, assignedTraitIds, selectorCategory, selectorSearch]
-  );
+  const addTraitsToBoard = (traitIds: string[], destinationBucket: ProgramTraitPriorityBucket) => {
+    if (!selectedProgramId) return;
 
-  const addSelectedTraits = () => {
-    const nextTraits = traits.filter((trait) => selectedTraitIds.has(trait.id));
+    const existingIds = new Set<string>();
+    for (const bucket of Object.keys(board) as ProgramTraitPriorityBucket[]) {
+      for (const trait of board[bucket]) {
+        existingIds.add(trait.id);
+      }
+    }
+
+    const nextTraits = traits.filter((trait) => traitIds.includes(trait.id) && !existingIds.has(trait.id));
     if (nextTraits.length === 0) {
+      setTraitModalOpen(false);
       return;
     }
-    setBoard((current) => ({
-      ...current,
-      IMPORTANT: [...current.IMPORTANT, ...nextTraits]
-    }));
-    setSelectedTraitIds(new Set());
+
+    const nextBoard: ProgramBoardState = {
+      ...board,
+      [destinationBucket]: [...board[destinationBucket], ...nextTraits]
+    };
+    setBoard(nextBoard);
     setTraitModalOpen(false);
   };
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[280px_320px_1fr]">
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          {pageDirty && (
+            <span className="text-sm font-medium text-amber-700" role="status">
+              Unsaved changes
+            </span>
+          )}
+          {saveStatus === "saving" && (
+            <span className="text-sm text-slate-500" role="status">
+              Saving...
+            </span>
+          )}
+          {saveStatus === "saved" && (
+            <span className="text-sm text-emerald-700" role="status">
+              All changes saved
+            </span>
+          )}
+          {saveStatus === "error" && saveError && (
+            <span className="text-sm text-red-700" role="alert">
+              {saveError}
+            </span>
+          )}
+        </div>
+        <Button
+          type="button"
+          onClick={() => void saveAllChanges()}
+          disabled={!pageDirty || saveStatus === "saving"}
+        >
+          Save Changes
+        </Button>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[280px_320px_1fr]">
       <Card>
-        <h2 className="mb-3 text-lg font-semibold">Programs</h2>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold">Programs</h2>
+          <button
+            type="button"
+            onClick={startNewProgram}
+            disabled={isCreatingNew}
+            className="rounded-md border border-slate-300 px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            + New Program
+          </button>
+        </div>
         <div className="space-y-2">
-          {programs.length === 0 && <p className="text-sm text-slate-500">No programs yet. Create one to begin.</p>}
+          {isCreatingNew && (
+            <form
+              onSubmit={(e) => void createProgramFromDraft(e)}
+              className="rounded-md border border-slate-200 bg-slate-50/80 p-3"
+            >
+              <div className="space-y-2">
+                <div>
+                  <label className={labelClass}>Name</label>
+                  <input
+                    required
+                    className={inputClass}
+                    placeholder="Program name"
+                    value={newProgramDraft.name}
+                    onChange={(e) => setNewProgramDraft((prev) => ({ ...prev, name: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>Degree Level</label>
+                  <input
+                    required
+                    className={inputClass}
+                    placeholder="e.g. Bachelor's"
+                    value={newProgramDraft.degreeLevel}
+                    onChange={(e) => setNewProgramDraft((prev) => ({ ...prev, degreeLevel: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>Department</label>
+                  <input
+                    required
+                    className={inputClass}
+                    placeholder="e.g. Engineering"
+                    value={newProgramDraft.department}
+                    onChange={(e) => setNewProgramDraft((prev) => ({ ...prev, department: e.target.value }))}
+                  />
+                </div>
+              </div>
+              {createError && <p className="mt-2 text-sm text-red-700" role="alert">{createError}</p>}
+              <div className="mt-3 flex gap-2">
+                <Button type="submit" disabled={isCreatingSubmitting}>
+                  {isCreatingSubmitting ? "Creating..." : "Create"}
+                </Button>
+                <button
+                  type="button"
+                  onClick={cancelNewProgram}
+                  disabled={isCreatingSubmitting}
+                  className={subtleButtonClass}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          )}
+          {programs.length === 0 && !isCreatingNew && (
+            <p className="text-sm text-slate-500">No programs yet. Create one to begin.</p>
+          )}
           {programs.map((program) => (
             <button
               key={program.id}
@@ -1004,7 +1211,14 @@ export function ProgramsPage() {
 
       <Card>
         <h2 className="mb-3 text-lg font-semibold">{selectedProgram ? "Edit Program" : "Create Program"}</h2>
-        <form className="space-y-3" onSubmit={(event) => void (selectedProgram ? saveProgram(event) : createProgram(event))}>
+        <form
+          className="space-y-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (selectedProgram) return;
+            void createProgram(event);
+          }}
+        >
           <div>
             <label className={labelClass}>Name</label>
             <input
@@ -1039,7 +1253,7 @@ export function ProgramsPage() {
             />
           </div>
           <div className="flex gap-2">
-            <Button type="submit">{selectedProgram ? "Save Program" : "Create Program"}</Button>
+            {!selectedProgram && <Button type="submit">Create Program</Button>}
             {selectedProgram && (
               <button type="button" className="text-sm text-red-700 underline" onClick={() => void deleteProgram(selectedProgram.id)}>
                 Delete
@@ -1052,58 +1266,70 @@ export function ProgramsPage() {
       <Card>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-lg font-semibold">Trait Priority Board</h2>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              className={`${subtleButtonClass} disabled:cursor-not-allowed disabled:opacity-50`}
-              onClick={() => setTraitModalOpen(true)}
-              disabled={!selectedProgram}
-            >
-              Add Trait
-            </button>
-            <Button type="button" onClick={() => void saveBoard()} disabled={!selectedProgram || !boardDirty}>
-              Save Board
-            </Button>
-          </div>
+          <button
+            type="button"
+            className={`${subtleButtonClass} disabled:cursor-not-allowed disabled:opacity-50`}
+            onClick={() => setTraitModalOpen(true)}
+            disabled={!selectedProgram}
+          >
+            Add Trait
+          </button>
         </div>
-        {selectedProgram && boardDirty && (
-          <p className="mb-3 text-xs font-medium uppercase tracking-wide text-amber-700" role="status">
-            Unsaved changes
-          </p>
-        )}
 
         {!selectedProgram ? (
           <p className="text-sm text-slate-500">Select a program to edit board priorities.</p>
         ) : (
-          <div className="grid max-h-[32rem] gap-3 overflow-y-auto pr-1 md:grid-cols-2 xl:grid-cols-4">
-            {(Object.keys(board) as ProgramTraitPriorityBucket[]).map((bucket) => (
-              <div
-                key={bucket}
-                className="max-h-[30rem] overflow-y-auto rounded-md border border-slate-200 bg-slate-50 p-2"
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  const payload = event.dataTransfer.getData("text/plain");
-                  if (!payload) {
-                    return;
-                  }
-                  const parsed = JSON.parse(payload) as {
-                    fromBucket: ProgramTraitPriorityBucket;
-                    fromIndex: number;
-                  };
-                  moveTrait(parsed.fromBucket, parsed.fromIndex, bucket);
-                }}
-              >
-                <div className="sticky top-0 mb-2 flex items-center justify-between border-b border-slate-200 bg-slate-50 pb-2">
-                  <h3 className="text-sm font-semibold">
-                    {bucket} ({board[bucket].length})
-                  </h3>
-                </div>
-                <div className="space-y-2">
-                  {board[bucket].length === 0 && (
-                    <p className="rounded border border-dashed border-slate-300 bg-white/70 p-2 text-xs text-slate-500">Drag traits here</p>
-                  )}
-                  {board[bucket].map((trait, index) => (
+          <div className="flex max-h-[32rem] flex-col gap-4 overflow-y-auto pr-1">
+            {programTraitPriorityBuckets.map((bucket) => {
+              const isExpanded = expandedBuckets.has(bucket);
+              return (
+                <div
+                  key={bucket}
+                  className="flex-shrink-0 rounded-lg border border-slate-200 bg-slate-50/80 shadow-sm"
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const payload = event.dataTransfer.getData("text/plain");
+                    if (!payload) {
+                      return;
+                    }
+                    const parsed = JSON.parse(payload) as {
+                      fromBucket: ProgramTraitPriorityBucket;
+                      fromIndex: number;
+                    };
+                    if (!isExpanded) {
+                      setExpandedBuckets((prev) => new Set(prev).add(bucket));
+                    }
+                    moveTrait(parsed.fromBucket, parsed.fromIndex, bucket);
+                  }}
+                >
+                  <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
+                    <button
+                      type="button"
+                      onClick={() => toggleBucketExpanded(bucket)}
+                      className="flex min-w-0 flex-1 items-center gap-2 rounded text-left text-sm font-semibold text-slate-800 hover:bg-slate-100/80"
+                      aria-expanded={isExpanded}
+                      aria-label={isExpanded ? `Collapse ${bucket}` : `Expand ${bucket}`}
+                    >
+                      <span className="flex-shrink-0 text-slate-500" aria-hidden>
+                        {isExpanded ? "\u25BC" : "\u25B6"}
+                      </span>
+                      <span className="truncate">
+                        {bucket} ({board[bucket].length})
+                      </span>
+                    </button>
+                    {board[bucket].length === 0 && (
+                      <span className="text-xs text-slate-500">Drag traits here</span>
+                    )}
+                  </div>
+                  {isExpanded && (
+                    <div className="min-h-[4rem] space-y-2 p-3">
+                      {board[bucket].length === 0 && (
+                        <p className="rounded-lg border border-dashed border-slate-300 bg-white/70 px-3 py-4 text-center text-xs text-slate-500">
+                          Drag traits here
+                        </p>
+                      )}
+                      {board[bucket].map((trait, index) => (
                     <div
                       key={trait.id}
                       draggable
@@ -1129,7 +1355,7 @@ export function ProgramsPage() {
                         };
                         moveTrait(parsed.fromBucket, parsed.fromIndex, bucket, index);
                       }}
-                      className="group rounded border border-slate-300 bg-white p-2 text-sm transition hover:border-slate-400 hover:bg-slate-50"
+                      className="group rounded-md border border-slate-300 bg-white p-2 text-sm transition hover:border-slate-400 hover:bg-slate-50"
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex min-w-0 items-start gap-2">
@@ -1157,9 +1383,11 @@ export function ProgramsPage() {
                       </div>
                     </div>
                   ))}
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
         {removeDialogOpen && removingTrait && (
@@ -1203,71 +1431,18 @@ export function ProgramsPage() {
           </div>
         )}
 
-        {traitModalOpen && (
-          <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/30 p-4">
-            <div className="w-full max-w-xl rounded-md bg-white p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-lg font-semibold">Add Traits</h3>
-                <button type="button" className="text-sm underline" onClick={() => setTraitModalOpen(false)}>
-                  Close
-                </button>
-              </div>
-              <div className="mb-3 grid gap-2 md:grid-cols-2">
-                <input
-                  className={inputClass}
-                  placeholder="Search traits..."
-                  value={selectorSearch}
-                  onChange={(event) => setSelectorSearch(event.target.value)}
-                />
-                <select
-                  className={inputClass}
-                  value={selectorCategory}
-                  onChange={(event) => setSelectorCategory(event.target.value as TraitCategory | "ALL")}
-                >
-                  <option value="ALL">All categories</option>
-                  {traitCategories.map((category) => (
-                    <option key={category} value={category}>
-                      {category}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="max-h-64 space-y-2 overflow-auto">
-                {selectableTraits.map((trait) => (
-                  <label key={trait.id} className="flex items-start gap-2 rounded border border-slate-200 p-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={selectedTraitIds.has(trait.id)}
-                      onChange={(event) =>
-                        setSelectedTraitIds((prev) => {
-                          const next = new Set(prev);
-                          if (event.target.checked) {
-                            next.add(trait.id);
-                          } else {
-                            next.delete(trait.id);
-                          }
-                          return next;
-                        })
-                      }
-                    />
-                    <span>
-                      <span className="block font-medium">{trait.name}</span>
-                      <span className="text-xs text-slate-500">{trait.category}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-              <div className="mt-3 flex justify-end">
-                <Button type="button" onClick={addSelectedTraits}>
-                  Add Selected
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
-        {programNotice && <p className="mt-3 text-sm text-emerald-700">{programNotice}</p>}
-        {programError && <p className="mt-3 text-sm text-red-700">{programError}</p>}
+        <TraitPickerModal
+          isOpen={traitModalOpen}
+          onClose={() => setTraitModalOpen(false)}
+          traits={traits}
+          assignedTraitIds={assignedTraitIds}
+          programId={selectedProgram?.id ?? null}
+          degreeLevel={selectedProgram?.degreeLevel ?? null}
+          department={selectedProgram?.department ?? null}
+          onAddTraits={addTraitsToBoard}
+        />
       </Card>
+      </div>
     </div>
   );
 }
@@ -1369,15 +1544,19 @@ export function BrandVoicePage() {
   const createVoice = async (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
-    const payload = await request<{ data: BrandVoice }>("/api/admin/brand-voices", {
-      method: "POST",
-      body: JSON.stringify({
-        ...form,
-        canonicalExamples: form.canonicalExamples.filter((item) => item.pinned)
-      })
-    });
-    await loadVoices();
-    setSelectedVoiceId(payload.data.id);
+    try {
+      const payload = await request<{ data: BrandVoice }>("/api/admin/brand-voices", {
+        method: "POST",
+        body: JSON.stringify({
+          ...form,
+          canonicalExamples: form.canonicalExamples.filter((item) => item.pinned)
+        })
+      });
+      await loadVoices();
+      setSelectedVoiceId(payload.data.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create brand voice");
+    }
   };
 
   const saveVoice = async (event: React.FormEvent) => {
@@ -1386,14 +1565,18 @@ export function BrandVoicePage() {
       return;
     }
     setError(null);
-    await request<{ data: BrandVoice }>(`/api/admin/brand-voices/${selectedVoiceId}`, {
-      method: "PUT",
-      body: JSON.stringify({
-        ...form,
-        canonicalExamples: form.canonicalExamples.filter((item) => item.pinned)
-      })
-    });
-    await loadVoices();
+    try {
+      await request<{ data: BrandVoice }>(`/api/admin/brand-voices/${selectedVoiceId}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          ...form,
+          canonicalExamples: form.canonicalExamples.filter((item) => item.pinned)
+        })
+      });
+      await loadVoices();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save brand voice");
+    }
   };
 
   const deleteVoice = async (id: string) => {
@@ -1423,14 +1606,14 @@ export function BrandVoicePage() {
     }
   };
 
-  const testVoice = async () => {
+  const testVoice = async (voiceName?: string) => {
     setError(null);
     setIsTestingVoice(true);
     try {
       const payload = await request<{ data: { audioUrl: string } }>("/api/admin/brand-voices/test-voice", {
         method: "POST",
         body: JSON.stringify({
-          voiceName: form.ttsVoiceName,
+          voiceName: voiceName ?? form.ttsVoiceName,
           text: voiceTestText
         })
       });
@@ -1457,10 +1640,29 @@ export function BrandVoicePage() {
     }));
   };
 
+  const startNewVoice = () => {
+    setSelectedVoiceId(null);
+    setForm(defaultBrandVoiceForm());
+    setGeneratedSamples(null);
+    setPreviewOverride({});
+    setVoiceTestUrl(null);
+    setError(null);
+    setActiveTab("configuration");
+  };
+
   return (
     <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
       <Card>
-        <h2 className="mb-3 text-lg font-semibold">Brand Voices</h2>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Brand Voices</h2>
+          <button
+            type="button"
+            className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium hover:bg-slate-50"
+            onClick={startNewVoice}
+          >
+            New
+          </button>
+        </div>
         <div className="space-y-2">
           {voices.map((voice) => (
             <button
@@ -1528,22 +1730,31 @@ export function BrandVoicePage() {
             <div className="rounded-md border border-slate-200 p-3">
               <h3 className="mb-2 text-sm font-semibold">Voice (OpenAI TTS)</h3>
               <label className={labelClass}>Preferred voice</label>
-              <select
-                className={inputClass}
-                value={form.ttsVoiceName}
-                onChange={(event) => {
-                  const nextVoice = event.target.value;
-                  setForm((prev) => ({ ...prev, ttsVoiceName: nextVoice }));
-                  setVoiceTestUrl(null);
-                }}
-              >
+              <div className="flex flex-wrap gap-2">
                 {openAiVoiceOptions.map((voice) => (
-                  <option key={voice} value={voice}>
-                    {voice}
-                  </option>
+                  <button
+                    key={`preferred-voice-${voice}`}
+                    type="button"
+                    className={`rounded-md border px-3 py-1.5 text-sm font-medium ${
+                      form.ttsVoiceName === voice
+                        ? "border-slate-900 bg-slate-900 text-white"
+                        : "border-slate-300 text-slate-700 hover:bg-slate-50"
+                    }`}
+                    onClick={() => {
+                      setForm((prev) => ({ ...prev, ttsVoiceName: voice }));
+                      setVoiceTestUrl(null);
+                      void testVoice(voice);
+                    }}
+                    disabled={isTestingVoice || voiceTestText.trim().length === 0}
+                  >
+                    {isTestingVoice && form.ttsVoiceName === voice ? `Sampling ${voice}...` : voice}
+                  </button>
                 ))}
-              </select>
+              </div>
               <p className="mt-1 text-xs text-slate-500">This voice is used for simulation voice samples unless overridden.</p>
+              {voiceTestUrl && (
+                <audio key={voiceTestUrl} className="mt-2 block w-full max-w-full" controls preload="metadata" src={voiceTestUrl} />
+              )}
             </div>
 
             <ChipSelectWithCustom

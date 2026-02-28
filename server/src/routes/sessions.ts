@@ -8,6 +8,13 @@ import { incrementMetric } from "../lib/metrics.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import { fetchOpenAiWithRetry } from "../lib/openai.js";
 import { computeProgramFit, type ScoringSnapshot, type SnapshotConfidence } from "../lib/program-fit.js";
+import {
+  aggregateTraitQuestionEvaluations,
+  buildTraitScoringPrompt,
+  evaluateTraitQuestionResponse,
+  splitRubricSignals,
+  type TraitQuestionEvaluation
+} from "../lib/trait-scoring.js";
 
 const bucketRank: Record<ProgramTraitPriorityBucket, number> = {
   CRITICAL: 0,
@@ -45,7 +52,7 @@ const responseSchema = z.object({
 });
 
 const scoreSchema = z.object({
-  mode: z.enum(["chat", "quiz"]),
+  mode: z.enum(["voice", "chat", "quiz"]),
   programId: z.string().min(1),
   transcriptTurns: z.array(transcriptTurnSchema).max(200).optional(),
   responses: z.array(responseSchema).max(100).optional(),
@@ -59,17 +66,6 @@ const voiceTurnSchema = scoreSchema.extend({
 const voiceEndSchema = z.object({
   sessionId: z.string().min(1)
 });
-
-const parseJsonObject = (value: string | null): Record<string, unknown> | null => {
-  if (!value) return null;
-
-  try {
-    const parsed = JSON.parse(value);
-    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-};
 
 const parseOptions = (optionsJson: string | null): string[] => {
   if (!optionsJson) return [];
@@ -91,32 +87,11 @@ const clampScore = (value: number) => {
   return Math.max(0, Math.min(5, value));
 };
 
-const defaultScoreForIndex = (index: number, total: number) => {
-  if (total <= 1) return 2.5;
-  return (index / (total - 1)) * 5;
-};
-
-const parseInlineOptionScore = (option: string) => {
-  const bracket = option.match(/^(.*)\[\s*([0-5](?:\.\d+)?)\s*\]\s*$/);
-  if (bracket) {
-    return { label: bracket[1]?.trim() ?? option.trim(), score: clampScore(Number(bracket[2])) };
-  }
-
-  const paren = option.match(/^(.*)\(\s*([0-5](?:\.\d+)?)\s*\)\s*$/);
-  if (paren) {
-    return { label: paren[1]?.trim() ?? option.trim(), score: clampScore(Number(paren[2])) };
-  }
-
-  return { label: option.trim(), score: null as number | null };
-};
-
 const confidenceFromCoverage = (answeredCount: number, totalCount: number) => {
   if (totalCount <= 0) return 0.35;
   const ratio = answeredCount / totalCount;
   return Math.max(0.35, Math.min(0.95, 0.35 + ratio * 0.6));
 };
-
-const normalizeText = (value: string) => value.trim().toLowerCase();
 
 type ScorecardTraitResult = {
   traitId: string;
@@ -127,6 +102,9 @@ type ScorecardTraitResult = {
   evidence: string[];
   rationale: string | null;
   traitQuestionId: string | null;
+  matchedPositiveSignals: string[];
+  matchedNegativeSignals: string[];
+  questionEvaluations: TraitQuestionEvaluation[];
 };
 
 const computeOverallScore = (items: ScorecardTraitResult[]) => {
@@ -147,11 +125,14 @@ const computeQuizTraitScores = (input: {
     sortOrder: number;
     trait: {
       name: string;
+      definition: string | null;
+      rubricPositiveSignals: string | null;
+      rubricNegativeSignals: string | null;
       questions: Array<{
         id: string;
         prompt: string;
+        type: "chat" | "quiz";
         optionsJson: string | null;
-        scoringHints: string | null;
       }>;
     };
   }>;
@@ -169,18 +150,14 @@ const computeQuizTraitScores = (input: {
       return a.sortOrder - b.sortOrder;
     })
     .map((row) => {
-      const traitQuestionScores: number[] = [];
-      const evidence: string[] = [];
+      const questionEvaluations: TraitQuestionEvaluation[] = [];
       let answeredCount = 0;
       let lastAnsweredQuestionId: string | null = null;
+      const positiveSignals = splitRubricSignals(row.trait.rubricPositiveSignals);
+      const negativeSignals = splitRubricSignals(row.trait.rubricNegativeSignals);
 
       for (const question of row.trait.questions) {
         const options = parseOptions(question.optionsJson);
-        const hintObject = parseJsonObject(question.scoringHints);
-        const optionScoresByText =
-          hintObject && typeof hintObject.optionScores === "object" && hintObject.optionScores !== null
-            ? (hintObject.optionScores as Record<string, unknown>)
-            : null;
 
         const selectedAnswer = responseMap.get(question.id) ?? candidateTurns[fallbackCandidateIndex]?.text;
         if (!responseMap.has(question.id) && selectedAnswer) {
@@ -194,81 +171,107 @@ const computeQuizTraitScores = (input: {
         answeredCount += 1;
         lastAnsweredQuestionId = question.id;
 
-        const normalizedAnswer = normalizeText(selectedAnswer);
-        const parsedOptions = options.map((option) => parseInlineOptionScore(option));
-
-        const selectedIndex = parsedOptions.findIndex((option) => normalizeText(option.label) === normalizedAnswer);
-
-        let questionScore = 2.5;
-
-        if (selectedIndex >= 0) {
-          const selectedOption = parsedOptions[selectedIndex];
-
-          if (selectedOption.score !== null) {
-            questionScore = selectedOption.score;
-          } else if (optionScoresByText) {
-            const byExact = optionScoresByText[selectedOption.label];
-            const byIndex = optionScoresByText[String(selectedIndex)];
-            const hinted = typeof byExact === "number" ? byExact : typeof byIndex === "number" ? byIndex : null;
-            if (hinted !== null) {
-              questionScore = clampScore(hinted);
-            } else {
-              questionScore = defaultScoreForIndex(selectedIndex, parsedOptions.length);
-            }
-          } else {
-            questionScore = defaultScoreForIndex(selectedIndex, parsedOptions.length);
-          }
-        } else {
-          const numericValue = Number(selectedAnswer);
-          if (Number.isFinite(numericValue)) {
-            questionScore = clampScore(numericValue);
-          }
-        }
-
-        traitQuestionScores.push(questionScore);
-        evidence.push(`Q: ${question.prompt} A: ${selectedAnswer}`);
+        questionEvaluations.push(
+          evaluateTraitQuestionResponse({
+            trait: {
+              traitId: row.traitId,
+              traitName: row.trait.name,
+              traitDefinition: row.trait.definition,
+              positiveSignals,
+              negativeSignals
+            },
+            question: {
+              questionId: question.id,
+              questionPrompt: question.prompt,
+              questionType: question.type,
+              optionLabels: options
+            },
+            answer: selectedAnswer
+          })
+        );
       }
 
-      const score0to5 =
-        traitQuestionScores.length > 0
-          ? Number((traitQuestionScores.reduce((acc, score) => acc + score, 0) / traitQuestionScores.length).toFixed(2))
-          : 2.5;
+      const aggregate = aggregateTraitQuestionEvaluations(questionEvaluations);
 
       return {
         traitId: row.traitId,
         traitName: row.trait.name,
         bucket: row.bucket,
-        score0to5,
-        confidence: Number(confidenceFromCoverage(answeredCount, row.trait.questions.length).toFixed(2)),
-        evidence: evidence.length > 0 ? evidence : ["No quiz response captured for this trait."],
+        score0to5: aggregate.score0to5,
+        confidence: Number(
+          Math.max(
+            aggregate.confidence,
+            confidenceFromCoverage(answeredCount, Math.max(1, row.trait.questions.length))
+          ).toFixed(2)
+        ),
+        evidence: aggregate.evidence,
         rationale:
           answeredCount > 0
-            ? `Averaged ${answeredCount} quiz response${answeredCount === 1 ? "" : "s"} for this trait.`
+            ? aggregate.rationale
             : "No quiz response captured for this trait yet.",
-        traitQuestionId: lastAnsweredQuestionId
+        traitQuestionId: lastAnsweredQuestionId,
+        matchedPositiveSignals: aggregate.matchedPositiveSignals,
+        matchedNegativeSignals: aggregate.matchedNegativeSignals,
+        questionEvaluations: aggregate.questionEvaluations
       } satisfies ScorecardTraitResult;
     });
 };
 
 const computeChatTraitScores = async (input: {
   transcriptTurns: Array<{ speaker: "candidate" | "assistant"; text: string }>;
-  programTraits: Array<{ traitId: string; bucket: ProgramTraitPriorityBucket; sortOrder: number; trait: { name: string } }>;
+  programTraits: Array<{
+    traitId: string;
+    bucket: ProgramTraitPriorityBucket;
+    sortOrder: number;
+    trait: {
+      name: string;
+      definition: string | null;
+      rubricPositiveSignals: string | null;
+      rubricNegativeSignals: string | null;
+      questions: Array<{
+        id: string;
+        prompt: string;
+        type: "chat" | "quiz";
+        optionsJson: string | null;
+      }>;
+    };
+  }>;
 }) => {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY is not configured");
   }
 
-  const transcriptText = input.transcriptTurns.map((turn, index) => `${index + 1}. ${turn.speaker.toUpperCase()}: ${turn.text}`).join("\n");
-
-  const traitListText = [...input.programTraits]
+  const candidateTurns = input.transcriptTurns.filter((turn) => turn.speaker === "candidate");
+  const sortedTraits = [...input.programTraits]
     .sort((a, b) => {
       const bucketDiff = bucketRank[a.bucket] - bucketRank[b.bucket];
       if (bucketDiff !== 0) return bucketDiff;
       return a.sortOrder - b.sortOrder;
-    })
-    .map((item) => `- ${item.traitId}: ${item.trait.name} (${item.bucket})`)
-    .join("\n");
+    });
+
+  const transcriptText = input.transcriptTurns.map((turn, index) => `${index + 1}. ${turn.speaker.toUpperCase()}: ${turn.text}`).join("\n");
+
+  const traitListText = sortedTraits
+    .map((item) =>
+      buildTraitScoringPrompt({
+        trait: {
+          traitId: item.traitId,
+          traitName: item.trait.name,
+          traitDefinition: item.trait.definition,
+          positiveSignals: splitRubricSignals(item.trait.rubricPositiveSignals),
+          negativeSignals: splitRubricSignals(item.trait.rubricNegativeSignals)
+        },
+        questions: item.trait.questions.map((question) => ({
+          questionId: question.id,
+          questionPrompt: question.prompt,
+          questionType: question.type,
+          optionLabels: parseOptions(question.optionsJson)
+        })),
+        candidateTurns
+      })
+    )
+    .join("\n\n---\n\n");
 
   const response = await fetchOpenAiWithRetry("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -284,11 +287,11 @@ const computeChatTraitScores = async (input: {
         {
           role: "system",
           content:
-            "You score candidate transcript evidence against traits. Return strict JSON with key perTrait. Each item: traitId, score0to5 (number), confidence (0-1), evidence (array of short quotes or paraphrases)."
+            "You score candidate evidence by trait rubric signals. Return strict JSON: {\"perTrait\":[{traitId,score0to5,confidence,rationale,evidence,matched_positive_signals,matched_negative_signals,traitQuestionId}]}. score0to5 must be 0-5. confidence must be 0-1."
         },
         {
           role: "user",
-          content: `Traits:\n${traitListText}\n\nTranscript:\n${transcriptText}\n\nReturn JSON: {"perTrait":[...]}. Score 0-5.`
+          content: `Score each trait using only the provided trait rubric context and question context.\n\nTrait Context:\n${traitListText}\n\nTranscript:\n${transcriptText}`
         }
       ]
     })
@@ -315,17 +318,38 @@ const computeChatTraitScores = async (input: {
   const rawPerTrait: any[] = Array.isArray(parsed?.perTrait) ? parsed.perTrait : [];
   const byTraitId = new Map(rawPerTrait.map((item) => [String(item?.traitId ?? ""), item]));
 
-  return [...input.programTraits]
-    .sort((a, b) => {
-      const bucketDiff = bucketRank[a.bucket] - bucketRank[b.bucket];
-      if (bucketDiff !== 0) return bucketDiff;
-      return a.sortOrder - b.sortOrder;
-    })
-    .map((item) => {
+  return sortedTraits.map((item) => {
       const modelValue = byTraitId.get(item.traitId);
       const evidence = Array.isArray(modelValue?.evidence)
         ? modelValue.evidence.map((entry: unknown) => String(entry)).filter((entry: string) => entry.length > 0)
         : [];
+      const modelMatchedPositiveSignals = Array.isArray(modelValue?.matched_positive_signals)
+        ? modelValue.matched_positive_signals.map((entry: unknown) => String(entry)).filter((entry: string) => entry.length > 0)
+        : [];
+      const modelMatchedNegativeSignals = Array.isArray(modelValue?.matched_negative_signals)
+        ? modelValue.matched_negative_signals.map((entry: unknown) => String(entry)).filter((entry: string) => entry.length > 0)
+        : [];
+
+      const questionEvaluations: TraitQuestionEvaluation[] = item.trait.questions.map((question) =>
+        evaluateTraitQuestionResponse({
+          trait: {
+            traitId: item.traitId,
+            traitName: item.trait.name,
+            traitDefinition: item.trait.definition,
+            positiveSignals: splitRubricSignals(item.trait.rubricPositiveSignals),
+            negativeSignals: splitRubricSignals(item.trait.rubricNegativeSignals)
+          },
+          question: {
+            questionId: question.id,
+            questionPrompt: question.prompt,
+            questionType: question.type,
+            optionLabels: parseOptions(question.optionsJson)
+          },
+          answer: candidateTurns.map((turn) => turn.text).join("\n")
+        })
+      );
+
+      const aggregate = aggregateTraitQuestionEvaluations(questionEvaluations);
 
       return {
         traitId: item.traitId,
@@ -333,11 +357,91 @@ const computeChatTraitScores = async (input: {
         bucket: item.bucket,
         score0to5: clampScore(Number(modelValue?.score0to5 ?? 2.5)),
         confidence: Math.max(0, Math.min(1, Number(modelValue?.confidence ?? 0.5))),
-        evidence: evidence.length > 0 ? evidence : ["No concrete evidence returned by model."],
+        evidence: evidence.length > 0 ? evidence : aggregate.evidence,
         rationale: typeof modelValue?.rationale === "string" ? modelValue.rationale.trim().slice(0, 600) : null,
-        traitQuestionId: null
+        traitQuestionId: typeof modelValue?.traitQuestionId === "string" ? modelValue.traitQuestionId : null,
+        matchedPositiveSignals: modelMatchedPositiveSignals.length > 0 ? modelMatchedPositiveSignals : aggregate.matchedPositiveSignals,
+        matchedNegativeSignals: modelMatchedNegativeSignals.length > 0 ? modelMatchedNegativeSignals : aggregate.matchedNegativeSignals,
+        questionEvaluations
       } satisfies ScorecardTraitResult;
     });
+};
+
+type StoredTraitScoreDetails = {
+  evidence: string[];
+  matched_positive_signals: string[];
+  matched_negative_signals: string[];
+  question_scores: Array<{
+    questionId: string;
+    questionPrompt: string;
+    questionType: "chat" | "quiz";
+    score0to5: number;
+    rationale: string;
+    evidence: string[];
+    matchedPositiveSignals: string[];
+    matchedNegativeSignals: string[];
+    confidence: number;
+    weight: number;
+  }>;
+};
+
+const parseStoredTraitScoreDetails = (raw: string): StoredTraitScoreDetails => {
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return {
+        evidence: parsed.map((entry) => String(entry)),
+        matched_positive_signals: [],
+        matched_negative_signals: [],
+        question_scores: []
+      };
+    }
+    if (parsed && typeof parsed === "object") {
+      const value = parsed as Record<string, unknown>;
+      return {
+        evidence: Array.isArray(value.evidence) ? value.evidence.map((entry) => String(entry)) : [],
+        matched_positive_signals: Array.isArray(value.matched_positive_signals)
+          ? value.matched_positive_signals.map((entry) => String(entry))
+          : [],
+        matched_negative_signals: Array.isArray(value.matched_negative_signals)
+          ? value.matched_negative_signals.map((entry) => String(entry))
+          : [],
+        question_scores: Array.isArray(value.question_scores)
+          ? value.question_scores
+              .map((entry) => {
+                if (!entry || typeof entry !== "object") return null;
+                const row = entry as Record<string, unknown>;
+                return {
+                  questionId: String(row.questionId ?? ""),
+                  questionPrompt: String(row.questionPrompt ?? ""),
+                  questionType: row.questionType === "quiz" ? "quiz" : "chat",
+                  score0to5: clampScore(Number(row.score0to5 ?? 2.5)),
+                  rationale: String(row.rationale ?? ""),
+                  evidence: Array.isArray(row.evidence) ? row.evidence.map((item) => String(item)) : [],
+                  matchedPositiveSignals: Array.isArray(row.matchedPositiveSignals)
+                    ? row.matchedPositiveSignals.map((item) => String(item))
+                    : [],
+                  matchedNegativeSignals: Array.isArray(row.matchedNegativeSignals)
+                    ? row.matchedNegativeSignals.map((item) => String(item))
+                    : [],
+                  confidence: Math.max(0, Math.min(1, Number(row.confidence ?? 0.5))),
+                  weight: Math.max(1, Math.min(3, Number(row.weight ?? 1)))
+                };
+              })
+              .filter((item): item is StoredTraitScoreDetails["question_scores"][number] => item !== null)
+          : []
+      };
+    }
+  } catch {
+    // Ignore invalid JSON and fall back to empty details.
+  }
+
+  return {
+    evidence: [],
+    matched_positive_signals: [],
+    matched_negative_signals: [],
+    question_scores: []
+  };
 };
 
 const buildScorecardResponse = (scorecard: {
@@ -363,20 +467,20 @@ const buildScorecardResponse = (scorecard: {
   overallScore: scorecard.overallScore,
   createdAt: scorecard.createdAt.toISOString(),
   perTrait: scorecard.traitScores.map((item) => ({
+    ...(() => {
+      const details = parseStoredTraitScoreDetails(item.evidenceJson);
+      return {
+        evidence: details.evidence,
+        matched_positive_signals: details.matched_positive_signals,
+        matched_negative_signals: details.matched_negative_signals
+      };
+    })(),
     traitId: item.traitId,
     traitName: item.trait.name,
     bucket: item.bucket,
     score0to5: item.score0to5,
     confidence: item.confidence,
-    rationale: item.rationale,
-    evidence: (() => {
-      try {
-        const parsed = JSON.parse(item.evidenceJson);
-        return Array.isArray(parsed) ? parsed.map((entry) => String(entry)) : [];
-      } catch {
-        return [];
-      }
-    })()
+    rationale: item.rationale
   }))
 });
 
@@ -409,23 +513,19 @@ const buildScoringSnapshot = (input: {
   activeTraitId?: string;
 }): ScoringSnapshot => {
   const scoreByTrait = new Map(
-    (input.scorecard?.traitScores ?? []).map((trait) => [
-      trait.traitId,
-      {
-        score_1_to_5: Number(Math.max(1, Math.min(5, trait.score0to5)).toFixed(2)),
-        confidence: mapConfidence(trait.confidence),
-        evidence: (() => {
-          try {
-            const parsed = JSON.parse(trait.evidenceJson);
-            return Array.isArray(parsed) ? parsed.map((entry) => String(entry)) : [];
-          } catch {
-            return [];
-          }
-        })(),
-        rationale: trait.rationale,
-        answered: trait.traitQuestionId !== null || trait.evidenceJson !== JSON.stringify(["No quiz response captured for this trait."])
-      }
-    ])
+    (input.scorecard?.traitScores ?? []).map((trait) => {
+      const details = parseStoredTraitScoreDetails(trait.evidenceJson);
+      return [
+        trait.traitId,
+        {
+          score_1_to_5: Number(Math.max(1, Math.min(5, trait.score0to5)).toFixed(2)),
+          confidence: mapConfidence(trait.confidence),
+          evidence: details.evidence,
+          rationale: trait.rationale,
+          answered: trait.traitQuestionId !== null || details.evidence.some((entry) => entry.length > 0)
+        }
+      ];
+    })
   );
 
   const orderedTraits = [...input.programTraits].sort((a, b) => {
@@ -460,7 +560,7 @@ const buildScoringSnapshot = (input: {
   };
 };
 
-const loadProgramTraits = async (programId: string, mode: "chat" | "quiz") =>
+const loadProgramTraits = async (programId: string, mode: "voice" | "chat" | "quiz") =>
   prisma.programTrait.findMany({
     where: { programId },
     include: {
@@ -472,7 +572,10 @@ const loadProgramTraits = async (programId: string, mode: "chat" | "quiz") =>
                   where: { type: TraitQuestionType.QUIZ },
                   orderBy: { createdAt: "asc" }
                 }
-              : false
+              : {
+                  where: { type: TraitQuestionType.CHAT },
+                  orderBy: { createdAt: "asc" }
+                }
         }
       }
     }
@@ -481,7 +584,7 @@ const loadProgramTraits = async (programId: string, mode: "chat" | "quiz") =>
 const buildSessionInsights = async (input: {
   sessionId: string;
   programId: string;
-  mode: "chat" | "quiz";
+  mode: "voice" | "chat" | "quiz";
   activeTraitId?: string;
 }) => {
   const [programTraits, scorecard] = await Promise.all([
@@ -523,7 +626,7 @@ const scoreRateLimit = createRateLimiter({
 
 export const createScorecardForSession = async (input: {
   sessionId: string;
-  mode: "chat" | "quiz";
+  mode: "voice" | "chat" | "quiz";
   programId: string;
   transcriptTurns?: Array<{ ts: string; speaker: "candidate" | "assistant"; text: string }>;
   responses?: Array<{ questionId: string; answer: string }>;
@@ -566,11 +669,14 @@ export const createScorecardForSession = async (input: {
             sortOrder: item.sortOrder,
             trait: {
               name: item.trait.name,
+              definition: item.trait.definition,
+              rubricPositiveSignals: item.trait.rubricPositiveSignals,
+              rubricNegativeSignals: item.trait.rubricNegativeSignals,
               questions: item.trait.questions.map((question) => ({
                 id: question.id,
                 prompt: question.prompt,
-                optionsJson: question.optionsJson,
-                scoringHints: question.scoringHints
+                type: question.type === TraitQuestionType.QUIZ ? "quiz" : "chat",
+                optionsJson: question.optionsJson
               }))
             }
           })),
@@ -589,7 +695,18 @@ export const createScorecardForSession = async (input: {
             traitId: item.traitId,
             bucket: item.bucket,
             sortOrder: item.sortOrder,
-            trait: { name: item.trait.name }
+            trait: {
+              name: item.trait.name,
+              definition: item.trait.definition,
+              rubricPositiveSignals: item.trait.rubricPositiveSignals,
+              rubricNegativeSignals: item.trait.rubricNegativeSignals,
+              questions: item.trait.questions.map((question) => ({
+                id: question.id,
+                prompt: question.prompt,
+                type: question.type === TraitQuestionType.QUIZ ? "quiz" : "chat",
+                optionsJson: question.optionsJson
+              }))
+            }
           }))
         });
 
@@ -609,7 +726,12 @@ export const createScorecardForSession = async (input: {
             bucket: item.bucket,
             score0to5: Number(item.score0to5.toFixed(2)),
             confidence: Number(item.confidence.toFixed(2)),
-            evidenceJson: JSON.stringify(item.evidence),
+            evidenceJson: JSON.stringify({
+              evidence: item.evidence,
+              matched_positive_signals: item.matchedPositiveSignals,
+              matched_negative_signals: item.matchedNegativeSignals,
+              question_scores: item.questionEvaluations
+            }),
             rationale: item.rationale,
             traitQuestionId: item.traitQuestionId
           }))
@@ -660,7 +782,7 @@ const createSession = async (body: z.infer<typeof createSessionSchema>) => {
     startedAt: session.startedAt.toISOString()
   };
 
-  if (!body.programId || body.mode === "voice") {
+  if (!body.programId) {
     return baseResponse;
   }
 
@@ -772,7 +894,7 @@ sessionsRouter.post("/:id/complete", async (req, res) => {
       endedAt: session.endedAt?.toISOString() ?? null
     };
 
-    if (!session.programId || (session.mode !== "chat" && session.mode !== "quiz")) {
+    if (!session.programId || (session.mode !== "chat" && session.mode !== "quiz" && session.mode !== "voice")) {
       res.json(baseResponse);
       return;
     }
@@ -780,7 +902,7 @@ sessionsRouter.post("/:id/complete", async (req, res) => {
     const insights = await buildSessionInsights({
       sessionId: session.id,
       programId: session.programId,
-      mode: session.mode as "chat" | "quiz"
+      mode: session.mode as "voice" | "chat" | "quiz"
     });
 
     res.json({
@@ -851,7 +973,7 @@ sessionsRouter.post("/end", async (req, res) => {
       endedAt: session.endedAt?.toISOString() ?? null
     };
 
-    if (!session.programId || (session.mode !== "chat" && session.mode !== "quiz")) {
+    if (!session.programId || (session.mode !== "chat" && session.mode !== "quiz" && session.mode !== "voice")) {
       res.json(baseResponse);
       return;
     }
@@ -859,7 +981,7 @@ sessionsRouter.post("/end", async (req, res) => {
     const insights = await buildSessionInsights({
       sessionId: session.id,
       programId: session.programId,
-      mode: session.mode as "chat" | "quiz"
+      mode: session.mode as "voice" | "chat" | "quiz"
     });
 
     incrementMetric("sessions.completed");

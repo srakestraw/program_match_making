@@ -230,8 +230,7 @@ publicRouter.get("/programs/:id/questions", async (req, res) => {
         traitId: question.traitId,
         prompt: question.prompt,
         type: question.type === TraitQuestionType.CHAT ? "chat" : "quiz",
-        options: parseOptions(question.optionsJson),
-        scoringHints: question.scoringHints
+        options: parseOptions(question.optionsJson)
       }))
     }));
 

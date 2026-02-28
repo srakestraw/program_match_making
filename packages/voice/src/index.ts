@@ -98,6 +98,25 @@ export class RealtimeSession {
     this.setState("connected");
   }
 
+  updateInstructions(instructions: string) {
+    this.sendEvent({
+      type: "session.update",
+      session: {
+        instructions
+      }
+    });
+  }
+
+  promptAssistant(prompt: string) {
+    this.sendEvent({
+      type: "response.create",
+      response: {
+        modalities: ["audio", "text"],
+        instructions: prompt
+      }
+    });
+  }
+
   private handleServerEvent(raw: string) {
     try {
       const event = JSON.parse(raw) as {
@@ -145,5 +164,13 @@ export class RealtimeSession {
   private setState(state: ConnectionState) {
     this.state = state;
     this.config.onStateChange?.(state);
+  }
+
+  private sendEvent(payload: unknown) {
+    if (!this.dataChannel || this.dataChannel.readyState !== "open") {
+      return;
+    }
+
+    this.dataChannel.send(JSON.stringify(payload));
   }
 }

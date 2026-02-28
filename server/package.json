@@ -16,6 +16,7 @@
     "seed:data-science": "tsx src/scripts/seed-data-science-msa.ts",
     "reset-seed-data": "tsx src/scripts/reset-seed-data.ts",
     "delete-all-traits": "tsx src/scripts/delete-all-traits.ts",
+    "delete-programs-except-data-science": "tsx src/scripts/delete-programs-except-data-science.ts",
     "cleanup:mock": "tsx src/scripts/cleanup-mock-data.ts",
     "seed:gsu-voice": "tsx src/scripts/seed-gsu-brand-voice.ts"
   },

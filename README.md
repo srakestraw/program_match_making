@@ -68,6 +68,52 @@ The prototype uses a single RDS PostgreSQL instance for dev and production. Cred
 
 To create a new RDS instance via AWS CLI (security group, subnet group, and instance), see the setup that was used. Ensure `DATABASE_URL` in `.env` and `server/.env` matches your instance.
 
+## Deploy widget to Amplify + custom domain (CLI)
+
+Deploy the widget app to AWS Amplify and add custom domain `program.gravytylabs.com` (CNAME in Route 53). Prerequisites: **AWS CLI** configured, **pnpm**, **curl**, **jq**. DNS for `gravytylabs.com` must be in Route 53.
+
+```bash
+./scripts/deploy-amplify.sh
+```
+
+The script will:
+
+1. Create an Amplify app (or reuse existing `pmm-widget`), create branch `main` if needed.
+2. Build the widget, zip `apps/widget/dist`, and deploy via Amplify manual deployment APIs.
+3. Associate domain `gravytylabs.com` with subdomain `program` → branch `main`.
+4. Look up the Route 53 hosted zone for `gravytylabs.com` and add a **CNAME** record: `program.gravytylabs.com` → Amplify’s target.
+
+Optional env vars:
+
+- `APP_ID` – use existing Amplify app id (skips create).
+- `HOSTED_ZONE_ID` – use existing Route 53 hosted zone id (skips lookup).
+- `APP_NAME`, `BRANCH_NAME`, `DOMAIN_ROOT`, `SUBDOMAIN_PREFIX` – override defaults (e.g. `SUBDOMAIN_PREFIX=app` for `app.gravytylabs.com`).
+
+After running, wait for the Amplify job to complete and for DNS/SSL propagation; then `https://program.gravytylabs.com` will serve the widget.
+
+### Troubleshooting: “Site can’t be reached”
+
+1. **Check DNS** – Confirm `program.gravytylabs.com` resolves and points to Amplify:
+   ```bash
+   dig program.gravytylabs.com +short
+   # or: nslookup program.gravytylabs.com
+   ```
+   You should see a CNAME (e.g. `xxx.cloudfront.net` or Amplify’s target). If it’s empty or wrong, fix the CNAME in Route 53 (or re-run the deploy script so it re-upserts the record).
+
+2. **Check Amplify job** – In [Amplify Console](https://console.aws.amazon.com/amplify/) → your app → **main** branch, ensure the last job **Succeeded**. If it failed, fix the build and redeploy (re-run `./scripts/deploy-amplify.sh`).
+
+3. **Try the default branch URL** – If the custom domain fails, open the branch URL directly (replace `APP_ID` with your app id, e.g. from `aws amplify list-apps`):
+   ```text
+   https://main.<APP_ID>.amplifyapp.com
+   ```
+   If this works but `https://program.gravytylabs.com` does not, the issue is DNS or domain association, not the deployment.
+
+4. **Check domain association** – Custom domain must be **Available** and subdomain **Verified**:
+   ```bash
+   aws amplify get-domain-association --app-id <APP_ID> --domain-name gravytylabs.com --query 'domainAssociation.{domainStatus:domainStatus,subDomains:subDomains}'
+   ```
+   If `domainStatus` is not `AVAILABLE` or the `program` subdomain is not verified, wait for certificate/DNS propagation (often 5–30 min) or fix the CNAME in Route 53 to match the `dnsRecord` value Amplify shows for that subdomain.
+
 ## Per-App Dev Commands
 - Server: `pnpm --filter @pmm/server dev`
 - Portal app: `pnpm --filter @pmm/portal dev`
@@ -221,7 +267,7 @@ To create a new RDS instance via AWS CLI (security group, subnet group, and inst
 - `CandidateSession { id, mode, status, startedAt, endedAt }`
 - `TranscriptTurn { id, sessionId, ts, speaker, text }`
 - `Trait { id, name, category, definition, rubricScaleMin, rubricScaleMax, rubricPositiveSignals, rubricNegativeSignals, rubricFollowUps, createdAt, updatedAt }`
-- `TraitQuestion { id, traitId, type, prompt, optionsJson, scoringHints, createdAt, updatedAt }`
+- `TraitQuestion { id, traitId, type, prompt, optionsJson, createdAt, updatedAt }`
 - `Program { id, name, description, degreeLevel, department, createdAt, updatedAt }`
 - `ProgramTrait { id, programId, traitId, bucket, sortOrder, notes }`
 - `BrandVoice` — [Full doc](docs/brand-voice-data-model.md): `id`, `name`, `primaryTone`, `ttsVoiceName`, `toneModifiers[]`, `toneProfile` (json), `styleFlags[]`, `avoidFlags[]`, `canonicalExamples` (json), `createdAt`, `updatedAt`
@@ -234,6 +280,10 @@ To create a new RDS instance via AWS CLI (security group, subnet group, and inst
 - `TraitScore { id, scorecardId, traitId, traitQuestionId, bucket, score0to5, confidence, evidenceJson, rationale, scoredAt, createdAt, updatedAt }`
 - `Candidate { id, firstName, lastName, email, phone, preferredChannel, createdAt, updatedAt }`
 - `Lead { id, candidateId, programId, source, status, owner, notes, lastContactedAt, createdAt, updatedAt }`
+
+### Scoring Mental Model
+- Trait owns scoring criteria: trait definition + rubric positive/negative signals drive evaluation.
+- Questions elicit evidence only; question-level scoring guidance is intentionally removed.
 
 ## Next Bet Placement
 - Traits/Programs/BrandVoice domain shapes: `packages/domain/src/index.ts`

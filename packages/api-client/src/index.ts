@@ -86,7 +86,6 @@ const programQuestionSchema = z.object({
   prompt: z.string(),
   type: z.enum(["chat", "quiz"]),
   options: z.array(z.string()),
-  scoringHints: z.string().nullable(),
   traitName: z.string(),
   bucket: bucketSchema,
   traitSortOrder: z.number().int()
@@ -105,6 +104,8 @@ const scorecardSchema = z.object({
       bucket: bucketSchema,
       score0to5: z.number(),
       evidence: z.array(z.string()),
+      matched_positive_signals: z.array(z.string()).optional(),
+      matched_negative_signals: z.array(z.string()).optional(),
       confidence: z.number(),
       rationale: z.string().nullable().optional()
     })
@@ -445,8 +446,7 @@ export const createApiClient = ({ baseUrl }: ApiClientConfig) => {
                     traitId: z.string(),
                     prompt: z.string(),
                     type: z.enum(["chat", "quiz"]),
-                    options: z.array(z.string()),
-                    scoringHints: z.string().nullable()
+                    options: z.array(z.string())
                   })
                 )
               })
@@ -466,7 +466,7 @@ export const createApiClient = ({ baseUrl }: ApiClientConfig) => {
     }) => post("/api/public/leads", input, z.object({ candidateId: z.string(), leadId: z.string() })),
     scoreSession: (input: {
       sessionId: string;
-      mode: "chat" | "quiz";
+      mode: "voice" | "chat" | "quiz";
       programId: string;
       transcriptTurns?: TranscriptTurnInput[];
       responses?: Array<{ questionId: string; answer: string }>;
@@ -485,7 +485,7 @@ export const createApiClient = ({ baseUrl }: ApiClientConfig) => {
       ),
     scoreSessionTurn: (input: {
       sessionId: string;
-      mode: "chat" | "quiz";
+      mode: "voice" | "chat" | "quiz";
       programId: string;
       transcriptTurns?: TranscriptTurnInput[];
       responses?: Array<{ questionId: string; answer: string }>;

@@ -77,7 +77,6 @@ export type TraitQuestion = {
   type: TraitQuestionType;
   prompt: string;
   optionsJson: string[] | null;
-  scoringHints: string | null;
   createdAt: string;
   updatedAt: string;
 };

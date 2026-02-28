@@ -55,9 +55,8 @@ const updateTraitSchema = createTraitSchema.partial().refine((value) => Object.k
 const createTraitQuestionSchema = z.object({
   prompt: z.string().trim().min(1).max(2000),
   type: traitQuestionTypeSchema,
-  options: z.array(z.string().trim().min(1).max(300)).max(20).optional(),
-  scoringHints: z.string().trim().max(2000).nullable().optional()
-});
+  options: z.array(z.string().trim().min(1).max(300)).max(20).optional()
+}).strict();
 
 const updateTraitQuestionSchema = createTraitQuestionSchema.partial().refine((value) => Object.keys(value).length > 0, {
   message: "At least one field is required"
@@ -144,7 +143,6 @@ const formatQuestion = (question: {
   type: TraitQuestionType;
   prompt: string;
   optionsJson: string | null;
-  scoringHints: string | null;
   createdAt: Date;
   updatedAt: Date;
 }) => ({
@@ -153,7 +151,6 @@ const formatQuestion = (question: {
   type: fromQuestionType(question.type),
   prompt: question.prompt,
   options: question.optionsJson ? ((JSON.parse(question.optionsJson) as string[]) ?? []) : [],
-  scoringHints: question.scoringHints,
   createdAt: question.createdAt.toISOString(),
   updatedAt: question.updatedAt.toISOString()
 });
@@ -425,8 +422,7 @@ adminRouter.post("/traits/:id/questions", async (req, res) => {
         traitId: id,
         prompt: body.prompt,
         type: toQuestionType(body.type),
-        optionsJson: body.type === "quiz" ? JSON.stringify(body.options ?? []) : null,
-        scoringHints: toNull(body.scoringHints)
+        optionsJson: body.type === "quiz" ? JSON.stringify(body.options ?? []) : null
       }
     });
 
@@ -446,8 +442,7 @@ adminRouter.put("/questions/:questionId", async (req, res) => {
       data: {
         ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
         ...(body.type !== undefined ? { type: toQuestionType(body.type) } : {}),
-        ...(body.options !== undefined ? { optionsJson: JSON.stringify(body.options) } : {}),
-        ...(body.scoringHints !== undefined ? { scoringHints: toNull(body.scoringHints) } : {})
+        ...(body.options !== undefined ? { optionsJson: JSON.stringify(body.options) } : {})
       }
     });
 
