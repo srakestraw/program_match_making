@@ -46,6 +46,7 @@ V1 monorepo for Program Match Making with four apps and one Express server:
    Ensure `server/.env` or root `.env` has `DATABASE_URL` set (RDS PostgreSQL).
    Latest schema updates include:
    - live trait scoring metadata columns (`traitQuestionId`, `rationale`, `scoredAt`) on `TraitScore`
+   - session-level trait persistence table `CandidateTraitScore` for adaptive multi-program ranking
    - BrandVoice fields (`primaryTone`, `ttsVoiceName`, `toneModifiers`, `toneProfile`, `styleFlags`, `avoidFlags`, `canonicalExamples`)
    - Simulation Lab persistence (`ConversationScenario`, `ConversationSimulation`, `ConversationTurn`, `VoiceSample`) and enums
 5. Start all apps and server:
@@ -141,13 +142,16 @@ After running, wait for the Amplify job to complete and for DNS/SSL propagation;
 - Optional query params:
   - `?mode=voice|chat|quiz` preselects mode (and locks it).
   - `?lockMode=1` or `?lockMode=true` locks selector.
-  - `?programId=<id>` preselects and hides program selector.
+  - `?programId=<id>` acts as an optional compare/filter scope (`programFilterIds=[id]`).
 - Results page: `/widget/results`.
 - Results lead capture: `Request Info / Talk to an advisor` posts to `POST /api/public/leads`.
 
 ## API Endpoints
 - `POST /api/realtime/token`: mints ephemeral realtime session secret using `OPENAI_API_KEY`.
 - `POST /api/sessions`: create a `CandidateSession` in `active` state.
+- `POST /api/interview/sessions`: create session without requiring a program, returns initial prompt + ranking snapshot.
+- `POST /api/interview/sessions/:id/turns`: submit candidate turn, returns updated trait snapshot, rankings, next question, and checkpoint.
+- `POST /api/interview/sessions/:id/checkpoint`: handle checkpoint action (`stop|continue|focus`) and return next state.
 - `POST /api/voice/session/start`: alias start endpoint with optional `scoring_snapshot` + `program_fit`.
 - `POST /api/sessions/:id/transcript`: append transcript turns.
 - `POST /api/sessions/:id/complete`: mark session complete and set `endedAt`.
@@ -264,6 +268,7 @@ After running, wait for the Amplify job to complete and for DNS/SSL propagation;
   ```
 
 ## Data Model
+- **Traits & Programs** — [Full doc](docs/trait-and-program-data-model.md): `Trait`, `TraitQuestion`, `Program`, `ProgramTrait`; enums `TraitCategory`, `ProgramTraitPriorityBucket`, `TraitQuestionType`; domain types and scoring/ranking usage.
 - `CandidateSession { id, mode, status, startedAt, endedAt }`
 - `TranscriptTurn { id, sessionId, ts, speaker, text }`
 - `Trait { id, name, category, definition, rubricScaleMin, rubricScaleMax, rubricPositiveSignals, rubricNegativeSignals, rubricFollowUps, createdAt, updatedAt }`

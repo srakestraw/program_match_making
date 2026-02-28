@@ -1,8 +1,21 @@
 import { Router } from "express";
+import { z } from "zod";
 import { sendError } from "../lib/http.js";
 import { incrementMetric } from "../lib/metrics.js";
 import { fetchOpenAiWithRetry } from "../lib/openai.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
+import { prisma } from "../lib/prisma.js";
+import { buildInterviewSystemPrompt, DEFAULT_INTERVIEW_LANGUAGE } from "../lib/interview-language.js";
+
+const tokenBodySchema = z
+  .object({
+    brandVoiceId: z.string().min(1).optional(),
+    voiceName: z.string().trim().min(1).max(80).optional(),
+    language: z.string().trim().min(2).max(8).optional()
+  })
+  .optional();
+
+const allowedVoices = new Set(["alloy", "echo", "fable", "onyx", "nova", "shimmer"]);
 
 export const realtimeRouter = Router();
 const tokenRateLimit = createRateLimiter({
@@ -11,7 +24,7 @@ const tokenRateLimit = createRateLimiter({
   max: Number(process.env.PUBLIC_RATE_LIMIT_TOKEN_MAX ?? 30)
 });
 
-realtimeRouter.post("/token", tokenRateLimit, async (_req, res) => {
+realtimeRouter.post("/token", tokenRateLimit, async (req, res) => {
   const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
@@ -21,6 +34,23 @@ realtimeRouter.post("/token", tokenRateLimit, async (_req, res) => {
   }
 
   try {
+    const body = tokenBodySchema.parse(req.body);
+    const brandVoice = body?.brandVoiceId
+      ? await prisma.brandVoice.findUnique({
+          where: { id: body.brandVoiceId },
+          select: { id: true, ttsVoiceName: true, primaryTone: true, styleFlags: true }
+        })
+      : null;
+    const rawVoice = body?.voiceName ?? brandVoice?.ttsVoiceName ?? "alloy";
+    const selectedVoice = allowedVoices.has(rawVoice) ? rawVoice : "alloy";
+    const language = (body?.language ?? DEFAULT_INTERVIEW_LANGUAGE).toLowerCase();
+    const instructions = buildInterviewSystemPrompt({
+      brandVoicePrompt: brandVoice
+        ? `Use a ${brandVoice.primaryTone} tone with these style flags: ${brandVoice.styleFlags.join(", ") || "clear and supportive"}.`
+        : null,
+      language
+    });
+
     const response = await fetchOpenAiWithRetry("https://api.openai.com/v1/realtime/sessions", {
       method: "POST",
       headers: {
@@ -29,7 +59,12 @@ realtimeRouter.post("/token", tokenRateLimit, async (_req, res) => {
       },
       body: JSON.stringify({
         model: "gpt-4o-realtime-preview",
-        voice: "alloy"
+        voice: selectedVoice,
+        instructions,
+        input_audio_transcription: {
+          model: "gpt-4o-mini-transcribe",
+          language
+        }
       })
     });
 
@@ -44,7 +79,12 @@ realtimeRouter.post("/token", tokenRateLimit, async (_req, res) => {
 
     incrementMetric("realtime.token.success");
     res.json(payload);
-  } catch {
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      incrementMetric("realtime.token.failed");
+      sendError(res, 400, "Invalid token request payload", error.issues, "REQUEST_ERROR");
+      return;
+    }
     incrementMetric("realtime.token.failed");
     sendError(res, 502, "Failed to mint realtime token", undefined, "OPENAI_TOKEN_FAILED");
   }

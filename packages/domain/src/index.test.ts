@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { boardStateToProgramTraitRows, generateBrandVoicePreview, scoreCandidateSession } from "./index.js";
+import {
+  boardStateToProgramTraitRows,
+  computeTraitImpacts,
+  generateBrandVoicePreview,
+  pickNextTrait,
+  rankProgramsByTraits,
+  scoreCandidateSession,
+  shouldTriggerCheckpoint
+} from "./index.js";
 
 describe("boardStateToProgramTraitRows", () => {
   it("maps bucket board state to ordered rows with sortOrder per bucket", () => {
@@ -89,5 +97,88 @@ describe("generateBrandVoicePreview", () => {
     expect(preview.cta).toContain("Learn more");
     expect(preview.email_intro).toContain("Supportive tone");
     expect(preview.description).toContain("Avoiding overly salesy");
+  });
+});
+
+describe("rankProgramsByTraits", () => {
+  it("ranks programs and includes confidence/explainability", () => {
+    const result = rankProgramsByTraits({
+      programs: [
+        {
+          programId: "p1",
+          programName: "Program A",
+          traits: [
+            { traitId: "communication", weight: 0.6 },
+            { traitId: "leadership", weight: 0.4 }
+          ]
+        },
+        {
+          programId: "p2",
+          programName: "Program B",
+          traits: [
+            { traitId: "communication", weight: 0.2 },
+            { traitId: "leadership", weight: 0.8 }
+          ]
+        }
+      ],
+      traits: [
+        { traitId: "communication", traitName: "Communication", score0to5: 4.5, confidence0to1: 0.9 },
+        { traitId: "leadership", traitName: "Leadership", score0to5: 2, confidence0to1: 0.5 }
+      ]
+    });
+
+    expect(result.programs[0].programId).toBe("p1");
+    expect(result.programs[0].confidence_0_to_1).toBeGreaterThan(0);
+    expect(result.programs[0].explainability.topContributors.length).toBeGreaterThan(0);
+  });
+});
+
+describe("pickNextTrait", () => {
+  it("prefers high uncertainty * impact and avoids repeating category", () => {
+    const impacts = computeTraitImpacts({
+      programs: [
+        {
+          programId: "p1",
+          programName: "A",
+          traits: [
+            { traitId: "t1", weight: 0.6 },
+            { traitId: "t2", weight: 0.4 }
+          ]
+        },
+        {
+          programId: "p2",
+          programName: "B",
+          traits: [
+            { traitId: "t1", weight: 0.1 },
+            { traitId: "t2", weight: 0.9 }
+          ]
+        }
+      ]
+    });
+
+    const next = pickNextTrait({
+      traits: [
+        { traitId: "t1", category: "ACADEMIC" },
+        { traitId: "t2", category: "ACADEMIC" },
+        { traitId: "t3", category: "MOTIVATION" }
+      ],
+      traitStates: [
+        { traitId: "t1", traitName: "T1", score0to5: 4, confidence0to1: 0.9 },
+        { traitId: "t2", traitName: "T2", score0to5: 3, confidence0to1: 0.2 },
+        { traitId: "t3", traitName: "T3", score0to5: null, confidence0to1: 0.1 }
+      ],
+      traitImpacts: impacts,
+      recentTraitIds: ["t1", "t2"]
+    });
+
+    expect(next.traitId).toBe("t3");
+  });
+});
+
+describe("shouldTriggerCheckpoint", () => {
+  it("triggers every 3 answered questions", () => {
+    expect(shouldTriggerCheckpoint(1)).toBe(false);
+    expect(shouldTriggerCheckpoint(3)).toBe(true);
+    expect(shouldTriggerCheckpoint(6)).toBe(true);
   });
 });

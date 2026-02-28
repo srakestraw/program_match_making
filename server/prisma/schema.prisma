@@ -126,6 +126,7 @@ model CandidateSession {
   candidateId String?
   programId String?
   mode      String
+  sessionLanguageTag String @default("en")
   channel   CandidateSessionChannel @default(WEB_VOICE)
   status    String
   startedAt DateTime         @default(now())
@@ -134,11 +135,30 @@ model CandidateSession {
   program   Program?         @relation(fields: [programId], references: [id], onDelete: SetNull)
   turns     TranscriptTurn[]
   scorecards Scorecard[]
+  traitScores CandidateTraitScore[]
   callSessions CallSession[]
   smsSessions SmsSession[]
 
   @@index([candidateId])
   @@index([programId])
+}
+
+model CandidateTraitScore {
+  id            String           @id @default(cuid())
+  sessionId     String
+  traitId       String
+  score0to5     Float
+  confidence0to1 Float
+  evidenceJson  String
+  rationale     String?
+  updatedAt     DateTime         @updatedAt
+  createdAt     DateTime         @default(now())
+  session       CandidateSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  trait         Trait            @relation(fields: [traitId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, traitId])
+  @@index([sessionId])
+  @@index([traitId])
 }
 
 model TranscriptTurn {
@@ -167,6 +187,7 @@ model Trait {
   questions             TraitQuestion[]
   programTraits         ProgramTrait[]
   traitScores           TraitScore[]
+  candidateTraitScores  CandidateTraitScore[]
 }
 
 model TraitQuestion {

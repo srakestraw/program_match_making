@@ -1,33 +1,23 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { useEffect, useMemo, useState } from "react";
-import { computeProgramBubbleLayout } from "../lib/programFloatLayout";
+import { useMemo, useState } from "react";
+const confidenceLabel = (value) => {
+    if (!Number.isFinite(value))
+        return "Low";
+    if ((value ?? 0) >= 0.75)
+        return "High";
+    if ((value ?? 0) >= 0.5)
+        return "Medium";
+    return "Low";
+};
 export const ProgramFloatField = ({ programs, selectedProgramId, done = false }) => {
-    const [pinnedProgramId, setPinnedProgramId] = useState(null);
-    const [frozenLayout, setFrozenLayout] = useState(null);
-    const layout = useMemo(() => computeProgramBubbleLayout({ programs, selectedProgramId: selectedProgramId ?? null }), [programs, selectedProgramId]);
-    useEffect(() => {
-        if (done && !frozenLayout) {
-            setFrozenLayout(layout);
-            return;
-        }
-        if (!done && frozenLayout) {
-            setFrozenLayout(null);
-        }
-    }, [done, frozenLayout, layout]);
-    const programsById = useMemo(() => new Map(programs.map((program) => [program.programId, program])), [programs]);
-    const ranked = useMemo(() => [...programs].sort((a, b) => b.fitScore_0_to_100 - a.fitScore_0_to_100), [programs]);
-    return (_jsxs("section", { className: "rounded-xl border border-slate-200 bg-white/80 p-3", "data-testid": "program-float-field", children: [_jsxs("div", { className: "mb-2 flex items-center justify-between", children: [_jsx("h3", { className: "text-sm font-semibold text-slate-900", children: "Program fit radar" }), _jsx("span", { className: "text-xs text-slate-500", children: "Click to pin" })] }), _jsx("div", { className: "relative h-[320px] overflow-hidden rounded-lg border border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100", children: (frozenLayout ?? layout).map((bubble) => {
-                    const program = programsById.get(bubble.programId);
-                    if (!program)
-                        return null;
-                    const isSelected = selectedProgramId === bubble.programId;
-                    const isPinned = pinnedProgramId === bubble.programId;
-                    return (_jsxs("button", { type: "button", className: `absolute rounded-full border text-center shadow-sm transition-all duration-700 ease-out ${isSelected ? "border-blue-500 bg-blue-100/80" : "border-slate-300 bg-white/85"} ${isPinned ? "ring-2 ring-blue-400" : ""}`, style: {
-                            width: `${bubble.sizePx}px`,
-                            height: `${bubble.sizePx}px`,
-                            transform: `translate(-50%, -50%) translate(${bubble.xPct}%, ${bubble.yPct}%)`,
-                            opacity: bubble.opacity,
-                            zIndex: isPinned ? 20 : isSelected ? 15 : 10
-                        }, onClick: () => setPinnedProgramId((prev) => (prev === bubble.programId ? null : bubble.programId)), "data-testid": `program-bubble-${bubble.programId}`, children: [_jsx("span", { className: "block px-2 pt-3 text-[11px] font-semibold leading-tight text-slate-900", children: program.programName }), _jsxs("span", { className: "block px-2 text-[10px] text-slate-600", children: [Math.round(program.fitScore_0_to_100), "%"] }), _jsx("span", { className: "mt-1 block px-2 text-[9px] text-slate-500", children: program.topTraits.slice(0, 2).map((item) => item.traitName).join(" · ") }), (isPinned || isSelected) && (_jsx("span", { className: "pointer-events-none absolute -bottom-24 left-1/2 w-44 -translate-x-1/2 rounded-md border border-slate-200 bg-white px-2 py-1 text-left text-[10px] text-slate-700 shadow-md", children: program.topTraits.slice(0, 3).map((item) => (_jsxs("span", { className: "block", children: [item.traitName, ": ", item.delta > 0 ? "+" : "", item.delta.toFixed(2)] }, `${bubble.programId}-${item.traitName}`))) }))] }, bubble.programId));
-                }) }), done && (_jsxs("div", { className: "mt-3 rounded-md border border-slate-200 bg-white p-2", children: [_jsx("p", { className: "mb-1 text-xs font-semibold text-slate-900", children: "Final ranking" }), _jsx("ol", { className: "space-y-1 text-xs text-slate-700", children: ranked.map((item, index) => (_jsxs("li", { children: [index + 1, ". ", item.programName, " - ", item.fitScore_0_to_100.toFixed(1), "%"] }, item.programId))) })] }))] }));
+    const [expandedProgramId, setExpandedProgramId] = useState(null);
+    const ranked = useMemo(() => [...programs].sort((a, b) => b.fitScore_0_to_100 - a.fitScore_0_to_100).slice(0, 5), [programs]);
+    return (_jsxs("section", { className: "rounded-xl border border-slate-200 bg-white/80 p-3", "data-testid": "program-float-field", children: [_jsxs("div", { className: "mb-2 flex items-center justify-between", children: [_jsx("h3", { className: "text-sm font-semibold text-slate-900", children: done ? "Final rankings" : "Live program rankings" }), _jsx("span", { className: "text-xs text-slate-500", children: "Top 5" })] }), _jsxs("div", { className: "space-y-2", children: [ranked.map((program, index) => {
+                        const expanded = expandedProgramId === program.programId;
+                        const isSelected = selectedProgramId === program.programId;
+                        const confidencePct = Math.round((program.confidence_0_to_1 ?? 0) * 100);
+                        const delta = program.deltaFromLast_0_to_100 ?? 0;
+                        const positiveDelta = delta > 0;
+                        return (_jsxs("article", { className: `rounded-md border p-2 ${isSelected ? "border-blue-400 bg-blue-50/50" : "border-slate-200 bg-white"}`, children: [_jsxs("div", { className: "flex items-start justify-between gap-2", children: [_jsxs("div", { children: [_jsxs("p", { className: "text-sm font-semibold text-slate-900", children: [index + 1, ". ", program.programName] }), _jsxs("p", { className: "text-xs text-slate-600", children: ["Score: ", program.fitScore_0_to_100.toFixed(1), "%"] })] }), _jsxs("div", { className: "text-right", children: [_jsxs("span", { className: "rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-700", children: [confidenceLabel(program.confidence_0_to_1), " ", confidencePct, "%"] }), _jsxs("p", { className: `mt-1 text-xs font-medium ${positiveDelta ? "text-emerald-700" : delta < 0 ? "text-rose-700" : "text-slate-500"}`, children: ["Delta ", positiveDelta ? "+" : "", delta.toFixed(1)] })] })] }), _jsx("button", { type: "button", className: "mt-1 text-xs text-slate-700 underline", onClick: () => setExpandedProgramId((prev) => (prev === program.programId ? null : program.programId)), children: expanded ? "Hide explainability" : "Why this match?" }), expanded && (_jsxs("div", { className: "mt-2 space-y-2 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700", children: [_jsxs("div", { children: [_jsx("p", { className: "font-semibold text-slate-900", children: "Top contributing traits" }), _jsx("ul", { className: "mt-1 space-y-0.5", children: (program.explainability?.topContributors ?? []).slice(0, 3).map((item) => (_jsxs("li", { children: [item.traitName, " (", Math.round(item.contribution * 100), "%)"] }, `${program.programId}-top-${item.traitId}`))) })] }), _jsxs("div", { children: [_jsx("p", { className: "font-semibold text-slate-900", children: "Weak or missing traits" }), _jsx("ul", { className: "mt-1 space-y-0.5", children: (program.explainability?.gaps ?? []).slice(0, 3).map((item) => (_jsxs("li", { children: [item.traitName, " (", item.reason.replace("_", " "), ")"] }, `${program.programId}-gap-${item.traitId}`))) })] }), _jsxs("div", { children: [_jsx("p", { className: "font-semibold text-slate-900", children: "What increases confidence" }), _jsx("ul", { className: "mt-1 space-y-0.5", children: (program.explainability?.suggestions ?? []).slice(0, 2).map((item) => (_jsxs("li", { children: [item.traitName, ": ", item.reason] }, `${program.programId}-suggest-${item.traitId}`))) })] })] }))] }, program.programId));
+                    }), ranked.length === 0 && _jsx("p", { className: "text-xs text-slate-500", children: "Ranking updates will appear once responses arrive." })] })] }));
 };

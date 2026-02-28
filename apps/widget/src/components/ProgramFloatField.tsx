@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { ProgramFit } from "@pmm/api-client";
-import { computeProgramBubbleLayout } from "../lib/programFloatLayout";
 
 type ProgramFloatFieldProps = {
   programs: ProgramFit["programs"];
@@ -8,91 +7,100 @@ type ProgramFloatFieldProps = {
   done?: boolean;
 };
 
+const confidenceLabel = (value?: number) => {
+  if (!Number.isFinite(value)) return "Low";
+  if ((value ?? 0) >= 0.75) return "High";
+  if ((value ?? 0) >= 0.5) return "Medium";
+  return "Low";
+};
+
 export const ProgramFloatField = ({ programs, selectedProgramId, done = false }: ProgramFloatFieldProps) => {
-  const [pinnedProgramId, setPinnedProgramId] = useState<string | null>(null);
-  const [frozenLayout, setFrozenLayout] = useState<ReturnType<typeof computeProgramBubbleLayout> | null>(null);
-
-  const layout = useMemo(
-    () => computeProgramBubbleLayout({ programs, selectedProgramId: selectedProgramId ?? null }),
-    [programs, selectedProgramId]
-  );
-
-  useEffect(() => {
-    if (done && !frozenLayout) {
-      setFrozenLayout(layout);
-      return;
-    }
-    if (!done && frozenLayout) {
-      setFrozenLayout(null);
-    }
-  }, [done, frozenLayout, layout]);
-
-  const programsById = useMemo(() => new Map(programs.map((program) => [program.programId, program])), [programs]);
-  const ranked = useMemo(() => [...programs].sort((a, b) => b.fitScore_0_to_100 - a.fitScore_0_to_100), [programs]);
+  const [expandedProgramId, setExpandedProgramId] = useState<string | null>(null);
+  const ranked = useMemo(() => [...programs].sort((a, b) => b.fitScore_0_to_100 - a.fitScore_0_to_100).slice(0, 5), [programs]);
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white/80 p-3" data-testid="program-float-field">
       <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-slate-900">Program fit radar</h3>
-        <span className="text-xs text-slate-500">Click to pin</span>
+        <h3 className="text-sm font-semibold text-slate-900">{done ? "Final rankings" : "Live program rankings"}</h3>
+        <span className="text-xs text-slate-500">Top 5</span>
       </div>
 
-      <div className="relative h-[320px] overflow-hidden rounded-lg border border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100">
-        {(frozenLayout ?? layout).map((bubble) => {
-          const program = programsById.get(bubble.programId);
-          if (!program) return null;
-
-          const isSelected = selectedProgramId === bubble.programId;
-          const isPinned = pinnedProgramId === bubble.programId;
+      <div className="space-y-2">
+        {ranked.map((program, index) => {
+          const expanded = expandedProgramId === program.programId;
+          const isSelected = selectedProgramId === program.programId;
+          const confidencePct = Math.round((program.confidence_0_to_1 ?? 0) * 100);
+          const delta = program.deltaFromLast_0_to_100 ?? 0;
+          const positiveDelta = delta > 0;
 
           return (
-            <button
-              key={bubble.programId}
-              type="button"
-              className={`absolute rounded-full border text-center shadow-sm transition-all duration-700 ease-out ${
-                isSelected ? "border-blue-500 bg-blue-100/80" : "border-slate-300 bg-white/85"
-              } ${isPinned ? "ring-2 ring-blue-400" : ""}`}
-              style={{
-                width: `${bubble.sizePx}px`,
-                height: `${bubble.sizePx}px`,
-                transform: `translate(-50%, -50%) translate(${bubble.xPct}%, ${bubble.yPct}%)`,
-                opacity: bubble.opacity,
-                zIndex: isPinned ? 20 : isSelected ? 15 : 10
-              }}
-              onClick={() => setPinnedProgramId((prev) => (prev === bubble.programId ? null : bubble.programId))}
-              data-testid={`program-bubble-${bubble.programId}`}
+            <article
+              key={program.programId}
+              className={`rounded-md border p-2 ${isSelected ? "border-blue-400 bg-blue-50/50" : "border-slate-200 bg-white"}`}
             >
-              <span className="block px-2 pt-3 text-[11px] font-semibold leading-tight text-slate-900">{program.programName}</span>
-              <span className="block px-2 text-[10px] text-slate-600">{Math.round(program.fitScore_0_to_100)}%</span>
-              <span className="mt-1 block px-2 text-[9px] text-slate-500">{program.topTraits.slice(0, 2).map((item) => item.traitName).join(" · ")}</span>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">
+                    {index + 1}. {program.programName}
+                  </p>
+                  <p className="text-xs text-slate-600">Score: {program.fitScore_0_to_100.toFixed(1)}%</p>
+                </div>
+                <div className="text-right">
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-700">
+                    {confidenceLabel(program.confidence_0_to_1)} {confidencePct}%
+                  </span>
+                  <p className={`mt-1 text-xs font-medium ${positiveDelta ? "text-emerald-700" : delta < 0 ? "text-rose-700" : "text-slate-500"}`}>
+                    Delta {positiveDelta ? "+" : ""}
+                    {delta.toFixed(1)}
+                  </p>
+                </div>
+              </div>
 
-              {(isPinned || isSelected) && (
-                <span className="pointer-events-none absolute -bottom-24 left-1/2 w-44 -translate-x-1/2 rounded-md border border-slate-200 bg-white px-2 py-1 text-left text-[10px] text-slate-700 shadow-md">
-                  {program.topTraits.slice(0, 3).map((item) => (
-                    <span key={`${bubble.programId}-${item.traitName}`} className="block">
-                      {item.traitName}: {item.delta > 0 ? "+" : ""}
-                      {item.delta.toFixed(2)}
-                    </span>
-                  ))}
-                </span>
+              <button
+                type="button"
+                className="mt-1 text-xs text-slate-700 underline"
+                onClick={() => setExpandedProgramId((prev) => (prev === program.programId ? null : program.programId))}
+              >
+                {expanded ? "Hide explainability" : "Why this match?"}
+              </button>
+
+              {expanded && (
+                <div className="mt-2 space-y-2 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+                  <div>
+                    <p className="font-semibold text-slate-900">Top contributing traits</p>
+                    <ul className="mt-1 space-y-0.5">
+                      {(program.explainability?.topContributors ?? []).slice(0, 3).map((item) => (
+                        <li key={`${program.programId}-top-${item.traitId}`}>
+                          {item.traitName} ({Math.round(item.contribution * 100)}%)
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <p className="font-semibold text-slate-900">Weak or missing traits</p>
+                    <ul className="mt-1 space-y-0.5">
+                      {(program.explainability?.gaps ?? []).slice(0, 3).map((item) => (
+                        <li key={`${program.programId}-gap-${item.traitId}`}>
+                          {item.traitName} ({item.reason.replace("_", " ")})
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <p className="font-semibold text-slate-900">What increases confidence</p>
+                    <ul className="mt-1 space-y-0.5">
+                      {(program.explainability?.suggestions ?? []).slice(0, 2).map((item) => (
+                        <li key={`${program.programId}-suggest-${item.traitId}`}>{item.traitName}: {item.reason}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
               )}
-            </button>
+            </article>
           );
         })}
+        {ranked.length === 0 && <p className="text-xs text-slate-500">Ranking updates will appear once responses arrive.</p>}
       </div>
-
-      {done && (
-        <div className="mt-3 rounded-md border border-slate-200 bg-white p-2">
-          <p className="mb-1 text-xs font-semibold text-slate-900">Final ranking</p>
-          <ol className="space-y-1 text-xs text-slate-700">
-            {ranked.map((item, index) => (
-              <li key={item.programId}>
-                {index + 1}. {item.programName} - {item.fitScore_0_to_100.toFixed(1)}%
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
     </section>
   );
 };

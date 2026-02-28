@@ -236,3 +236,223 @@ export const boardStateToProgramTraitRows = (board: ProgramTraitBoardState): Pro
       sortOrder: index
     }))
   );
+
+export type TraitState = {
+  traitId: string;
+  traitName: string;
+  category?: TraitCategory | null;
+  score0to5: number | null;
+  confidence0to1: number;
+};
+
+export type ProgramTraitWeightInput = {
+  traitId: string;
+  weight: number;
+};
+
+export type ProgramMatchInput = {
+  programId: string;
+  programName: string;
+  traits: ProgramTraitWeightInput[];
+};
+
+export type ProgramExplainability = {
+  topContributors: Array<{ traitId: string; traitName: string; contribution: number }>;
+  gaps: Array<{ traitId: string; traitName: string; reason: "low_score" | "low_confidence" | "missing" }>;
+  suggestions: Array<{ traitId: string; traitName: string; reason: string }>;
+};
+
+export type RankedProgram = {
+  programId: string;
+  programName: string;
+  fitScore_0_to_100: number;
+  confidence_0_to_1: number;
+  deltaFromLast_0_to_100: number;
+  explainability: ProgramExplainability;
+};
+
+export type ProgramRankingOutput = {
+  programs: RankedProgram[];
+};
+
+const clampNumber = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+const normalizeTraitWeights = (weights: ProgramTraitWeightInput[]) => {
+  const clean = weights.filter((item) => Number.isFinite(item.weight) && item.weight > 0);
+  const total = clean.reduce((acc, item) => acc + item.weight, 0);
+  if (clean.length === 0 || total <= 0) {
+    return [] as ProgramTraitWeightInput[];
+  }
+  return clean.map((item) => ({ ...item, weight: item.weight / total }));
+};
+
+const scoreNormFromTrait = (state?: TraitState) => {
+  if (!state || state.score0to5 === null) return 0.5;
+  return clampNumber(state.score0to5 / 5, 0, 1);
+};
+
+const traitStateById = (traits: TraitState[]) => new Map(traits.map((trait) => [trait.traitId, trait]));
+
+export const rankProgramsByTraits = (input: {
+  programs: ProgramMatchInput[];
+  traits: TraitState[];
+  previousScores?: Record<string, number>;
+  limit?: number;
+}): ProgramRankingOutput => {
+  const traitById = traitStateById(input.traits);
+  const previousScores = input.previousScores ?? {};
+  const scored = input.programs.map((program) => {
+    const normalizedWeights = normalizeTraitWeights(program.traits);
+    const contributions = normalizedWeights.map((item) => {
+      const state = traitById.get(item.traitId);
+      const traitName = state?.traitName ?? item.traitId;
+      const scoreNorm = scoreNormFromTrait(state);
+      return {
+        traitId: item.traitId,
+        traitName,
+        weight: item.weight,
+        scoreNorm,
+        confidence: clampNumber(state?.confidence0to1 ?? 0, 0, 1),
+        missing: !state || state.score0to5 === null,
+        contribution: item.weight * scoreNorm
+      };
+    });
+
+    const raw = contributions.reduce((acc, item) => acc + item.contribution, 0);
+    const fitScore = Math.round(raw * 100);
+
+    let confidence = contributions.reduce((acc, item) => acc + item.weight * item.confidence, 0);
+    const topContributors = [...contributions]
+      .sort((a, b) => b.contribution - a.contribution)
+      .slice(0, 3)
+      .map((item) => ({
+        traitId: item.traitId,
+        traitName: item.traitName,
+        contribution: Number(item.contribution.toFixed(3))
+      }));
+
+    const gaps: ProgramExplainability["gaps"] = [...contributions]
+      .filter((item) => item.weight >= 0.16 && (item.missing || item.scoreNorm < 0.55 || item.confidence < 0.55))
+      .sort((a, b) => b.weight - a.weight)
+      .slice(0, 3)
+      .map((item) => ({
+        traitId: item.traitId,
+        traitName: item.traitName,
+        reason: (item.missing ? "missing" : item.confidence < 0.55 ? "low_confidence" : "low_score") as
+          | "missing"
+          | "low_confidence"
+          | "low_score"
+      }));
+
+    const suggestions = gaps.map((item) => ({
+      traitId: item.traitId,
+      traitName: item.traitName,
+      reason: item.reason === "missing" ? "Assess this trait next." : "Gather one more concrete example."
+    }));
+
+    const prev = previousScores[program.programId] ?? fitScore;
+    return {
+      programId: program.programId,
+      programName: program.programName,
+      fitScore_0_to_100: fitScore,
+      confidence_0_to_1: confidence,
+      deltaFromLast_0_to_100: Number((fitScore - prev).toFixed(1)),
+      explainability: {
+        topContributors,
+        gaps,
+        suggestions
+      }
+    };
+  });
+
+  const ordered = scored.sort((a, b) => b.fitScore_0_to_100 - a.fitScore_0_to_100 || a.programName.localeCompare(b.programName));
+  if (ordered.length >= 2) {
+    const separation = (ordered[0].fitScore_0_to_100 - ordered[1].fitScore_0_to_100) / 100;
+    if (separation < 0.05) {
+      ordered.forEach((item) => {
+        item.confidence_0_to_1 = clampNumber(item.confidence_0_to_1 * 0.85, 0, 1);
+      });
+    }
+  }
+
+  const limit = Math.max(1, Math.min(10, input.limit ?? 5));
+  return {
+    programs: ordered.slice(0, limit).map((item) => ({
+      ...item,
+      confidence_0_to_1: Number(clampNumber(item.confidence_0_to_1, 0, 1).toFixed(2))
+    }))
+  };
+};
+
+export const computeTraitImpacts = (input: {
+  programs: ProgramMatchInput[];
+  topProgramIds?: string[];
+  maxPrograms?: number;
+}): Record<string, number> => {
+  const selected = input.topProgramIds?.length
+    ? input.programs.filter((program) => input.topProgramIds?.includes(program.programId))
+    : input.programs.slice(0, Math.max(1, input.maxPrograms ?? 5));
+
+  const byTrait = new Map<string, number[]>();
+  selected.forEach((program) => {
+    const normalized = normalizeTraitWeights(program.traits);
+    normalized.forEach((item) => {
+      const values = byTrait.get(item.traitId) ?? [];
+      values.push(item.weight);
+      byTrait.set(item.traitId, values);
+    });
+  });
+
+  const output: Record<string, number> = {};
+  byTrait.forEach((values, traitId) => {
+    if (values.length === 0) {
+      output[traitId] = 0.2;
+      return;
+    }
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    output[traitId] = clampNumber((max - min) * 5, 0.1, 1);
+  });
+  return output;
+};
+
+export const pickNextTrait = (input: {
+  traits: Array<{ traitId: string; category?: TraitCategory | null }>;
+  traitStates: TraitState[];
+  traitImpacts: Record<string, number>;
+  recentTraitIds?: string[];
+  maxSameCategoryInRow?: number;
+}): { traitId: string | null; scores: Array<{ traitId: string; priority: number }> } => {
+  const states = traitStateById(input.traitStates);
+  const recent = input.recentTraitIds ?? [];
+  const maxSameCategoryInRow = input.maxSameCategoryInRow ?? 2;
+  const lastCategory = recent.length > 0 ? input.traits.find((item) => item.traitId === recent[recent.length - 1])?.category : null;
+  const recentSameCategoryCount = lastCategory
+    ? recent
+        .slice(-maxSameCategoryInRow)
+        .map((traitId) => input.traits.find((item) => item.traitId === traitId)?.category)
+        .filter((category) => category === lastCategory).length
+    : 0;
+
+  const scored = input.traits.map((trait) => {
+    const current = states.get(trait.traitId);
+    const uncertainty = 1 - clampNumber(current?.confidence0to1 ?? 0, 0, 1);
+    const impact = clampNumber(input.traitImpacts[trait.traitId] ?? 0.35, 0.1, 1);
+    const askedRecently = recent.slice(-5).includes(trait.traitId);
+    let coverageBoost = askedRecently ? 0.55 : 1;
+    if (lastCategory && trait.category === lastCategory && recentSameCategoryCount >= maxSameCategoryInRow) {
+      coverageBoost = 0.2;
+    }
+    const priority = uncertainty * impact * coverageBoost;
+    return { traitId: trait.traitId, priority };
+  });
+
+  scored.sort((a, b) => b.priority - a.priority);
+  return {
+    traitId: scored[0]?.traitId ?? null,
+    scores: scored
+  };
+};
+
+export const shouldTriggerCheckpoint = (answeredTraitCount: number, interval = 3) =>
+  answeredTraitCount > 0 && answeredTraitCount % Math.max(1, interval) === 0;

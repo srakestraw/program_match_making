@@ -1,77 +1,49 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate, useSearchParams } from "react-router-dom";
-import { QueryClient, QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useMutation } from "@tanstack/react-query";
 import { Button, Card } from "@pmm/ui";
-import {
-  createApiClient,
-  type ProgramQuestion,
-  type ProgramFit,
-  type PublicProgram,
-  type ScoringSnapshot,
-  type TranscriptTurnInput
-} from "@pmm/api-client";
+import { createApiClient, type ProgramFit, type ScoringSnapshot } from "@pmm/api-client";
 import { RealtimeSession, type ConnectionState, type TranscriptTurn } from "@pmm/voice";
-import { useWidgetStore } from "./store";
 import { ProgramFloatField } from "./components/ProgramFloatField";
 import { TraitScorePanel } from "./components/TraitScorePanel";
+import { VoiceBlob } from "./components/VoiceBlob";
+import { useWidgetStore } from "./store";
+import {
+  getVoicePhaseLabel,
+  isConnectedPhase,
+  reduceVoicePhase,
+  shouldKickoff,
+  toVoiceBlobState,
+  type VoicePhase
+} from "./lib/voiceState";
+import { createLanguageUtterance } from "./lib/browserTts";
+import { ALL_LANGUAGE_OPTIONS, EXTRA_LANGUAGE_OPTIONS, PRIMARY_LANGUAGE_OPTIONS, languageLabelFromTag } from "./constants/languages";
+import { LanguagePills } from "./components/LanguagePills";
+import { LanguagePickerModal } from "./components/LanguagePickerModal";
 import "./styles.css";
 
 const queryClient = new QueryClient();
 const api = createApiClient({ baseUrl: import.meta.env.VITE_API_URL ?? "http://localhost:4000" });
 
 type InterviewMode = "voice" | "chat" | "quiz";
-type VoiceStep = "start" | "permissions" | "session" | "end";
-
-const bucketOrder = ["CRITICAL", "VERY_IMPORTANT", "IMPORTANT", "NICE_TO_HAVE"] as const;
-const bucketWeight: Record<(typeof bucketOrder)[number], number> = {
-  CRITICAL: 1,
-  VERY_IMPORTANT: 0.8,
-  IMPORTANT: 0.6,
-  NICE_TO_HAVE: 0.4
-};
 
 const modeOptions: Array<{ id: InterviewMode; label: string; description: string }> = [
-  { id: "voice", label: "Voice", description: "Live voice interview" },
-  { id: "chat", label: "Chat", description: "Text-based interview" },
-  { id: "quiz", label: "Quiz", description: "Multiple choice assessment" }
+  { id: "voice", label: "Voice", description: "Live conversational interview" },
+  { id: "chat", label: "Chat", description: "Trait-driven text interview" },
+  { id: "quiz", label: "Quiz", description: "Structured trait questions" }
 ];
 
-const transcriptId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
-
-const toTurnInput = (turns: TranscriptTurn[]) => turns.map((turn) => ({ ts: turn.ts, speaker: turn.speaker, text: turn.text }));
-
-const summarizeForPrompt = (value: string, maxLength = 180) => {
-  const normalized = value.trim().replace(/\s+/g, " ");
-  if (normalized.length <= maxLength) {
-    return normalized;
-  }
-  return `${normalized.slice(0, maxLength).trimEnd()}...`;
-};
-
-const buildVoicePromptInstruction = (question: ProgramQuestion, previousCandidateResponse?: string) => {
-  const prior = previousCandidateResponse ? summarizeForPrompt(previousCandidateResponse) : null;
-  if (!prior) {
-    return `Start the interview warmly, then ask this question in your own words while preserving intent: "${question.prompt}". Keep it conversational and under two sentences.`;
-  }
-
-  return `In one short sentence, reference this candidate response naturally: "${prior}". Then ask the next question in your own words while preserving intent: "${question.prompt}". Keep it conversational and under two sentences.`;
-};
-
 const parseModeParam = (value: string | null): InterviewMode | null => {
-  if (value === "voice" || value === "chat" || value === "quiz") {
-    return value;
-  }
-
+  if (value === "voice" || value === "chat" || value === "quiz") return value;
   return null;
 };
 
-const sanitizeOptionLabel = (option: string) => option.replace(/\s*\[[0-5](?:\.\d+)?\]\s*$/g, "").replace(/\s*\([0-5](?:\.\d+)?\)\s*$/g, "").trim();
+const transcriptId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const useOnlineStatus = () => {
   const [isOnline, setIsOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
-
   useEffect(() => {
     const onOnline = () => setIsOnline(true);
     const onOffline = () => setIsOnline(false);
@@ -82,7 +54,6 @@ const useOnlineStatus = () => {
       window.removeEventListener("offline", onOffline);
     };
   }, []);
-
   return isOnline;
 };
 
@@ -105,56 +76,32 @@ const LiveInsightsSidebar = ({
 
 const WidgetSetup = () => {
   const [searchParams] = useSearchParams();
-
   const queryMode = parseModeParam(searchParams.get("mode"));
   const lockMode = queryMode !== null || ["1", "true", "yes"].includes((searchParams.get("lockMode") ?? "").toLowerCase());
   const queryProgramId = searchParams.get("programId");
-
+  const programFilterIds = queryProgramId ? [queryProgramId] : [];
   const [selectedMode, setSelectedMode] = useState<InterviewMode | null>(queryMode);
-  const [selectedProgramId, setSelectedProgramId] = useState<string>(queryProgramId ?? "");
   const [started, setStarted] = useState(false);
 
   const clear = useWidgetStore((state) => state.clear);
   const setMode = useWidgetStore((state) => state.setMode);
   const setProgramId = useWidgetStore((state) => state.setProgramId);
-
-  const programsQuery = useQuery({
-    queryKey: ["public-programs"],
-    queryFn: async () => {
-      const response = await api.getPublicPrograms();
-      return response.data;
-    }
-  });
+  const setProgramFilterIds = useWidgetStore((state) => state.setProgramFilterIds);
 
   useEffect(() => {
-    if (queryMode) {
-      setSelectedMode(queryMode);
-    }
+    if (queryMode) setSelectedMode(queryMode);
   }, [queryMode]);
 
-  useEffect(() => {
-    if (queryProgramId) {
-      setSelectedProgramId(queryProgramId);
-    }
-  }, [queryProgramId]);
+  const canStart = Boolean(selectedMode);
 
-  const selectedProgram = useMemo(
-    () => programsQuery.data?.find((program) => program.id === selectedProgramId) ?? null,
-    [programsQuery.data, selectedProgramId]
-  );
-
-  const canStart = Boolean(selectedMode && selectedProgramId);
-
-  if (started && selectedMode && selectedProgramId) {
+  if (started && selectedMode) {
     if (selectedMode === "voice") {
-      return <VoiceFlow programId={selectedProgramId} onRestart={() => setStarted(false)} />;
+      return <VoiceFlow mode={selectedMode} programFilterIds={programFilterIds} onRestart={() => setStarted(false)} />;
     }
-
     if (selectedMode === "chat") {
-      return <ChatFlow programId={selectedProgramId} onRestart={() => setStarted(false)} />;
+      return <ChatFlow mode={selectedMode} programFilterIds={programFilterIds} onRestart={() => setStarted(false)} />;
     }
-
-    return <QuizFlow programId={selectedProgramId} onRestart={() => setStarted(false)} />;
+    return <QuizFlow mode={selectedMode} programFilterIds={programFilterIds} onRestart={() => setStarted(false)} />;
   }
 
   return (
@@ -162,11 +109,11 @@ const WidgetSetup = () => {
       <Card>
         <section className="space-y-4">
           <h1 className="text-3xl font-bold">Program Match Interview</h1>
-          <p className="text-sm text-slate-600">Select your interview mode and program to begin.</p>
+          <p className="text-sm text-slate-600">Choose interview type to begin. Program ranking starts after your first responses.</p>
 
           {!lockMode && (
             <div className="space-y-2">
-              <p className="text-sm font-semibold text-slate-800">Mode</p>
+              <p className="text-sm font-semibold text-slate-800">Interview type</p>
               <div className="grid gap-2 sm:grid-cols-3">
                 {modeOptions.map((mode) => (
                   <button
@@ -187,32 +134,8 @@ const WidgetSetup = () => {
             <p className="rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-700">Mode locked to: {selectedMode.toUpperCase()}</p>
           )}
 
-          {!queryProgramId && (
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-800" htmlFor="program-select">
-                Program
-              </label>
-              <select
-                id="program-select"
-                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                value={selectedProgramId}
-                onChange={(event) => setSelectedProgramId(event.target.value)}
-                disabled={programsQuery.isLoading}
-              >
-                <option value="">Select a program</option>
-                {(programsQuery.data ?? []).map((program: PublicProgram) => (
-                  <option key={program.id} value={program.id}>
-                    {program.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {queryProgramId && (
-            <p className="rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-700">
-              Program locked to: {selectedProgram?.name ?? queryProgramId}
-            </p>
+          {programFilterIds.length > 0 && (
+            <p className="rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-700">Program filter from URL is active (1 program).</p>
           )}
 
           <Button
@@ -220,396 +143,533 @@ const WidgetSetup = () => {
             onClick={() => {
               clear();
               setMode(selectedMode);
-              setProgramId(selectedProgramId);
+              setProgramFilterIds(programFilterIds);
+              setProgramId(programFilterIds[0] ?? null);
               setStarted(true);
             }}
           >
             Start
           </Button>
-          {programsQuery.error && <p className="text-sm text-red-700">Failed to load programs.</p>}
         </section>
       </Card>
     </main>
   );
 };
 
-const VoiceFlow = ({ programId, onRestart }: { programId: string; onRestart: () => void }) => {
+const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; programFilterIds: string[]; onRestart: () => void }) => {
   const navigate = useNavigate();
-  const [step, setStep] = useState<VoiceStep>("start");
   const [error, setError] = useState<string | null>(null);
-  const [connectionState, setConnectionState] = useState<ConnectionState>("idle");
-  const [micReady, setMicReady] = useState(false);
+  const [transportState, setTransportState] = useState<ConnectionState>("idle");
   const [deviceLabel, setDeviceLabel] = useState("Unknown microphone");
-  const [activeTraitId, setActiveTraitId] = useState<string | null>(null);
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [currentQuestion, setCurrentQuestion] = useState<any>(null);
+  const [askedTraitIds, setAskedTraitIds] = useState<string[]>([]);
+  const [askedQuestionIds, setAskedQuestionIds] = useState<string[]>([]);
+  const [checkpointOpen, setCheckpointOpen] = useState(false);
+  const [connectStalled, setConnectStalled] = useState(false);
+  const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
 
   const realtimeSessionRef = useRef<RealtimeSession | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const stepRef = useRef<VoiceStep>("start");
-  const transcriptRef = useRef<TranscriptTurnInput[]>([]);
-  const questionIndexRef = useRef(0);
+  const sessionIdRef = useRef<string | null>(null);
   const lastCandidateTurnIdRef = useRef<string | null>(null);
+  const kickoffStartedRef = useRef(false);
+  const speechSynthesisRef = useRef<SpeechSynthesisUtterance | null>(null);
   const isOnline = useOnlineStatus();
 
   const {
-    sessionId,
     transcript,
     scoringSnapshot,
     programFit,
+    checkpoint,
+    voicePhase,
+    voiceInputMode,
+    sessionLanguageTag,
+    sessionLanguageLabel,
+    detectedLanguageSuggestion,
     setSessionId,
     addTranscriptTurn,
-    setProgramId,
     setMode,
-    setScorecard,
+    setProgramFilterIds,
     setScoringSnapshot,
     setProgramFit,
+    setAnsweredTraitCount,
+    setCheckpoint,
+    setVoicePhase,
+    setVoiceInputMode,
+    setSessionLanguage,
+    setDetectedLanguage,
+    dismissDetectedLanguage,
     clear
   } = useWidgetStore();
 
-  const createSessionMutation = useMutation({ mutationFn: () => api.createSession("voice", { programId }) });
-  const tokenMutation = useMutation({ mutationFn: api.getRealtimeToken });
+  const debugVoice = (message: string, details?: Record<string, unknown>) => {
+    if (typeof window === "undefined") return;
+    if (window.localStorage.getItem("DEBUG_VOICE") !== "1") return;
+    console.info("[voice]", message, details ?? {});
+  };
+
+  const transitionPhase = (event: Parameters<typeof reduceVoicePhase>[1]) => {
+    const next = reduceVoicePhase(useWidgetStore.getState().voicePhase, event);
+    debugVoice("phase", { from: useWidgetStore.getState().voicePhase, to: next, event });
+    setVoicePhase(next);
+  };
+
+  const setMicListeningState = (enabled: boolean) => {
+    const active = enabled && voiceInputMode === "handsfree" && voicePhase === "listening";
+    realtimeSessionRef.current?.setPushToTalk(active);
+    debugVoice("mic", { enabled: active, inputMode: voiceInputMode, phase: voicePhase });
+  };
+
+  useEffect(() => {
+    setMode(mode);
+    setProgramFilterIds(programFilterIds);
+    setSessionLanguage("en", "English");
+  }, [mode, programFilterIds, setMode, setProgramFilterIds, setSessionLanguage]);
+
+  useEffect(() => {
+    if (!checkpoint?.required) return;
+    setCheckpointOpen(true);
+    setVoicePhase("paused");
+  }, [checkpoint, setVoicePhase]);
+
+  useEffect(() => {
+    if (voicePhase === "listening") {
+      setMicListeningState(true);
+      return;
+    }
+    setMicListeningState(false);
+  }, [voicePhase, voiceInputMode]);
+
+  useEffect(() => {
+    if (voicePhase !== "connecting") {
+      setConnectStalled(false);
+      return;
+    }
+    const timeout = window.setTimeout(() => setConnectStalled(true), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [voicePhase]);
+
+  useEffect(() => {
+    if (!realtimeSessionRef.current) return;
+    if (!isConnectedPhase(voicePhase)) return;
+    realtimeSessionRef.current.updateInstructions(
+      `You are a warm admissions interviewer. Respond in ${sessionLanguageLabel} only. Do not switch languages unless the user explicitly asks.`
+    );
+  }, [sessionLanguageTag, sessionLanguageLabel, voicePhase]);
+
+  const tokenMutation = useMutation({
+    mutationFn: (input?: { brandVoiceId?: string; voiceName?: string; language?: string }) => api.getRealtimeToken(input)
+  });
   const appendTranscriptMutation = useMutation({
     mutationFn: ({ id, turns }: { id: string; turns: Array<{ ts: string; speaker: "candidate" | "assistant"; text: string }> }) =>
       api.appendTranscript(id, turns)
   });
-  const completeSessionMutation = useMutation({ mutationFn: (id: string) => api.completeSession(id) });
-  const scoreSessionMutation = useMutation({
+  const createInterviewMutation = useMutation({
     mutationFn: () =>
-      api.scoreSession({
-        sessionId: sessionId!,
-        mode: "voice",
-        programId,
-        transcriptTurns: transcriptRef.current,
-        activeTraitId: activeTraitId ?? undefined
+      api.createInterviewSession({
+        mode,
+        language: sessionLanguageTag,
+        programFilterIds: programFilterIds.length > 0 ? programFilterIds : undefined
       })
   });
-  const scoreTurnMutation = useMutation({
-    mutationFn: (traitId: string | undefined) =>
-      api.scoreSessionTurn({
-        sessionId: sessionId!,
-        mode: "voice",
-        programId,
-        transcriptTurns: transcriptRef.current,
-        activeTraitId: traitId
+  const turnMutation = useMutation({
+    mutationFn: (text: string) =>
+      api.submitInterviewTurn(sessionIdRef.current!, {
+        mode,
+        text,
+        language: sessionLanguageTag,
+        traitId: currentQuestion?.traitId,
+        questionId: currentQuestion?.id,
+        askedTraitIds,
+        askedQuestionIds,
+        programFilterIds: programFilterIds.length > 0 ? programFilterIds : undefined
+      })
+  });
+  const checkpointMutation = useMutation({
+    mutationFn: (action: "stop" | "continue" | "focus") =>
+      api.submitInterviewCheckpoint(sessionIdRef.current!, {
+        mode,
+        action,
+        focusTraitIds: action === "focus" ? checkpoint?.suggestedTraitIds : undefined,
+        askedTraitIds,
+        askedQuestionIds,
+        programFilterIds: programFilterIds.length > 0 ? programFilterIds : undefined
       })
   });
 
-  const questionsQuery = useQuery({
-    queryKey: ["program-questions", programId, "chat"],
-    queryFn: async () => {
-      const response = await api.getProgramQuestions(programId, "chat");
-      return response.data.orderedQuestions;
+  const speakPrompt = (text: string) => {
+    if (typeof window === "undefined" || !window.speechSynthesis) {
+      transitionPhase("assistant_done");
+      return;
     }
-  });
-  const voiceQuestions = questionsQuery.data ?? [];
-
-  const askQuestion = (question: ProgramQuestion, previousCandidateResponse?: string) => {
-    const instruction = buildVoicePromptInstruction(question, previousCandidateResponse);
-    realtimeSessionRef.current?.promptAssistant(instruction);
+    window.speechSynthesis.cancel();
+    const utterance = createLanguageUtterance(text, sessionLanguageTag, window.speechSynthesis.getVoices?.() ?? []);
+    speechSynthesisRef.current = utterance;
+    utterance.onstart = () => {
+      debugVoice("tts.start", { chars: text.length });
+      setVoicePhase("speaking");
+    };
+    utterance.onend = () => {
+      debugVoice("tts.end");
+      transitionPhase("assistant_done");
+    };
+    utterance.onerror = () => {
+      transitionPhase("assistant_done");
+    };
+    window.speechSynthesis.speak(utterance);
   };
 
-  useEffect(() => {
-    stepRef.current = step;
-  }, [step]);
+  const pushAssistantQuestion = async (question: any, prefix?: string) => {
+    if (!question) return;
+    setCurrentQuestion(question);
+    setAskedQuestionIds((prev) => (prev.includes(question.id) ? prev : [...prev, question.id]));
+    setAskedTraitIds((prev) => (prev[prev.length - 1] === question.traitId ? prev : [...prev, question.traitId]));
+    const text = prefix ? `${prefix} ${question.prompt}` : question.prompt;
+    addTranscriptTurn({ id: transcriptId("assistant"), speaker: "assistant", text, ts: new Date().toISOString() });
+    if (sessionIdRef.current) {
+      void appendTranscriptMutation.mutateAsync({
+        id: sessionIdRef.current,
+        turns: [{ ts: new Date().toISOString(), speaker: "assistant", text }]
+      });
+    }
+    transitionPhase("kickoff_ready");
+    speakPrompt(text);
+  };
 
-  useEffect(() => {
-    setProgramId(programId);
-    setMode("voice");
-    setScorecard(null);
-    setScoringSnapshot(null);
-    setProgramFit(null);
-    transcriptRef.current = [];
-    questionIndexRef.current = 0;
-    setCurrentQuestionIndex(0);
-    setActiveTraitId(null);
-    lastCandidateTurnIdRef.current = null;
-  }, [programId, setMode, setProgramId, setProgramFit, setScorecard, setScoringSnapshot]);
+  const kickoffIfNeeded = async (interview: Awaited<ReturnType<typeof api.createInterviewSession>>) => {
+    if (!shouldKickoff(useWidgetStore.getState().voicePhase, kickoffStartedRef.current)) return;
+    kickoffStartedRef.current = true;
+    debugVoice("kickoff.called", { sessionId: sessionIdRef.current });
+    setScoringSnapshot(interview.scoring_snapshot ?? null);
+    setProgramFit(interview.program_fit ?? null);
+    setCheckpoint(interview.checkpoint ?? null);
+    setAnsweredTraitCount(interview.answeredTraitCount ?? 0);
+    if (interview.nextQuestion) {
+      await pushAssistantQuestion(interview.nextQuestion, interview.initialPrompt);
+      return;
+    }
+    if (interview.initialPrompt) {
+      addTranscriptTurn({ id: transcriptId("assistant"), speaker: "assistant", text: interview.initialPrompt, ts: new Date().toISOString() });
+      transitionPhase("kickoff_ready");
+      speakPrompt(interview.initialPrompt);
+      return;
+    }
+    transitionPhase("assistant_done");
+  };
 
-  const startPermissionCheck = async () => {
+  const onTranscriptTurn = async (turn: TranscriptTurn) => {
+    if (turn.speaker !== "candidate") {
+      return;
+    }
+    if (voicePhase !== "listening") return;
+    if (lastCandidateTurnIdRef.current === turn.id) return;
+    lastCandidateTurnIdRef.current = turn.id;
+
+    addTranscriptTurn(turn);
+    debugVoice("transcript.candidate", { chars: turn.text.length });
+    if (/\b(hola|gracias|por favor|buenos|buenas|adios)\b/i.test(turn.text)) {
+      setDetectedLanguage("es", "Spanish");
+    }
+    if (sessionIdRef.current) {
+      void appendTranscriptMutation.mutateAsync({
+        id: sessionIdRef.current,
+        turns: [{ ts: turn.ts, speaker: turn.speaker, text: turn.text }]
+      });
+    }
+    transitionPhase("user_transcript_finalized");
+    try {
+      const result = await turnMutation.mutateAsync(turn.text);
+      setScoringSnapshot(result.scoring_snapshot);
+      setProgramFit(result.program_fit);
+      setAnsweredTraitCount(result.answeredTraitCount);
+      setCheckpoint(result.checkpoint);
+      if (result.checkpoint?.required) {
+        setCheckpointOpen(true);
+        setVoicePhase("paused");
+        return;
+      }
+      if (result.nextQuestion) {
+        await pushAssistantQuestion(result.nextQuestion);
+      } else {
+        setVoicePhase("ended");
+      }
+    } catch (turnError) {
+      setError(turnError instanceof Error ? turnError.message : "Could not score voice turn.");
+      setVoicePhase("error");
+    }
+  };
+
+  const startInterview = async () => {
     setError(null);
+    if (sessionIdRef.current && transcript.length > 0 && currentQuestion) {
+      transitionPhase("assistant_done");
+      return;
+    }
+    transitionPhase("request_permissions");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
       const [track] = stream.getAudioTracks();
       setDeviceLabel(track.label || "Microphone ready");
-      setMicReady(true);
-      setStep("permissions");
-    } catch {
-      setError("Microphone access denied. Please allow mic permissions and retry.");
-      setStep("permissions");
-    }
-  };
+      transitionPhase("permissions_granted");
 
-  const scoreCandidateTurn = async (candidateTurn: TranscriptTurn) => {
-    if (lastCandidateTurnIdRef.current === candidateTurn.id) {
-      return;
-    }
-    lastCandidateTurnIdRef.current = candidateTurn.id;
-
-    const currentSessionId = useWidgetStore.getState().sessionId;
-    if (!currentSessionId) {
-      return;
-    }
-
-    const currentQuestion = voiceQuestions[questionIndexRef.current];
-    const currentTraitId = currentQuestion?.traitId ?? activeTraitId ?? undefined;
-
-    try {
-      const liveScore = await scoreTurnMutation.mutateAsync(currentTraitId);
-      setScorecard(liveScore.data);
-      setScoringSnapshot(liveScore.data.scoring_snapshot);
-      setProgramFit(liveScore.data.program_fit);
-    } catch (scoreError) {
-      setError(scoreError instanceof Error ? scoreError.message : "Could not update voice scoring.");
-    }
-
-    const nextIndex = questionIndexRef.current + 1;
-    if (nextIndex >= voiceQuestions.length) {
-      return;
-    }
-
-    const nextQuestion = voiceQuestions[nextIndex];
-    questionIndexRef.current = nextIndex;
-    setCurrentQuestionIndex(nextIndex);
-    setActiveTraitId(nextQuestion.traitId);
-    askQuestion(nextQuestion, candidateTurn.text);
-  };
-
-  const onTranscriptTurn = (turn: TranscriptTurn) => {
-    addTranscriptTurn(turn);
-    transcriptRef.current.push({ ts: turn.ts, speaker: turn.speaker, text: turn.text });
-    const id = useWidgetStore.getState().sessionId;
-    if (id) {
-      void appendTranscriptMutation.mutateAsync({
-        id,
-        turns: [{ ts: turn.ts, speaker: turn.speaker, text: turn.text }]
+      const interview = await createInterviewMutation.mutateAsync();
+      const token = await tokenMutation.mutateAsync({
+        brandVoiceId: interview.brandVoiceId ?? undefined,
+        language: interview.language ?? sessionLanguageTag
       });
-    }
-    if (turn.speaker === "candidate") {
-      void scoreCandidateTurn(turn);
-    }
-  };
-
-  const connectRealtime = async () => {
-    if (!mediaStreamRef.current || !micReady) {
-      setError("Microphone is not ready.");
-      return;
-    }
-    if (questionsQuery.isLoading) {
-      setError("Loading trait prompts. Please try again in a moment.");
-      return;
-    }
-    if (voiceQuestions.length === 0) {
-      setError("No chat trait questions are configured for this program.");
-      return;
-    }
-
-    setError(null);
-
-    try {
-      const [createdSession, token] = await Promise.all([createSessionMutation.mutateAsync(), tokenMutation.mutateAsync()]);
-
-      setSessionId(createdSession.id);
-      const track = mediaStreamRef.current.getAudioTracks()[0];
+      const id = interview.sessionId;
+      if (!id) throw new Error("Session id missing");
+      setSessionId(id);
+      sessionIdRef.current = id;
+      debugVoice("session.ready", { sessionId: id });
 
       const realtimeSession = new RealtimeSession({
         onStateChange: (state) => {
-          setConnectionState(state);
-          if (state === "disconnected" && stepRef.current === "session") {
-            setError("Connection dropped. You can retry the realtime connection.");
+          setTransportState(state);
+          debugVoice("transport.state", { state });
+          if (state === "disconnected" && isConnectedPhase(useWidgetStore.getState().voicePhase)) {
+            setError("Connection dropped. Retry connection.");
+            setVoicePhase("error");
           }
         },
         onTranscriptTurn
       });
-
       realtimeSession.setAudioTrack(track);
       realtimeSessionRef.current = realtimeSession;
       await realtimeSession.connect(token.client_secret.value);
-      setScoringSnapshot(createdSession.scoring_snapshot ?? null);
-      setProgramFit(createdSession.program_fit ?? null);
-      transcriptRef.current = [];
-      questionIndexRef.current = 0;
-      setCurrentQuestionIndex(0);
-      setActiveTraitId(voiceQuestions[0]?.traitId ?? null);
-      lastCandidateTurnIdRef.current = null;
-
-      const traitNames = Array.from(new Set(voiceQuestions.map((question) => question.traitName))).join(", ");
       realtimeSession.updateInstructions(
-        `You are a warm, professional interviewer. Keep the exchange conversational and concise. Focus on these traits: ${traitNames}. Ask one question at a time, and do not answer on behalf of the candidate.`
+        interview.systemPrompt ??
+          `You are a warm admissions interviewer. Respond in ${sessionLanguageLabel} only. Do not switch languages unless the user explicitly asks.`
       );
-      if (voiceQuestions[0]) {
-        askQuestion(voiceQuestions[0]);
+      transitionPhase("transport_connected");
+      await kickoffIfNeeded(interview);
+    } catch (startError) {
+      setError(startError instanceof Error ? startError.message : "Failed to start voice interview.");
+      setVoicePhase("error");
+    }
+  };
+
+  const handleCheckpointAction = async (action: "stop" | "continue" | "focus") => {
+    try {
+      const response = await checkpointMutation.mutateAsync(action);
+      setScoringSnapshot(response.scoring_snapshot);
+      setProgramFit(response.program_fit);
+      setCheckpoint(null);
+      setCheckpointOpen(false);
+      if (action === "stop") {
+        setVoicePhase("ended");
+        return;
       }
-      setStep("session");
-    } catch (connectError) {
-      setError(connectError instanceof Error ? connectError.message : "Failed to start voice session.");
-      setConnectionState("error");
+      if (response.nextQuestion) {
+        await pushAssistantQuestion(response.nextQuestion);
+      } else {
+        transitionPhase("resume");
+      }
+    } catch (checkpointError) {
+      setError(checkpointError instanceof Error ? checkpointError.message : "Checkpoint action failed.");
+      setVoicePhase("error");
     }
   };
 
   const endSession = async () => {
     try {
+      window.speechSynthesis?.cancel();
       await realtimeSessionRef.current?.disconnect();
-      if (sessionId) {
-        await completeSessionMutation.mutateAsync(sessionId);
-        const score = await scoreSessionMutation.mutateAsync();
-        setScorecard(score.data);
-        setScoringSnapshot(score.data.scoring_snapshot);
-        setProgramFit(score.data.program_fit);
-      }
+      if (sessionIdRef.current) await api.completeSession(sessionIdRef.current);
     } catch {
-      setError("Session ended with errors. Transcript was kept locally.");
+      setError("Session ended with errors. Transcript kept locally.");
     } finally {
       mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-      setStep("end");
+      setVoicePhase("ended");
     }
   };
 
   const resetFlow = async () => {
     await realtimeSessionRef.current?.disconnect();
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-    setSessionId(null);
+    window.speechSynthesis?.cancel();
     clear();
-    setProgramId(programId);
-    setMode("voice");
-    setConnectionState("idle");
-    setMicReady(false);
-    setActiveTraitId(null);
-    setCurrentQuestionIndex(0);
-    questionIndexRef.current = 0;
-    transcriptRef.current = [];
+    setTransportState("idle");
     setError(null);
-    setStep("start");
+    setCheckpointOpen(false);
+    setCurrentQuestion(null);
+    setAskedQuestionIds([]);
+    setAskedTraitIds([]);
+    kickoffStartedRef.current = false;
     onRestart();
   };
 
-  const statusLabel = useMemo(() => {
-    if (connectionState === "connected") return "Connected";
-    if (connectionState === "connecting") return "Connecting";
-    if (connectionState === "disconnected") return "Disconnected";
-    if (connectionState === "error") return "Error";
-    return "Idle";
-  }, [connectionState]);
+  const connectionLabel = useMemo(() => {
+    if (isConnectedPhase(voicePhase)) return "Connected";
+    if (transportState === "connecting" || voicePhase === "connecting") return "Connecting";
+    if (transportState === "error" || voicePhase === "error") return "Error";
+    if (transportState === "disconnected") return "Disconnected";
+    return "Not connected";
+  }, [transportState, voicePhase]);
 
-  const currentQuestion = voiceQuestions[currentQuestionIndex];
+  const canStart = voicePhase === "init" || voicePhase === "permissions" || voicePhase === "error";
+  const activeSession = !["init", "permissions", "connecting", "error", "ended"].includes(voicePhase);
 
   return (
     <main className="mx-auto min-h-screen max-w-7xl px-4 py-8">
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]">
-      <Card>
-        {step === "start" && (
+        <Card>
           <section className="space-y-4">
-            <h1 className="text-3xl font-bold">Voice Interview</h1>
-            <p className="text-sm text-slate-600">
-              We only capture your interview audio and transcript for evaluation. Click start when you are ready.
+            <h2 className="text-2xl font-semibold">Adaptive voice interview</h2>
+            <VoiceBlob state={toVoiceBlobState(voicePhase)} />
+            <p className="text-sm text-slate-700">
+              State: <span className="font-semibold">{getVoicePhaseLabel(voicePhase)}</span> | Connection: {connectionLabel}
             </p>
-            <Button onClick={startPermissionCheck}>Start voice interview</Button>
-          </section>
-        )}
-
-        {step === "permissions" && (
-          <section className="space-y-4">
-            <h2 className="text-2xl font-semibold">Mic and device check</h2>
-            <p className="text-sm text-slate-700">Device: {deviceLabel}</p>
-            <p className="text-sm text-slate-700">Permission: {micReady ? "Granted" : "Not granted"}</p>
-            <div className="flex gap-2">
-              <Button
-                onClick={connectRealtime}
-                disabled={
-                  !isOnline ||
-                  !micReady ||
-                  questionsQuery.isLoading ||
-                  createSessionMutation.isPending ||
-                  tokenMutation.isPending
+            <div className="space-y-2">
+              <p className="text-sm text-slate-700">Language</p>
+              <LanguagePills
+                valueTag={sessionLanguageTag}
+                options={PRIMARY_LANGUAGE_OPTIONS}
+                customLanguage={
+                  PRIMARY_LANGUAGE_OPTIONS.some((option) => option.tag.toLowerCase() === sessionLanguageTag.toLowerCase())
+                    ? null
+                    : { tag: sessionLanguageTag, label: sessionLanguageLabel }
                 }
-              >
-                Continue to interview
-              </Button>
-              <Button className="bg-slate-500" onClick={startPermissionCheck}>
-                Retry device check
-              </Button>
+                onChangeTag={(tag, label) => setSessionLanguage(tag, label)}
+                onOpenOther={() => setLanguagePickerOpen(true)}
+              />
             </div>
-          </section>
-        )}
+            {detectedLanguageSuggestion && !detectedLanguageSuggestion.dismissed && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+                We detected {detectedLanguageSuggestion.label}. Switch?
+                <div className="mt-2 flex gap-2">
+                  <Button
+                    className="bg-slate-700"
+                    onClick={() => setSessionLanguage(detectedLanguageSuggestion.tag, detectedLanguageSuggestion.label)}
+                  >
+                    Switch
+                  </Button>
+                  <Button className="bg-slate-500" onClick={dismissDetectedLanguage}>
+                    Keep {sessionLanguageLabel}
+                  </Button>
+                </div>
+              </div>
+            )}
+            <p className="text-sm text-slate-700">
+              Input mode: {voiceInputMode === "handsfree" ? "Hands-free" : "Hold-to-talk"} | Device: {deviceLabel}
+            </p>
 
-        {step === "session" && (
-          <section className="space-y-4">
-            <h2 className="text-2xl font-semibold">In-session voice</h2>
-            <p className="text-sm text-slate-700">Connection status: {statusLabel}</p>
+            {canStart && (
+              <Button onClick={startInterview} disabled={!isOnline || createInterviewMutation.isPending || tokenMutation.isPending}>
+                Start interview
+              </Button>
+            )}
+
+            {connectStalled && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+                Connection is taking longer than expected.
+                <div className="mt-2">
+                  <Button className="bg-slate-600" onClick={startInterview}>
+                    Retry connect
+                  </Button>
+                </div>
+              </div>
+            )}
+
             {currentQuestion && (
               <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
                 Current trait: <span className="font-semibold">{currentQuestion.traitName}</span>
               </p>
             )}
-            <div className="flex gap-2">
-              <Button
-                onMouseDown={() => realtimeSessionRef.current?.setPushToTalk(true)}
-                onMouseUp={() => realtimeSessionRef.current?.setPushToTalk(false)}
-                onMouseLeave={() => realtimeSessionRef.current?.setPushToTalk(false)}
-                onTouchStart={() => realtimeSessionRef.current?.setPushToTalk(true)}
-                onTouchEnd={() => realtimeSessionRef.current?.setPushToTalk(false)}
-                disabled={!isOnline || connectionState !== "connected"}
-              >
-                Hold to talk
-              </Button>
-              <Button className="bg-slate-500" onClick={connectRealtime} disabled={!isOnline || tokenMutation.isPending}>
-                Retry connection
-              </Button>
-              <Button className="bg-red-700" onClick={endSession}>
-                End session
-              </Button>
-            </div>
+
+            {activeSession && (
+              <div className="flex flex-wrap gap-2">
+                <Button className="bg-slate-500" onClick={() => setVoicePhase(voicePhase === "paused" ? "listening" : "paused")}>
+                  {voicePhase === "paused" ? "Resume" : "Pause"}
+                </Button>
+                <Button className="bg-slate-500" onClick={() => setVoiceInputMode(voiceInputMode === "handsfree" ? "hold_to_talk" : "handsfree")}>
+                  {voiceInputMode === "handsfree" ? "Use hold-to-talk" : "Use hands-free"}
+                </Button>
+                {voiceInputMode === "hold_to_talk" && (
+                  <Button
+                    onMouseDown={() => {
+                      if (voicePhase !== "paused") setVoicePhase("listening");
+                      realtimeSessionRef.current?.setPushToTalk(true);
+                    }}
+                    onMouseUp={() => realtimeSessionRef.current?.setPushToTalk(false)}
+                    onMouseLeave={() => realtimeSessionRef.current?.setPushToTalk(false)}
+                    onTouchStart={() => {
+                      if (voicePhase !== "paused") setVoicePhase("listening");
+                      realtimeSessionRef.current?.setPushToTalk(true);
+                    }}
+                    onTouchEnd={() => realtimeSessionRef.current?.setPushToTalk(false)}
+                    disabled={voicePhase === "paused"}
+                  >
+                    Hold to talk
+                  </Button>
+                )}
+                <Button className="bg-red-700" onClick={endSession}>
+                  End
+                </Button>
+              </div>
+            )}
+
             <div className="max-h-72 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3">
-              {transcript.length === 0 && <p className="text-sm text-slate-500">Transcript appears here once the conversation starts.</p>}
+              {transcript.length === 0 && <p className="text-sm text-slate-500">Transcript appears as the conversation runs.</p>}
               {transcript.map((turn) => (
                 <div key={`${turn.id}-${turn.ts}`} className="rounded bg-slate-50 p-2 text-sm">
                   <span className="font-semibold capitalize">{turn.speaker}:</span> {turn.text}
                 </div>
               ))}
             </div>
-          </section>
-        )}
 
-        {step === "end" && (
-          <section className="space-y-4">
-            <h2 className="text-2xl font-semibold">Interview complete</h2>
-            <div className="max-h-72 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3">
-              {transcript.map((turn) => (
-                <div key={`${turn.id}-${turn.ts}`} className="rounded bg-slate-50 p-2 text-sm">
-                  <span className="font-semibold capitalize">{turn.speaker}:</span> {turn.text}
+            {checkpointOpen && checkpoint && (
+              <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm">
+                <p className="font-semibold text-slate-900">{checkpoint.prompt}</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Button className="bg-slate-700" onClick={() => void handleCheckpointAction("stop")}>
+                    Stop and review
+                  </Button>
+                  <Button onClick={() => void handleCheckpointAction("continue")}>Keep going</Button>
+                  <Button className="bg-slate-500" onClick={() => void handleCheckpointAction("focus")} disabled={checkpoint.suggestedTraitIds.length === 0}>
+                    Focus trait area
+                  </Button>
                 </div>
-              ))}
-              {transcript.length === 0 && <p className="text-sm text-slate-500">No transcript captured.</p>}
-            </div>
-            <Button
-              onClick={() => {
-                navigate("/widget/results");
-              }}
-            >
-              Save and view results
-            </Button>
-            <Button className="bg-slate-500" onClick={resetFlow}>
-              Start over
-            </Button>
-          </section>
-        )}
+              </div>
+            )}
 
-        {!isOnline && <p className="mt-4 text-sm text-red-700">You are offline. Reconnect to continue.</p>}
-        {error && <p className="mt-4 text-sm text-red-700">{error}</p>}
-      </Card>
-      <LiveInsightsSidebar snapshot={scoringSnapshot} programFit={programFit} activeTraitId={activeTraitId} done={step === "end"} />
+            {voicePhase === "ended" && (
+              <div className="flex gap-2">
+                <Button onClick={() => navigate("/widget/results")}>Review results</Button>
+                <Button className="bg-slate-500" onClick={resetFlow}>
+                  Start over
+                </Button>
+              </div>
+            )}
+
+            {!isOnline && <p className="text-sm text-red-700">You are offline. Reconnect to continue.</p>}
+            {error && <p className="text-sm text-red-700">{error}</p>}
+          </section>
+          <LanguagePickerModal
+            open={languagePickerOpen}
+            options={EXTRA_LANGUAGE_OPTIONS}
+            onClose={() => setLanguagePickerOpen(false)}
+            onSelect={(tag, label) => {
+              setSessionLanguage(tag, label);
+              setLanguagePickerOpen(false);
+            }}
+          />
+        </Card>
+        <LiveInsightsSidebar snapshot={scoringSnapshot} programFit={programFit} activeTraitId={currentQuestion?.traitId ?? null} done={voicePhase === "ended"} />
       </div>
     </main>
   );
 };
 
-const ChatFlow = ({ programId, onRestart }: { programId: string; onRestart: () => void }) => {
+const ChatFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; programFilterIds: string[]; onRestart: () => void }) => {
   const navigate = useNavigate();
   const [input, setInput] = useState("");
-  const [currentIndex, setCurrentIndex] = useState(0);
   const [started, setStarted] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pendingScoreRetry, setPendingScoreRetry] = useState(false);
+  const [currentQuestion, setCurrentQuestion] = useState<any>(null);
+  const [askedTraitIds, setAskedTraitIds] = useState<string[]>([]);
+  const [askedQuestionIds, setAskedQuestionIds] = useState<string[]>([]);
   const isOnline = useOnlineStatus();
 
   const {
@@ -617,107 +677,58 @@ const ChatFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
     sessionId,
     scoringSnapshot,
     programFit,
+    sessionLanguageTag,
     setSessionId,
     addTranscriptTurn,
     setMode,
-    setProgramId,
-    setScorecard,
+    setProgramFilterIds,
     setScoringSnapshot,
     setProgramFit,
     clear
-  } = useWidgetStore();
-  const transcriptRef = useRef<TranscriptTurnInput[]>([]);
-  const [activeTraitId, setActiveTraitId] = useState<string | null>(null);
+  } =
+    useWidgetStore();
 
-  const questionsQuery = useQuery({
-    queryKey: ["program-questions", programId, "chat"],
-    queryFn: async () => {
-      const response = await api.getProgramQuestions(programId, "chat");
-      return response.data.orderedQuestions;
-    }
-  });
-
-  const createSessionMutation = useMutation({ mutationFn: () => api.startVoiceSession("chat", { programId }) });
-  const appendTranscriptMutation = useMutation({
-    mutationFn: ({ id, turns }: { id: string; turns: TranscriptTurnInput[] }) => api.appendTranscript(id, turns)
-  });
-  const completeSessionMutation = useMutation({ mutationFn: (id: string) => api.completeSession(id) });
-  const scoreSessionMutation = useMutation({
+  const createInterviewMutation = useMutation({
     mutationFn: () =>
-      api.scoreSession({
-        sessionId: sessionId!,
-        mode: "chat",
-        programId,
-        transcriptTurns: transcriptRef.current,
-        activeTraitId: activeTraitId ?? undefined
+      api.createInterviewSession({
+        mode,
+        language: sessionLanguageTag,
+        programFilterIds: programFilterIds.length > 0 ? programFilterIds : undefined
       })
   });
-  const scoreTurnMutation = useMutation({
-    mutationFn: (traitId: string | undefined) =>
-      api.scoreSessionTurn({
-        sessionId: sessionId!,
-        mode: "chat",
-        programId,
-        transcriptTurns: transcriptRef.current,
-        activeTraitId: traitId
+  const turnMutation = useMutation({
+    mutationFn: (text: string) =>
+      api.submitInterviewTurn(sessionId!, {
+        mode,
+        text,
+        language: sessionLanguageTag,
+        traitId: currentQuestion?.traitId,
+        questionId: currentQuestion?.id,
+        askedTraitIds,
+        askedQuestionIds,
+        programFilterIds: programFilterIds.length > 0 ? programFilterIds : undefined
       })
   });
-
-  const finalizeWithScoring = async () => {
-    if (!sessionId) return;
-
-    try {
-      await completeSessionMutation.mutateAsync(sessionId);
-      const score = await scoreSessionMutation.mutateAsync();
-      setScorecard(score.data);
-      setScoringSnapshot(score.data.scoring_snapshot);
-      setProgramFit(score.data.program_fit);
-      setPendingScoreRetry(false);
-      navigate("/widget/results");
-    } catch (finalizeError) {
-      setPendingScoreRetry(true);
-      setError(finalizeError instanceof Error ? finalizeError.message : "Scoring failed. Please retry.");
-    }
-  };
 
   useEffect(() => {
     clear();
-    setProgramId(programId);
-    setMode("chat");
-    setScoringSnapshot(null);
-    setProgramFit(null);
-  }, [clear, programId, setMode, setProgramId, setProgramFit, setScoringSnapshot]);
-
-  const pushTurn = async (id: string, speaker: "candidate" | "assistant", text: string) => {
-    const turn = { id, speaker, text, ts: new Date().toISOString() };
-    addTranscriptTurn(turn);
-    transcriptRef.current.push({ ts: turn.ts, speaker: turn.speaker, text: turn.text });
-
-    const currentSessionId = useWidgetStore.getState().sessionId;
-    if (currentSessionId) {
-      await appendTranscriptMutation.mutateAsync({ id: currentSessionId, turns: [{ ts: turn.ts, speaker, text }] });
-    }
-  };
+    setMode(mode);
+    setProgramFilterIds(programFilterIds);
+  }, [clear, mode, programFilterIds, setMode, setProgramFilterIds]);
 
   const startInterview = async () => {
-    const questions = questionsQuery.data ?? [];
-    if (questions.length === 0) {
-      setError("No chat questions are configured for this program.");
-      return;
-    }
-
-    setError(null);
-
     try {
-      const session = await createSessionMutation.mutateAsync();
-      setSessionId(session.id);
+      const session = await createInterviewMutation.mutateAsync();
+      const id = session.sessionId;
+      if (!id) throw new Error("Session id missing");
+      setSessionId(id);
       setScoringSnapshot(session.scoring_snapshot ?? null);
       setProgramFit(session.program_fit ?? null);
       setStarted(true);
-      setCurrentIndex(0);
-      setActiveTraitId(questions[0]?.traitId ?? null);
-
-      await pushTurn(transcriptId("assistant"), "assistant", questions[0].prompt);
+      setCurrentQuestion(session.nextQuestion ?? null);
+      if (session.nextQuestion) {
+        addTranscriptTurn({ id: transcriptId("assistant"), speaker: "assistant", text: session.nextQuestion.prompt, ts: new Date().toISOString() });
+      }
     } catch (sessionError) {
       setError(sessionError instanceof Error ? sessionError.message : "Could not start chat interview.");
     }
@@ -725,324 +736,214 @@ const ChatFlow = ({ programId, onRestart }: { programId: string; onRestart: () =
 
   const submitAnswer = async () => {
     const answer = input.trim();
-    if (!answer) return;
-
-    const questions = questionsQuery.data ?? [];
-    const question = questions[currentIndex];
-    if (!question) return;
-
+    if (!answer || !currentQuestion) return;
     setInput("");
+    addTranscriptTurn({ id: transcriptId("candidate"), speaker: "candidate", text: answer, ts: new Date().toISOString() });
+    setAskedTraitIds((prev) => [...prev, currentQuestion.traitId]);
+    setAskedQuestionIds((prev) => [...prev, currentQuestion.id]);
 
     try {
-      await pushTurn(transcriptId("candidate"), "candidate", answer);
-      setActiveTraitId(question.traitId);
-      const liveScore = await scoreTurnMutation.mutateAsync(question.traitId);
-      setScorecard(liveScore.data);
-      setScoringSnapshot(liveScore.data.scoring_snapshot);
-      setProgramFit(liveScore.data.program_fit);
-
-      const nextIndex = currentIndex + 1;
-      if (nextIndex >= questions.length) {
-        await finalizeWithScoring();
-        return;
+      const result = await turnMutation.mutateAsync(answer);
+      setScoringSnapshot(result.scoring_snapshot);
+      setProgramFit(result.program_fit);
+      if (result.nextQuestion) {
+        setCurrentQuestion(result.nextQuestion);
+        addTranscriptTurn({
+          id: transcriptId("assistant"),
+          speaker: "assistant",
+          text: result.nextQuestion.prompt,
+          ts: new Date().toISOString()
+        });
+      } else {
+        await api.completeSession(sessionId!);
+        navigate("/widget/results");
       }
-
-      setCurrentIndex(nextIndex);
-      await pushTurn(transcriptId("assistant"), "assistant", questions[nextIndex].prompt);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Could not submit answer.");
     }
   };
 
-  const questions = questionsQuery.data ?? [];
-
   return (
     <main className="mx-auto min-h-screen max-w-7xl px-4 py-8">
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]">
         <Card>
-        <section className="space-y-4">
-          <h2 className="text-2xl font-semibold">Chat Interview</h2>
-          {!started && (
-            <>
-              <p className="text-sm text-slate-600">You will answer short text questions based on this program's priority traits.</p>
+          <section className="space-y-4">
+            <h2 className="text-2xl font-semibold">Chat Interview</h2>
+            {!started && (
               <div className="flex gap-2">
-                <Button onClick={startInterview} disabled={!isOnline || questionsQuery.isLoading || createSessionMutation.isPending}>
+                <Button onClick={startInterview} disabled={!isOnline || createInterviewMutation.isPending}>
                   Start chat
                 </Button>
                 <Button className="bg-slate-500" onClick={onRestart}>
                   Back
                 </Button>
               </div>
-            </>
-          )}
-
-          {started && (
-            <>
-              <p className="text-sm text-slate-700">
-                Progress: {Math.min(currentIndex + 1, questions.length)} of {questions.length}
-              </p>
-
-              <div className="max-h-80 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3">
-                {transcript.map((turn) => (
-                  <div
-                    key={`${turn.id}-${turn.ts}`}
-                    className={`rounded p-2 text-sm ${turn.speaker === "candidate" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-900"}`}
-                  >
-                    <span className="font-semibold capitalize">{turn.speaker}:</span> {turn.text}
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex gap-2">
-                <input
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                  value={input}
-                  onChange={(event) => setInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      void submitAnswer();
-                    }
-                  }}
-                  placeholder="Type your answer"
-                />
-                <Button
-                  onClick={submitAnswer}
-                  disabled={!isOnline || appendTranscriptMutation.isPending || scoreSessionMutation.isPending || scoreTurnMutation.isPending}
-                >
-                  Send
-                </Button>
-              </div>
-              {pendingScoreRetry && (
-                <Button className="bg-slate-500" onClick={() => void finalizeWithScoring()} disabled={!isOnline || scoreSessionMutation.isPending}>
-                  Retry scoring
-                </Button>
-              )}
-            </>
-          )}
-
-          {!isOnline && <p className="text-sm text-red-700">You are offline. Reconnect to continue.</p>}
-          {error && <p className="text-sm text-red-700">{error}</p>}
-        </section>
+            )}
+            {started && (
+              <>
+                <div className="max-h-80 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3">
+                  {transcript.map((turn) => (
+                    <div key={`${turn.id}-${turn.ts}`} className={`rounded p-2 text-sm ${turn.speaker === "candidate" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-900"}`}>
+                      <span className="font-semibold capitalize">{turn.speaker}:</span> {turn.text}
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    value={input}
+                    onChange={(event) => setInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void submitAnswer();
+                      }
+                    }}
+                    placeholder="Type your answer"
+                  />
+                  <Button onClick={submitAnswer} disabled={!isOnline || turnMutation.isPending}>
+                    Send
+                  </Button>
+                </div>
+              </>
+            )}
+            {error && <p className="text-sm text-red-700">{error}</p>}
+          </section>
         </Card>
-        <LiveInsightsSidebar snapshot={scoringSnapshot} programFit={programFit} activeTraitId={activeTraitId} />
+        <LiveInsightsSidebar snapshot={scoringSnapshot} programFit={programFit} activeTraitId={currentQuestion?.traitId ?? null} />
       </div>
     </main>
   );
 };
 
-const QuizFlow = ({ programId, onRestart }: { programId: string; onRestart: () => void }) => {
+const QuizFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; programFilterIds: string[]; onRestart: () => void }) => {
   const navigate = useNavigate();
   const [started, setStarted] = useState(false);
-  const [currentIndex, setCurrentIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [pendingScoreRetry, setPendingScoreRetry] = useState(false);
+  const [currentQuestion, setCurrentQuestion] = useState<any>(null);
+  const [askedTraitIds, setAskedTraitIds] = useState<string[]>([]);
+  const [askedQuestionIds, setAskedQuestionIds] = useState<string[]>([]);
   const isOnline = useOnlineStatus();
 
   const {
     sessionId,
     scoringSnapshot,
     programFit,
+    sessionLanguageTag,
     setSessionId,
     addTranscriptTurn,
-    setProgramId,
     setMode,
-    setScorecard,
+    setProgramFilterIds,
     setScoringSnapshot,
     setProgramFit,
     clear
-  } = useWidgetStore();
-  const responsesRef = useRef<Array<{ questionId: string; answer: string }>>([]);
-  const transcriptRef = useRef<TranscriptTurnInput[]>([]);
-  const [activeTraitId, setActiveTraitId] = useState<string | null>(null);
+  } =
+    useWidgetStore();
 
-  const questionsQuery = useQuery({
-    queryKey: ["program-questions", programId, "quiz"],
-    queryFn: async () => {
-      const response = await api.getProgramQuestions(programId, "quiz");
-      return response.data.orderedQuestions;
-    }
-  });
-
-  const createSessionMutation = useMutation({ mutationFn: () => api.startVoiceSession("quiz", { programId }) });
-  const appendTranscriptMutation = useMutation({
-    mutationFn: ({ id, turns }: { id: string; turns: TranscriptTurnInput[] }) => api.appendTranscript(id, turns)
-  });
-  const completeSessionMutation = useMutation({ mutationFn: (id: string) => api.completeSession(id) });
-  const scoreSessionMutation = useMutation({
+  const createInterviewMutation = useMutation({
     mutationFn: () =>
-      api.scoreSession({
-        sessionId: sessionId!,
-        mode: "quiz",
-        programId,
-        transcriptTurns: transcriptRef.current,
-        responses: responsesRef.current,
-        activeTraitId: activeTraitId ?? undefined
+      api.createInterviewSession({
+        mode,
+        language: sessionLanguageTag,
+        programFilterIds: programFilterIds.length > 0 ? programFilterIds : undefined
       })
   });
-  const scoreTurnMutation = useMutation({
-    mutationFn: (traitId: string | undefined) =>
-      api.scoreSessionTurn({
-        sessionId: sessionId!,
-        mode: "quiz",
-        programId,
-        transcriptTurns: transcriptRef.current,
-        responses: responsesRef.current,
-        activeTraitId: traitId
+  const turnMutation = useMutation({
+    mutationFn: (text: string) =>
+      api.submitInterviewTurn(sessionId!, {
+        mode,
+        text,
+        language: sessionLanguageTag,
+        traitId: currentQuestion?.traitId,
+        questionId: currentQuestion?.id,
+        askedTraitIds,
+        askedQuestionIds,
+        programFilterIds: programFilterIds.length > 0 ? programFilterIds : undefined
       })
   });
-
-  const finalizeWithScoring = async () => {
-    if (!sessionId) return;
-
-    try {
-      await completeSessionMutation.mutateAsync(sessionId);
-      const score = await scoreSessionMutation.mutateAsync();
-      setScorecard(score.data);
-      setScoringSnapshot(score.data.scoring_snapshot);
-      setProgramFit(score.data.program_fit);
-      setPendingScoreRetry(false);
-      navigate("/widget/results");
-    } catch (finalizeError) {
-      setPendingScoreRetry(true);
-      setError(finalizeError instanceof Error ? finalizeError.message : "Scoring failed. Please retry.");
-    }
-  };
 
   useEffect(() => {
     clear();
-    setProgramId(programId);
-    setMode("quiz");
-    setScoringSnapshot(null);
-    setProgramFit(null);
-  }, [clear, programId, setMode, setProgramFit, setProgramId, setScoringSnapshot]);
-
-  const pushTurn = async (speaker: "candidate" | "assistant", text: string) => {
-    const turn = { id: transcriptId(speaker), speaker, text, ts: new Date().toISOString() };
-    addTranscriptTurn(turn);
-    transcriptRef.current.push({ ts: turn.ts, speaker: turn.speaker, text: turn.text });
-
-    const currentSessionId = useWidgetStore.getState().sessionId;
-    if (currentSessionId) {
-      await appendTranscriptMutation.mutateAsync({ id: currentSessionId, turns: [{ ts: turn.ts, speaker, text }] });
-    }
-  };
+    setMode(mode);
+    setProgramFilterIds(programFilterIds);
+  }, [clear, mode, programFilterIds, setMode, setProgramFilterIds]);
 
   const startQuiz = async () => {
-    const questions = questionsQuery.data ?? [];
-    if (questions.length === 0) {
-      setError("No quiz questions are configured for this program.");
-      return;
-    }
-
-    setError(null);
-
     try {
-      const session = await createSessionMutation.mutateAsync();
-      setSessionId(session.id);
+      const session = await createInterviewMutation.mutateAsync();
+      const id = session.sessionId;
+      if (!id) throw new Error("Session id missing");
+      setSessionId(id);
       setScoringSnapshot(session.scoring_snapshot ?? null);
       setProgramFit(session.program_fit ?? null);
       setStarted(true);
-      setCurrentIndex(0);
-      setActiveTraitId(questions[0]?.traitId ?? null);
-      responsesRef.current = [];
-      transcriptRef.current = [];
-      await pushTurn("assistant", questions[0].prompt);
+      setCurrentQuestion(session.nextQuestion ?? null);
     } catch (startError) {
       setError(startError instanceof Error ? startError.message : "Could not start quiz.");
     }
   };
 
-  const selectAnswer = async (question: ProgramQuestion, option: string) => {
+  const selectAnswer = async (answer: string) => {
+    if (!currentQuestion) return;
+    addTranscriptTurn({ id: transcriptId("candidate"), speaker: "candidate", text: answer, ts: new Date().toISOString() });
+    setAskedTraitIds((prev) => [...prev, currentQuestion.traitId]);
+    setAskedQuestionIds((prev) => [...prev, currentQuestion.id]);
     try {
-      const cleanAnswer = sanitizeOptionLabel(option);
-      responsesRef.current.push({ questionId: question.id, answer: cleanAnswer });
-      await pushTurn("candidate", cleanAnswer);
-      setActiveTraitId(question.traitId);
-      const liveScore = await scoreTurnMutation.mutateAsync(question.traitId);
-      setScorecard(liveScore.data);
-      setScoringSnapshot(liveScore.data.scoring_snapshot);
-      setProgramFit(liveScore.data.program_fit);
-
-      const questions = questionsQuery.data ?? [];
-      const nextIndex = currentIndex + 1;
-
-      if (nextIndex >= questions.length) {
-        await finalizeWithScoring();
-        return;
+      const result = await turnMutation.mutateAsync(answer);
+      setScoringSnapshot(result.scoring_snapshot);
+      setProgramFit(result.program_fit);
+      if (result.nextQuestion) {
+        setCurrentQuestion(result.nextQuestion);
+      } else {
+        await api.completeSession(sessionId!);
+        navigate("/widget/results");
       }
-
-      setCurrentIndex(nextIndex);
-      await pushTurn("assistant", questions[nextIndex].prompt);
     } catch (selectError) {
       setError(selectError instanceof Error ? selectError.message : "Could not submit quiz answer.");
     }
   };
 
-  const questions = questionsQuery.data ?? [];
-  const currentQuestion = questions[currentIndex];
-
   return (
     <main className="mx-auto min-h-screen max-w-7xl px-4 py-8">
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]">
-      <Card>
-        <section className="space-y-4">
-          <h2 className="text-2xl font-semibold">Quiz</h2>
-          {!started && (
-            <>
-              <p className="text-sm text-slate-600">Pick the option that best matches you for each question.</p>
+        <Card>
+          <section className="space-y-4">
+            <h2 className="text-2xl font-semibold">Quiz</h2>
+            {!started && (
               <div className="flex gap-2">
-                <Button onClick={startQuiz} disabled={!isOnline || questionsQuery.isLoading || createSessionMutation.isPending}>
+                <Button onClick={startQuiz} disabled={!isOnline || createInterviewMutation.isPending}>
                   Start quiz
                 </Button>
                 <Button className="bg-slate-500" onClick={onRestart}>
                   Back
                 </Button>
               </div>
-            </>
-          )}
-
-          {started && currentQuestion && (
-            <>
-              <p className="text-sm text-slate-700">
-                Progress: {currentIndex + 1} of {questions.length}
-              </p>
-              <h3 className="text-lg font-semibold text-slate-900">{currentQuestion.prompt}</h3>
-              <div className="grid gap-2">
-                {currentQuestion.options.map((option) => (
-                  <button
-                    key={`${currentQuestion.id}-${option}`}
-                    type="button"
-                    className="rounded-md border border-slate-300 bg-white px-4 py-2 text-left text-sm hover:border-slate-900"
-                    onClick={() => void selectAnswer(currentQuestion, option)}
-                    disabled={!isOnline || appendTranscriptMutation.isPending || scoreSessionMutation.isPending || scoreTurnMutation.isPending}
-                  >
-                    {sanitizeOptionLabel(option)}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-
-          {pendingScoreRetry && (
-            <Button className="bg-slate-500" onClick={() => void finalizeWithScoring()} disabled={!isOnline || scoreSessionMutation.isPending}>
-              Retry scoring
-            </Button>
-          )}
-          {!isOnline && <p className="text-sm text-red-700">You are offline. Reconnect to continue.</p>}
-          {error && <p className="text-sm text-red-700">{error}</p>}
-        </section>
-      </Card>
-      <LiveInsightsSidebar snapshot={scoringSnapshot} programFit={programFit} activeTraitId={activeTraitId} />
+            )}
+            {started && currentQuestion && (
+              <>
+                <h3 className="text-lg font-semibold text-slate-900">{currentQuestion.prompt}</h3>
+                <div className="grid gap-2">
+                  {currentQuestion.options.map((option: string) => (
+                    <button
+                      key={`${currentQuestion.id}-${option}`}
+                      type="button"
+                      className="rounded-md border border-slate-300 bg-white px-4 py-2 text-left text-sm hover:border-slate-900"
+                      onClick={() => void selectAnswer(option)}
+                      disabled={!isOnline || turnMutation.isPending}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+            {error && <p className="text-sm text-red-700">{error}</p>}
+          </section>
+        </Card>
+        <LiveInsightsSidebar snapshot={scoringSnapshot} programFit={programFit} activeTraitId={currentQuestion?.traitId ?? null} />
       </div>
     </main>
   );
-};
-
-const confidenceLabel = (value: number) => {
-  if (value >= 0.75) return "High";
-  if (value >= 0.5) return "Medium";
-  return "Low";
 };
 
 const ResultsPage = () => {
@@ -1078,6 +979,7 @@ const ResultsPage = () => {
       setLeadSubmitted(true);
     }
   });
+
   const submitLead = () => {
     if (!email.trim()) {
       setLeadValidationError("Email is required.");
@@ -1096,134 +998,46 @@ const ResultsPage = () => {
     createLeadMutation.mutate();
   };
 
-  const grouped = useMemo(() => {
-    if (!scorecard) return [];
-
-    return bucketOrder
-      .map((bucket) => ({
-        bucket,
-        items: scorecard.perTrait.filter((item) => item.bucket === bucket)
-      }))
-      .filter((group) => group.items.length > 0);
-  }, [scorecard]);
-
-  const topTraits = useMemo(() => {
-    if (!scorecard) return [];
-
-    return [...scorecard.perTrait]
-      .sort((a, b) => b.score0to5 * bucketWeight[b.bucket] - a.score0to5 * bucketWeight[a.bucket])
-      .slice(0, 3);
-  }, [scorecard]);
-
-  const leadCapture = (
-    <div className="rounded-md border border-slate-200 p-3">
-      <p className="mb-2 text-sm font-semibold text-slate-900">Request Info / Talk to an advisor</p>
-      {!leadSubmitted && (
-        <div className="space-y-2">
-          <div className="grid gap-2 sm:grid-cols-2">
-            <input
-              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              placeholder="First name"
-              value={firstName}
-              onChange={(event) => setFirstName(event.target.value)}
-            />
-            <input
-              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              placeholder="Last name"
-              value={lastName}
-              onChange={(event) => setLastName(event.target.value)}
-            />
-          </div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <input
-              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              placeholder="Email"
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-            />
-            <input
-              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              placeholder="Phone (optional)"
-              value={phone}
-              onChange={(event) => setPhone(event.target.value)}
-            />
-          </div>
-          <select
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            value={preferredChannel}
-            onChange={(event) => setPreferredChannel(event.target.value as "email" | "sms" | "phone")}
-          >
-            <option value="email">Email</option>
-            <option value="sms">SMS</option>
-            <option value="phone">Phone</option>
-          </select>
-          <Button onClick={submitLead} disabled={createLeadMutation.isPending}>
-            {createLeadMutation.isPending ? "Submitting..." : "Request Info"}
-          </Button>
-          {leadValidationError && <p className="text-sm text-red-700">{leadValidationError}</p>}
-          {createLeadMutation.error && <p className="text-sm text-red-700">Failed to submit lead.</p>}
-        </div>
-      )}
-      {leadSubmitted && <p className="text-sm text-emerald-700">Thanks - we&apos;ll reach out soon.</p>}
-    </div>
-  );
-
   return (
     <main className="mx-auto min-h-screen max-w-7xl px-4 py-8">
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]">
-      <Card>
-        <h2 className="mb-3 text-2xl font-semibold">Results</h2>
+        <Card>
+          <h2 className="mb-3 text-2xl font-semibold">Results</h2>
+          <p className="text-sm text-slate-700">Interview mode: {mode?.toUpperCase() ?? "N/A"}</p>
+          {scorecard && <p className="text-sm text-slate-700">Overall score: {scorecard.overallScore.toFixed(2)} / 5.00</p>}
+          {!scorecard && <p className="text-sm text-slate-600">Review rankings and trait evidence in the side panel.</p>}
 
-        {!scorecard && (
-          <>
-            <p className="mb-4 text-sm text-slate-600">No scorecard is available for this session.</p>
-            {leadCapture}
-            <Button onClick={() => navigate("/widget")}>Back to start</Button>
-          </>
-        )}
-
-        {scorecard && (
-          <section className="space-y-4">
-            <p className="text-sm text-slate-700">Overall score: {scorecard.overallScore.toFixed(2)} / 5.00</p>
-
-            <div className="rounded-md border border-slate-200 p-3">
-              <p className="mb-2 text-sm font-semibold text-slate-900">Top contributing traits</p>
-              <div className="space-y-1">
-                {topTraits.map((trait) => (
-                  <p key={trait.traitId} className="text-sm text-slate-700">
-                    {trait.traitName}: {trait.score0to5.toFixed(2)} ({trait.bucket})
-                  </p>
-                ))}
-              </div>
-            </div>
-
-            {grouped.map((group) => (
-              <div key={group.bucket} className="rounded-md border border-slate-200 p-3">
-                <p className="mb-2 text-sm font-semibold text-slate-900">{group.bucket.replaceAll("_", " ")}</p>
-                <div className="space-y-2">
-                  {group.items.map((item) => (
-                    <div key={item.traitId} className="rounded bg-slate-50 p-2 text-sm text-slate-700">
-                      <p className="font-semibold text-slate-900">
-                        {item.traitName}: {item.score0to5.toFixed(2)} / 5
-                      </p>
-                      <p>Confidence: {confidenceLabel(item.confidence)}</p>
-                      {(item.evidence ?? []).length > 0 && <p className="mt-1 text-xs text-slate-600">Evidence: {item.evidence.slice(0, 2).join(" | ")}</p>}
-                      {item.rationale && <p className="mt-1 text-xs text-slate-600">Why this score: {item.rationale}</p>}
-                    </div>
-                  ))}
+          <div className="mt-4 rounded-md border border-slate-200 p-3">
+            <p className="mb-2 text-sm font-semibold text-slate-900">Request Info / Talk to an advisor</p>
+            {!leadSubmitted && (
+              <div className="space-y-2">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <input className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="First name" value={firstName} onChange={(event) => setFirstName(event.target.value)} />
+                  <input className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Last name" value={lastName} onChange={(event) => setLastName(event.target.value)} />
                 </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <input className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+                  <input className="rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Phone (optional)" value={phone} onChange={(event) => setPhone(event.target.value)} />
+                </div>
+                <select className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={preferredChannel} onChange={(event) => setPreferredChannel(event.target.value as "email" | "sms" | "phone")}>
+                  <option value="email">Email</option>
+                  <option value="sms">SMS</option>
+                  <option value="phone">Phone</option>
+                </select>
+                <Button onClick={submitLead} disabled={createLeadMutation.isPending}>
+                  {createLeadMutation.isPending ? "Submitting..." : "Request Info"}
+                </Button>
+                {leadValidationError && <p className="text-sm text-red-700">{leadValidationError}</p>}
               </div>
-            ))}
+            )}
+            {leadSubmitted && <p className="text-sm text-emerald-700">Thanks - we&apos;ll reach out soon.</p>}
+          </div>
 
-            {leadCapture}
-            <Button className="bg-slate-500" onClick={() => navigate("/widget")}>
-              Start over
-            </Button>
-          </section>
-        )}
-      </Card>
-      <LiveInsightsSidebar snapshot={scoringSnapshot} programFit={programFit} done />
+          <Button className="mt-4 bg-slate-500" onClick={() => navigate("/widget")}>
+            Start over
+          </Button>
+        </Card>
+        <LiveInsightsSidebar snapshot={scoringSnapshot} programFit={programFit} done />
       </div>
     </main>
   );

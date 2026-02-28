@@ -15,6 +15,7 @@ import {
   splitRubricSignals,
   type TraitQuestionEvaluation
 } from "../lib/trait-scoring.js";
+import { createInterviewSession, handleCheckpointAction, handleInterviewTurn } from "../lib/interview-engine.js";
 
 const bucketRank: Record<ProgramTraitPriorityBucket, number> = {
   CRITICAL: 0,
@@ -65,6 +66,37 @@ const voiceTurnSchema = scoreSchema.extend({
 
 const voiceEndSchema = z.object({
   sessionId: z.string().min(1)
+});
+
+const interviewCreateSchema = z.object({
+  mode: z.enum(["voice", "chat", "quiz"]),
+  candidateId: z.string().min(1).optional(),
+  brandVoiceId: z.string().min(1).optional(),
+  language: z.string().trim().min(2).max(8).optional(),
+  programFilterIds: z.array(z.string().min(1)).max(24).optional(),
+  programId: z.string().min(1).optional()
+});
+
+const interviewTurnSchema = z.object({
+  mode: z.enum(["voice", "chat", "quiz"]),
+  text: z.string().trim().min(1).max(4000),
+  language: z.string().trim().min(2).max(8).optional(),
+  traitId: z.string().min(1).optional(),
+  questionId: z.string().min(1).optional(),
+  askedTraitIds: z.array(z.string().min(1)).max(100).optional(),
+  askedQuestionIds: z.array(z.string().min(1)).max(200).optional(),
+  preferredTraitIds: z.array(z.string().min(1)).max(10).optional(),
+  programFilterIds: z.array(z.string().min(1)).max(24).optional()
+});
+
+const interviewCheckpointSchema = z.object({
+  mode: z.enum(["voice", "chat", "quiz"]),
+  action: z.enum(["stop", "continue", "focus"]),
+  language: z.string().trim().min(2).max(8).optional(),
+  focusTraitIds: z.array(z.string().min(1)).max(10).optional(),
+  askedTraitIds: z.array(z.string().min(1)).max(100).optional(),
+  askedQuestionIds: z.array(z.string().min(1)).max(200).optional(),
+  programFilterIds: z.array(z.string().min(1)).max(24).optional()
 });
 
 const parseOptions = (optionsJson: string | null): string[] => {
@@ -817,6 +849,21 @@ const sendScoreError = (res: Response, error: unknown) => {
 
 sessionsRouter.post("/", async (req, res) => {
   try {
+    const asInterview = interviewCreateSchema.safeParse(req.body);
+    const fromInterviewMount = req.baseUrl.includes("/api/interview/sessions");
+    if (asInterview.success && (fromInterviewMount || asInterview.data.programFilterIds || asInterview.data.brandVoiceId)) {
+      const session = await createInterviewSession({
+        mode: asInterview.data.mode,
+        candidateId: asInterview.data.candidateId,
+        brandVoiceId: asInterview.data.brandVoiceId,
+        language: asInterview.data.language,
+        programFilterIds: asInterview.data.programFilterIds ?? (asInterview.data.programId ? [asInterview.data.programId] : undefined)
+      });
+      incrementMetric("sessions.created");
+      res.status(201).json(session);
+      return;
+    }
+
     const body = createSessionSchema.parse(req.body);
     const session = await createSession(body);
 
@@ -852,6 +899,57 @@ sessionsRouter.post("/:id/transcript", async (req, res) => {
       return;
     }
     sendError(res, 400, error instanceof Error ? error.message : "Invalid payload");
+  }
+});
+
+sessionsRouter.post("/:id/turns", scoreRateLimit, async (req, res) => {
+  try {
+    const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
+    const body = interviewTurnSchema.parse(req.body);
+    const result = await handleInterviewTurn({
+      sessionId: id,
+      mode: body.mode,
+      text: body.text,
+      language: body.language,
+      traitId: body.traitId,
+      questionId: body.questionId,
+      askedTraitIds: body.askedTraitIds,
+      askedQuestionIds: body.askedQuestionIds,
+      preferredTraitIds: body.preferredTraitIds,
+      programFilterIds: body.programFilterIds
+    });
+
+    res.json(result);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      sendValidationError(res, error);
+      return;
+    }
+    sendError(res, 400, error instanceof Error ? error.message : "Could not process turn");
+  }
+});
+
+sessionsRouter.post("/:id/checkpoint", scoreRateLimit, async (req, res) => {
+  try {
+    const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
+    const body = interviewCheckpointSchema.parse(req.body);
+    const result = await handleCheckpointAction({
+      sessionId: id,
+      mode: body.mode,
+      action: body.action,
+      language: body.language,
+      focusTraitIds: body.focusTraitIds,
+      askedTraitIds: body.askedTraitIds,
+      askedQuestionIds: body.askedQuestionIds,
+      programFilterIds: body.programFilterIds
+    });
+    res.json(result);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      sendValidationError(res, error);
+      return;
+    }
+    sendError(res, 400, error instanceof Error ? error.message : "Could not process checkpoint");
   }
 });
 

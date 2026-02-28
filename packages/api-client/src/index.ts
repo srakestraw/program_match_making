@@ -44,6 +44,33 @@ const programFitSchema = z.object({
       programId: z.string(),
       programName: z.string(),
       fitScore_0_to_100: z.number(),
+      confidence_0_to_1: z.number().optional(),
+      deltaFromLast_0_to_100: z.number().optional(),
+      explainability: z
+        .object({
+          topContributors: z.array(
+            z.object({
+              traitId: z.string(),
+              traitName: z.string(),
+              contribution: z.number()
+            })
+          ),
+          gaps: z.array(
+            z.object({
+              traitId: z.string(),
+              traitName: z.string(),
+              reason: z.enum(["low_score", "low_confidence", "missing"])
+            })
+          ),
+          suggestions: z.array(
+            z.object({
+              traitId: z.string(),
+              traitName: z.string(),
+              reason: z.string()
+            })
+          )
+        })
+        .optional(),
       topTraits: z.array(
         z.object({
           traitName: z.string(),
@@ -62,7 +89,42 @@ const liveInsightSchema = z.object({
 
 const sessionWithInsightsSchema = sessionSchema.extend({
   scoring_snapshot: scoringSnapshotSchema.optional(),
-  program_fit: programFitSchema.optional()
+  program_fit: programFitSchema.optional(),
+  sessionId: z.string().optional(),
+  initialPrompt: z.string().optional(),
+  nextQuestion: z
+    .object({
+      id: z.string(),
+      traitId: z.string(),
+      traitName: z.string(),
+      prompt: z.string(),
+      type: z.enum(["chat", "quiz"]),
+      options: z.array(z.string())
+    })
+    .nullable()
+    .optional(),
+  prefetchedQuestions: z
+    .array(
+      z.object({
+        id: z.string(),
+        traitId: z.string(),
+        traitName: z.string(),
+        prompt: z.string(),
+        type: z.enum(["chat", "quiz"]),
+        options: z.array(z.string())
+      })
+    )
+    .optional(),
+  answeredTraitCount: z.number().int().optional(),
+  checkpoint: z
+    .object({
+      required: z.boolean(),
+      answeredTraitCount: z.number().int(),
+      prompt: z.string(),
+      suggestedTraitIds: z.array(z.string())
+    })
+    .nullable()
+    .optional()
 });
 
 const completeSessionSchema = z.object({
@@ -322,6 +384,39 @@ export type ApiClientConfig = {
   baseUrl: string;
 };
 
+const interviewQuestionSchema = z.object({
+  id: z.string(),
+  traitId: z.string(),
+  traitName: z.string(),
+  prompt: z.string(),
+  type: z.enum(["chat", "quiz"]),
+  options: z.array(z.string())
+});
+
+const checkpointSchema = z
+  .object({
+    required: z.boolean(),
+    answeredTraitCount: z.number().int(),
+    prompt: z.string(),
+    suggestedTraitIds: z.array(z.string())
+  })
+  .nullable();
+
+const interviewSessionSchema = z.object({
+  sessionId: z.string(),
+  brandVoiceId: z.string().nullable().optional(),
+  realtimeVoiceName: z.string().optional(),
+  language: z.string().optional(),
+  systemPrompt: z.string().optional(),
+  initialPrompt: z.string(),
+  scoring_snapshot: scoringSnapshotSchema,
+  program_fit: programFitSchema,
+  nextQuestion: interviewQuestionSchema.nullable(),
+  prefetchedQuestions: z.array(interviewQuestionSchema),
+  answeredTraitCount: z.number().int(),
+  checkpoint: checkpointSchema
+});
+
 const parseResponse = async <T>(response: Response, schema?: z.ZodSchema<T>) => {
   if (!response.ok) {
     const raw = await response.json().catch(() => ({}));
@@ -388,14 +483,71 @@ export const createApiClient = ({ baseUrl }: ApiClientConfig) => {
   };
 
   return {
-    createSession: (mode: "voice" | "chat" | "quiz" = "voice", options?: { programId?: string; candidateId?: string }) =>
+    createSession: (
+      mode: "voice" | "chat" | "quiz" = "voice",
+      options?: { programId?: string; programFilterIds?: string[]; brandVoiceId?: string; candidateId?: string }
+    ) =>
       post("/api/sessions", { mode, ...options }, sessionWithInsightsSchema),
+    createInterviewSession: (input: {
+      mode: "voice" | "chat" | "quiz";
+      brandVoiceId?: string;
+      candidateId?: string;
+      language?: string;
+      programFilterIds?: string[];
+      programId?: string;
+    }) => post("/api/interview/sessions", input, interviewSessionSchema),
+    submitInterviewTurn: (
+      sessionId: string,
+      input: {
+        mode: "voice" | "chat" | "quiz";
+        text: string;
+        language?: string;
+        traitId?: string;
+        questionId?: string;
+        askedTraitIds?: string[];
+        askedQuestionIds?: string[];
+        preferredTraitIds?: string[];
+        programFilterIds?: string[];
+      }
+    ) =>
+      post(
+        `/api/interview/sessions/${sessionId}/turns`,
+        input,
+        z.object({
+          scoring_snapshot: scoringSnapshotSchema,
+          program_fit: programFitSchema,
+          nextQuestion: interviewQuestionSchema.nullable(),
+          prefetchedQuestions: z.array(interviewQuestionSchema),
+          answeredTraitCount: z.number().int(),
+          checkpoint: checkpointSchema
+        })
+      ),
+    submitInterviewCheckpoint: (
+      sessionId: string,
+      input: {
+        mode: "voice" | "chat" | "quiz";
+        action: "stop" | "continue" | "focus";
+        focusTraitIds?: string[];
+        askedTraitIds?: string[];
+        askedQuestionIds?: string[];
+        programFilterIds?: string[];
+      }
+    ) =>
+      post(
+        `/api/interview/sessions/${sessionId}/checkpoint`,
+        input,
+        z.object({
+          nextQuestion: interviewQuestionSchema.nullable(),
+          scoring_snapshot: scoringSnapshotSchema,
+          program_fit: programFitSchema
+        })
+      ),
     appendTranscript: (sessionId: string, turns: TranscriptTurnInput[]) => post(`/api/sessions/${sessionId}/transcript`, { turns }),
     completeSession: (sessionId: string) => post(`/api/sessions/${sessionId}/complete`, undefined, completeSessionSchema),
-    getRealtimeToken: () =>
+    getRealtimeToken: (input?: { brandVoiceId?: string; voiceName?: string; language?: string }) =>
       post(
         "/api/realtime/token",
-        undefined,
+        input,
         z.object({
           client_secret: z.object({ value: z.string(), expires_at: z.number().optional() })
         })

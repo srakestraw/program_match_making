@@ -2,51 +2,33 @@ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-run
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate, useSearchParams } from "react-router-dom";
-import { QueryClient, QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useMutation } from "@tanstack/react-query";
 import { Button, Card } from "@pmm/ui";
 import { createApiClient } from "@pmm/api-client";
 import { RealtimeSession } from "@pmm/voice";
-import { useWidgetStore } from "./store";
 import { ProgramFloatField } from "./components/ProgramFloatField";
 import { TraitScorePanel } from "./components/TraitScorePanel";
+import { VoiceBlob } from "./components/VoiceBlob";
+import { useWidgetStore } from "./store";
+import { getVoicePhaseLabel, isConnectedPhase, reduceVoicePhase, shouldKickoff, toVoiceBlobState } from "./lib/voiceState";
+import { createLanguageUtterance } from "./lib/browserTts";
+import { EXTRA_LANGUAGE_OPTIONS, PRIMARY_LANGUAGE_OPTIONS } from "./constants/languages";
+import { LanguagePills } from "./components/LanguagePills";
+import { LanguagePickerModal } from "./components/LanguagePickerModal";
 import "./styles.css";
 const queryClient = new QueryClient();
 const api = createApiClient({ baseUrl: import.meta.env.VITE_API_URL ?? "http://localhost:4000" });
-const bucketOrder = ["CRITICAL", "VERY_IMPORTANT", "IMPORTANT", "NICE_TO_HAVE"];
-const bucketWeight = {
-    CRITICAL: 1,
-    VERY_IMPORTANT: 0.8,
-    IMPORTANT: 0.6,
-    NICE_TO_HAVE: 0.4
-};
 const modeOptions = [
-    { id: "voice", label: "Voice", description: "Live voice interview" },
-    { id: "chat", label: "Chat", description: "Text-based interview" },
-    { id: "quiz", label: "Quiz", description: "Multiple choice assessment" }
+    { id: "voice", label: "Voice", description: "Live conversational interview" },
+    { id: "chat", label: "Chat", description: "Trait-driven text interview" },
+    { id: "quiz", label: "Quiz", description: "Structured trait questions" }
 ];
-const transcriptId = (prefix) => `${prefix}-${crypto.randomUUID()}`;
-const toTurnInput = (turns) => turns.map((turn) => ({ ts: turn.ts, speaker: turn.speaker, text: turn.text }));
-const summarizeForPrompt = (value, maxLength = 180) => {
-    const normalized = value.trim().replace(/\s+/g, " ");
-    if (normalized.length <= maxLength) {
-        return normalized;
-    }
-    return `${normalized.slice(0, maxLength).trimEnd()}...`;
-};
-const buildVoicePromptInstruction = (question, previousCandidateResponse) => {
-    const prior = previousCandidateResponse ? summarizeForPrompt(previousCandidateResponse) : null;
-    if (!prior) {
-        return `Start the interview warmly, then ask this question in your own words while preserving intent: "${question.prompt}". Keep it conversational and under two sentences.`;
-    }
-    return `In one short sentence, reference this candidate response naturally: "${prior}". Then ask the next question in your own words while preserving intent: "${question.prompt}". Keep it conversational and under two sentences.`;
-};
 const parseModeParam = (value) => {
-    if (value === "voice" || value === "chat" || value === "quiz") {
+    if (value === "voice" || value === "chat" || value === "quiz")
         return value;
-    }
     return null;
 };
-const sanitizeOptionLabel = (option) => option.replace(/\s*\[[0-5](?:\.\d+)?\]\s*$/g, "").replace(/\s*\([0-5](?:\.\d+)?\)\s*$/g, "").trim();
+const transcriptId = (prefix) => `${prefix}-${crypto.randomUUID()}`;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const useOnlineStatus = () => {
     const [isOnline, setIsOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
@@ -68,197 +50,273 @@ const WidgetSetup = () => {
     const queryMode = parseModeParam(searchParams.get("mode"));
     const lockMode = queryMode !== null || ["1", "true", "yes"].includes((searchParams.get("lockMode") ?? "").toLowerCase());
     const queryProgramId = searchParams.get("programId");
+    const programFilterIds = queryProgramId ? [queryProgramId] : [];
     const [selectedMode, setSelectedMode] = useState(queryMode);
-    const [selectedProgramId, setSelectedProgramId] = useState(queryProgramId ?? "");
     const [started, setStarted] = useState(false);
     const clear = useWidgetStore((state) => state.clear);
     const setMode = useWidgetStore((state) => state.setMode);
     const setProgramId = useWidgetStore((state) => state.setProgramId);
-    const programsQuery = useQuery({
-        queryKey: ["public-programs"],
-        queryFn: async () => {
-            const response = await api.getPublicPrograms();
-            return response.data;
-        }
-    });
+    const setProgramFilterIds = useWidgetStore((state) => state.setProgramFilterIds);
     useEffect(() => {
-        if (queryMode) {
+        if (queryMode)
             setSelectedMode(queryMode);
-        }
     }, [queryMode]);
-    useEffect(() => {
-        if (queryProgramId) {
-            setSelectedProgramId(queryProgramId);
-        }
-    }, [queryProgramId]);
-    const selectedProgram = useMemo(() => programsQuery.data?.find((program) => program.id === selectedProgramId) ?? null, [programsQuery.data, selectedProgramId]);
-    const canStart = Boolean(selectedMode && selectedProgramId);
-    if (started && selectedMode && selectedProgramId) {
+    const canStart = Boolean(selectedMode);
+    if (started && selectedMode) {
         if (selectedMode === "voice") {
-            return _jsx(VoiceFlow, { programId: selectedProgramId, onRestart: () => setStarted(false) });
+            return _jsx(VoiceFlow, { mode: selectedMode, programFilterIds: programFilterIds, onRestart: () => setStarted(false) });
         }
         if (selectedMode === "chat") {
-            return _jsx(ChatFlow, { programId: selectedProgramId, onRestart: () => setStarted(false) });
+            return _jsx(ChatFlow, { mode: selectedMode, programFilterIds: programFilterIds, onRestart: () => setStarted(false) });
         }
-        return _jsx(QuizFlow, { programId: selectedProgramId, onRestart: () => setStarted(false) });
+        return _jsx(QuizFlow, { mode: selectedMode, programFilterIds: programFilterIds, onRestart: () => setStarted(false) });
     }
-    return (_jsx("main", { className: "mx-auto flex min-h-screen max-w-3xl items-center px-4 py-10", children: _jsx(Card, { children: _jsxs("section", { className: "space-y-4", children: [_jsx("h1", { className: "text-3xl font-bold", children: "Program Match Interview" }), _jsx("p", { className: "text-sm text-slate-600", children: "Select your interview mode and program to begin." }), !lockMode && (_jsxs("div", { className: "space-y-2", children: [_jsx("p", { className: "text-sm font-semibold text-slate-800", children: "Mode" }), _jsx("div", { className: "grid gap-2 sm:grid-cols-3", children: modeOptions.map((mode) => (_jsxs("button", { type: "button", className: `rounded-md border p-3 text-left ${selectedMode === mode.id ? "border-slate-900 bg-slate-100" : "border-slate-200"}`, onClick: () => setSelectedMode(mode.id), children: [_jsx("p", { className: "text-sm font-semibold text-slate-900", children: mode.label }), _jsx("p", { className: "text-xs text-slate-600", children: mode.description })] }, mode.id))) })] })), lockMode && selectedMode && (_jsxs("p", { className: "rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-700", children: ["Mode locked to: ", selectedMode.toUpperCase()] })), !queryProgramId && (_jsxs("div", { className: "space-y-2", children: [_jsx("label", { className: "text-sm font-semibold text-slate-800", htmlFor: "program-select", children: "Program" }), _jsxs("select", { id: "program-select", className: "w-full rounded-md border border-slate-300 px-3 py-2 text-sm", value: selectedProgramId, onChange: (event) => setSelectedProgramId(event.target.value), disabled: programsQuery.isLoading, children: [_jsx("option", { value: "", children: "Select a program" }), (programsQuery.data ?? []).map((program) => (_jsx("option", { value: program.id, children: program.name }, program.id)))] })] })), queryProgramId && (_jsxs("p", { className: "rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-700", children: ["Program locked to: ", selectedProgram?.name ?? queryProgramId] })), _jsx(Button, { disabled: !canStart, onClick: () => {
+    return (_jsx("main", { className: "mx-auto flex min-h-screen max-w-3xl items-center px-4 py-10", children: _jsx(Card, { children: _jsxs("section", { className: "space-y-4", children: [_jsx("h1", { className: "text-3xl font-bold", children: "Program Match Interview" }), _jsx("p", { className: "text-sm text-slate-600", children: "Choose interview type to begin. Program ranking starts after your first responses." }), !lockMode && (_jsxs("div", { className: "space-y-2", children: [_jsx("p", { className: "text-sm font-semibold text-slate-800", children: "Interview type" }), _jsx("div", { className: "grid gap-2 sm:grid-cols-3", children: modeOptions.map((mode) => (_jsxs("button", { type: "button", className: `rounded-md border p-3 text-left ${selectedMode === mode.id ? "border-slate-900 bg-slate-100" : "border-slate-200"}`, onClick: () => setSelectedMode(mode.id), children: [_jsx("p", { className: "text-sm font-semibold text-slate-900", children: mode.label }), _jsx("p", { className: "text-xs text-slate-600", children: mode.description })] }, mode.id))) })] })), lockMode && selectedMode && (_jsxs("p", { className: "rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-700", children: ["Mode locked to: ", selectedMode.toUpperCase()] })), programFilterIds.length > 0 && (_jsx("p", { className: "rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-700", children: "Program filter from URL is active (1 program)." })), _jsx(Button, { disabled: !canStart, onClick: () => {
                             clear();
                             setMode(selectedMode);
-                            setProgramId(selectedProgramId);
+                            setProgramFilterIds(programFilterIds);
+                            setProgramId(programFilterIds[0] ?? null);
                             setStarted(true);
-                        }, children: "Start" }), programsQuery.error && _jsx("p", { className: "text-sm text-red-700", children: "Failed to load programs." })] }) }) }));
+                        }, children: "Start" })] }) }) }));
 };
-const VoiceFlow = ({ programId, onRestart }) => {
+const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
     const navigate = useNavigate();
-    const [step, setStep] = useState("start");
     const [error, setError] = useState(null);
-    const [connectionState, setConnectionState] = useState("idle");
-    const [micReady, setMicReady] = useState(false);
+    const [transportState, setTransportState] = useState("idle");
     const [deviceLabel, setDeviceLabel] = useState("Unknown microphone");
-    const [activeTraitId, setActiveTraitId] = useState(null);
-    const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+    const [currentQuestion, setCurrentQuestion] = useState(null);
+    const [askedTraitIds, setAskedTraitIds] = useState([]);
+    const [askedQuestionIds, setAskedQuestionIds] = useState([]);
+    const [checkpointOpen, setCheckpointOpen] = useState(false);
+    const [connectStalled, setConnectStalled] = useState(false);
+    const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
     const realtimeSessionRef = useRef(null);
     const mediaStreamRef = useRef(null);
-    const stepRef = useRef("start");
-    const transcriptRef = useRef([]);
-    const questionIndexRef = useRef(0);
+    const sessionIdRef = useRef(null);
     const lastCandidateTurnIdRef = useRef(null);
+    const kickoffStartedRef = useRef(false);
+    const speechSynthesisRef = useRef(null);
     const isOnline = useOnlineStatus();
-    const { sessionId, transcript, scoringSnapshot, programFit, setSessionId, addTranscriptTurn, setProgramId, setMode, setScorecard, setScoringSnapshot, setProgramFit, clear } = useWidgetStore();
-    const createSessionMutation = useMutation({ mutationFn: () => api.createSession("voice", { programId }) });
-    const tokenMutation = useMutation({ mutationFn: api.getRealtimeToken });
+    const { transcript, scoringSnapshot, programFit, checkpoint, voicePhase, voiceInputMode, sessionLanguageTag, sessionLanguageLabel, detectedLanguageSuggestion, setSessionId, addTranscriptTurn, setMode, setProgramFilterIds, setScoringSnapshot, setProgramFit, setAnsweredTraitCount, setCheckpoint, setVoicePhase, setVoiceInputMode, setSessionLanguage, setDetectedLanguage, dismissDetectedLanguage, clear } = useWidgetStore();
+    const debugVoice = (message, details) => {
+        if (typeof window === "undefined")
+            return;
+        if (window.localStorage.getItem("DEBUG_VOICE") !== "1")
+            return;
+        console.info("[voice]", message, details ?? {});
+    };
+    const transitionPhase = (event) => {
+        const next = reduceVoicePhase(useWidgetStore.getState().voicePhase, event);
+        debugVoice("phase", { from: useWidgetStore.getState().voicePhase, to: next, event });
+        setVoicePhase(next);
+    };
+    const setMicListeningState = (enabled) => {
+        const active = enabled && voiceInputMode === "handsfree" && voicePhase === "listening";
+        realtimeSessionRef.current?.setPushToTalk(active);
+        debugVoice("mic", { enabled: active, inputMode: voiceInputMode, phase: voicePhase });
+    };
+    useEffect(() => {
+        setMode(mode);
+        setProgramFilterIds(programFilterIds);
+        setSessionLanguage("en", "English");
+    }, [mode, programFilterIds, setMode, setProgramFilterIds, setSessionLanguage]);
+    useEffect(() => {
+        if (!checkpoint?.required)
+            return;
+        setCheckpointOpen(true);
+        setVoicePhase("paused");
+    }, [checkpoint, setVoicePhase]);
+    useEffect(() => {
+        if (voicePhase === "listening") {
+            setMicListeningState(true);
+            return;
+        }
+        setMicListeningState(false);
+    }, [voicePhase, voiceInputMode]);
+    useEffect(() => {
+        if (voicePhase !== "connecting") {
+            setConnectStalled(false);
+            return;
+        }
+        const timeout = window.setTimeout(() => setConnectStalled(true), 5000);
+        return () => window.clearTimeout(timeout);
+    }, [voicePhase]);
+    useEffect(() => {
+        if (!realtimeSessionRef.current)
+            return;
+        if (!isConnectedPhase(voicePhase))
+            return;
+        realtimeSessionRef.current.updateInstructions(`You are a warm admissions interviewer. Respond in ${sessionLanguageLabel} only. Do not switch languages unless the user explicitly asks.`);
+    }, [sessionLanguageTag, sessionLanguageLabel, voicePhase]);
+    const tokenMutation = useMutation({
+        mutationFn: (input) => api.getRealtimeToken(input)
+    });
     const appendTranscriptMutation = useMutation({
         mutationFn: ({ id, turns }) => api.appendTranscript(id, turns)
     });
-    const completeSessionMutation = useMutation({ mutationFn: (id) => api.completeSession(id) });
-    const scoreSessionMutation = useMutation({
-        mutationFn: () => api.scoreSession({
-            sessionId: sessionId,
-            mode: "voice",
-            programId,
-            transcriptTurns: transcriptRef.current,
-            activeTraitId: activeTraitId ?? undefined
+    const createInterviewMutation = useMutation({
+        mutationFn: () => api.createInterviewSession({
+            mode,
+            language: sessionLanguageTag,
+            programFilterIds: programFilterIds.length > 0 ? programFilterIds : undefined
         })
     });
-    const scoreTurnMutation = useMutation({
-        mutationFn: (traitId) => api.scoreSessionTurn({
-            sessionId: sessionId,
-            mode: "voice",
-            programId,
-            transcriptTurns: transcriptRef.current,
-            activeTraitId: traitId
+    const turnMutation = useMutation({
+        mutationFn: (text) => api.submitInterviewTurn(sessionIdRef.current, {
+            mode,
+            text,
+            language: sessionLanguageTag,
+            traitId: currentQuestion?.traitId,
+            questionId: currentQuestion?.id,
+            askedTraitIds,
+            askedQuestionIds,
+            programFilterIds: programFilterIds.length > 0 ? programFilterIds : undefined
         })
     });
-    const questionsQuery = useQuery({
-        queryKey: ["program-questions", programId, "chat"],
-        queryFn: async () => {
-            const response = await api.getProgramQuestions(programId, "chat");
-            return response.data.orderedQuestions;
+    const checkpointMutation = useMutation({
+        mutationFn: (action) => api.submitInterviewCheckpoint(sessionIdRef.current, {
+            mode,
+            action,
+            focusTraitIds: action === "focus" ? checkpoint?.suggestedTraitIds : undefined,
+            askedTraitIds,
+            askedQuestionIds,
+            programFilterIds: programFilterIds.length > 0 ? programFilterIds : undefined
+        })
+    });
+    const speakPrompt = (text) => {
+        if (typeof window === "undefined" || !window.speechSynthesis) {
+            transitionPhase("assistant_done");
+            return;
         }
-    });
-    const voiceQuestions = questionsQuery.data ?? [];
-    const askQuestion = (question, previousCandidateResponse) => {
-        const instruction = buildVoicePromptInstruction(question, previousCandidateResponse);
-        realtimeSessionRef.current?.promptAssistant(instruction);
+        window.speechSynthesis.cancel();
+        const utterance = createLanguageUtterance(text, sessionLanguageTag, window.speechSynthesis.getVoices?.() ?? []);
+        speechSynthesisRef.current = utterance;
+        utterance.onstart = () => {
+            debugVoice("tts.start", { chars: text.length });
+            setVoicePhase("speaking");
+        };
+        utterance.onend = () => {
+            debugVoice("tts.end");
+            transitionPhase("assistant_done");
+        };
+        utterance.onerror = () => {
+            transitionPhase("assistant_done");
+        };
+        window.speechSynthesis.speak(utterance);
     };
-    useEffect(() => {
-        stepRef.current = step;
-    }, [step]);
-    useEffect(() => {
-        setProgramId(programId);
-        setMode("voice");
-        setScorecard(null);
-        setScoringSnapshot(null);
-        setProgramFit(null);
-        transcriptRef.current = [];
-        questionIndexRef.current = 0;
-        setCurrentQuestionIndex(0);
-        setActiveTraitId(null);
-        lastCandidateTurnIdRef.current = null;
-    }, [programId, setMode, setProgramId, setProgramFit, setScorecard, setScoringSnapshot]);
-    const startPermissionCheck = async () => {
+    const pushAssistantQuestion = async (question, prefix) => {
+        if (!question)
+            return;
+        setCurrentQuestion(question);
+        setAskedQuestionIds((prev) => (prev.includes(question.id) ? prev : [...prev, question.id]));
+        setAskedTraitIds((prev) => (prev[prev.length - 1] === question.traitId ? prev : [...prev, question.traitId]));
+        const text = prefix ? `${prefix} ${question.prompt}` : question.prompt;
+        addTranscriptTurn({ id: transcriptId("assistant"), speaker: "assistant", text, ts: new Date().toISOString() });
+        if (sessionIdRef.current) {
+            void appendTranscriptMutation.mutateAsync({
+                id: sessionIdRef.current,
+                turns: [{ ts: new Date().toISOString(), speaker: "assistant", text }]
+            });
+        }
+        transitionPhase("kickoff_ready");
+        speakPrompt(text);
+    };
+    const kickoffIfNeeded = async (interview) => {
+        if (!shouldKickoff(useWidgetStore.getState().voicePhase, kickoffStartedRef.current))
+            return;
+        kickoffStartedRef.current = true;
+        debugVoice("kickoff.called", { sessionId: sessionIdRef.current });
+        setScoringSnapshot(interview.scoring_snapshot ?? null);
+        setProgramFit(interview.program_fit ?? null);
+        setCheckpoint(interview.checkpoint ?? null);
+        setAnsweredTraitCount(interview.answeredTraitCount ?? 0);
+        if (interview.nextQuestion) {
+            await pushAssistantQuestion(interview.nextQuestion, interview.initialPrompt);
+            return;
+        }
+        if (interview.initialPrompt) {
+            addTranscriptTurn({ id: transcriptId("assistant"), speaker: "assistant", text: interview.initialPrompt, ts: new Date().toISOString() });
+            transitionPhase("kickoff_ready");
+            speakPrompt(interview.initialPrompt);
+            return;
+        }
+        transitionPhase("assistant_done");
+    };
+    const onTranscriptTurn = async (turn) => {
+        if (turn.speaker !== "candidate") {
+            return;
+        }
+        if (voicePhase !== "listening")
+            return;
+        if (lastCandidateTurnIdRef.current === turn.id)
+            return;
+        lastCandidateTurnIdRef.current = turn.id;
+        addTranscriptTurn(turn);
+        debugVoice("transcript.candidate", { chars: turn.text.length });
+        if (/\b(hola|gracias|por favor|buenos|buenas|adios)\b/i.test(turn.text)) {
+            setDetectedLanguage("es", "Spanish");
+        }
+        if (sessionIdRef.current) {
+            void appendTranscriptMutation.mutateAsync({
+                id: sessionIdRef.current,
+                turns: [{ ts: turn.ts, speaker: turn.speaker, text: turn.text }]
+            });
+        }
+        transitionPhase("user_transcript_finalized");
+        try {
+            const result = await turnMutation.mutateAsync(turn.text);
+            setScoringSnapshot(result.scoring_snapshot);
+            setProgramFit(result.program_fit);
+            setAnsweredTraitCount(result.answeredTraitCount);
+            setCheckpoint(result.checkpoint);
+            if (result.checkpoint?.required) {
+                setCheckpointOpen(true);
+                setVoicePhase("paused");
+                return;
+            }
+            if (result.nextQuestion) {
+                await pushAssistantQuestion(result.nextQuestion);
+            }
+            else {
+                setVoicePhase("ended");
+            }
+        }
+        catch (turnError) {
+            setError(turnError instanceof Error ? turnError.message : "Could not score voice turn.");
+            setVoicePhase("error");
+        }
+    };
+    const startInterview = async () => {
         setError(null);
+        if (sessionIdRef.current && transcript.length > 0 && currentQuestion) {
+            transitionPhase("assistant_done");
+            return;
+        }
+        transitionPhase("request_permissions");
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             mediaStreamRef.current = stream;
             const [track] = stream.getAudioTracks();
             setDeviceLabel(track.label || "Microphone ready");
-            setMicReady(true);
-            setStep("permissions");
-        }
-        catch {
-            setError("Microphone access denied. Please allow mic permissions and retry.");
-            setStep("permissions");
-        }
-    };
-    const scoreCandidateTurn = async (candidateTurn) => {
-        if (lastCandidateTurnIdRef.current === candidateTurn.id) {
-            return;
-        }
-        lastCandidateTurnIdRef.current = candidateTurn.id;
-        const currentSessionId = useWidgetStore.getState().sessionId;
-        if (!currentSessionId) {
-            return;
-        }
-        const currentQuestion = voiceQuestions[questionIndexRef.current];
-        const currentTraitId = currentQuestion?.traitId ?? activeTraitId ?? undefined;
-        try {
-            const liveScore = await scoreTurnMutation.mutateAsync(currentTraitId);
-            setScorecard(liveScore.data);
-            setScoringSnapshot(liveScore.data.scoring_snapshot);
-            setProgramFit(liveScore.data.program_fit);
-        }
-        catch (scoreError) {
-            setError(scoreError instanceof Error ? scoreError.message : "Could not update voice scoring.");
-        }
-        const nextIndex = questionIndexRef.current + 1;
-        if (nextIndex >= voiceQuestions.length) {
-            return;
-        }
-        const nextQuestion = voiceQuestions[nextIndex];
-        questionIndexRef.current = nextIndex;
-        setCurrentQuestionIndex(nextIndex);
-        setActiveTraitId(nextQuestion.traitId);
-        askQuestion(nextQuestion, candidateTurn.text);
-    };
-    const onTranscriptTurn = (turn) => {
-        addTranscriptTurn(turn);
-        transcriptRef.current.push({ ts: turn.ts, speaker: turn.speaker, text: turn.text });
-        const id = useWidgetStore.getState().sessionId;
-        if (id) {
-            void appendTranscriptMutation.mutateAsync({
-                id,
-                turns: [{ ts: turn.ts, speaker: turn.speaker, text: turn.text }]
+            transitionPhase("permissions_granted");
+            const interview = await createInterviewMutation.mutateAsync();
+            const token = await tokenMutation.mutateAsync({
+                brandVoiceId: interview.brandVoiceId ?? undefined,
+                language: interview.language ?? sessionLanguageTag
             });
-        }
-        if (turn.speaker === "candidate") {
-            void scoreCandidateTurn(turn);
-        }
-    };
-    const connectRealtime = async () => {
-        if (!mediaStreamRef.current || !micReady) {
-            setError("Microphone is not ready.");
-            return;
-        }
-        if (questionsQuery.isLoading) {
-            setError("Loading trait prompts. Please try again in a moment.");
-            return;
-        }
-        if (voiceQuestions.length === 0) {
-            setError("No chat trait questions are configured for this program.");
-            return;
-        }
-        setError(null);
-        try {
-            const [createdSession, token] = await Promise.all([createSessionMutation.mutateAsync(), tokenMutation.mutateAsync()]);
-            setSessionId(createdSession.id);
-            const track = mediaStreamRef.current.getAudioTracks()[0];
+            const id = interview.sessionId;
+            if (!id)
+                throw new Error("Session id missing");
+            setSessionId(id);
+            sessionIdRef.current = id;
+            debugVoice("session.ready", { sessionId: id });
             const realtimeSession = new RealtimeSession({
                 onStateChange: (state) => {
-                    setConnectionState(state);
-                    if (state === "disconnected" && stepRef.current === "session") {
-                        setError("Connection dropped. You can retry the realtime connection.");
+                    setTransportState(state);
+                    debugVoice("transport.state", { state });
+                    if (state === "disconnected" && isConnectedPhase(useWidgetStore.getState().voicePhase)) {
+                        setError("Connection dropped. Retry connection.");
+                        setVoicePhase("error");
                     }
                 },
                 onTranscriptTurn
@@ -266,171 +324,144 @@ const VoiceFlow = ({ programId, onRestart }) => {
             realtimeSession.setAudioTrack(track);
             realtimeSessionRef.current = realtimeSession;
             await realtimeSession.connect(token.client_secret.value);
-            setScoringSnapshot(createdSession.scoring_snapshot ?? null);
-            setProgramFit(createdSession.program_fit ?? null);
-            transcriptRef.current = [];
-            questionIndexRef.current = 0;
-            setCurrentQuestionIndex(0);
-            setActiveTraitId(voiceQuestions[0]?.traitId ?? null);
-            lastCandidateTurnIdRef.current = null;
-            const traitNames = Array.from(new Set(voiceQuestions.map((question) => question.traitName))).join(", ");
-            realtimeSession.updateInstructions(`You are a warm, professional interviewer. Keep the exchange conversational and concise. Focus on these traits: ${traitNames}. Ask one question at a time, and do not answer on behalf of the candidate.`);
-            if (voiceQuestions[0]) {
-                askQuestion(voiceQuestions[0]);
-            }
-            setStep("session");
+            realtimeSession.updateInstructions(interview.systemPrompt ??
+                `You are a warm admissions interviewer. Respond in ${sessionLanguageLabel} only. Do not switch languages unless the user explicitly asks.`);
+            transitionPhase("transport_connected");
+            await kickoffIfNeeded(interview);
         }
-        catch (connectError) {
-            setError(connectError instanceof Error ? connectError.message : "Failed to start voice session.");
-            setConnectionState("error");
+        catch (startError) {
+            setError(startError instanceof Error ? startError.message : "Failed to start voice interview.");
+            setVoicePhase("error");
+        }
+    };
+    const handleCheckpointAction = async (action) => {
+        try {
+            const response = await checkpointMutation.mutateAsync(action);
+            setScoringSnapshot(response.scoring_snapshot);
+            setProgramFit(response.program_fit);
+            setCheckpoint(null);
+            setCheckpointOpen(false);
+            if (action === "stop") {
+                setVoicePhase("ended");
+                return;
+            }
+            if (response.nextQuestion) {
+                await pushAssistantQuestion(response.nextQuestion);
+            }
+            else {
+                transitionPhase("resume");
+            }
+        }
+        catch (checkpointError) {
+            setError(checkpointError instanceof Error ? checkpointError.message : "Checkpoint action failed.");
+            setVoicePhase("error");
         }
     };
     const endSession = async () => {
         try {
+            window.speechSynthesis?.cancel();
             await realtimeSessionRef.current?.disconnect();
-            if (sessionId) {
-                await completeSessionMutation.mutateAsync(sessionId);
-                const score = await scoreSessionMutation.mutateAsync();
-                setScorecard(score.data);
-                setScoringSnapshot(score.data.scoring_snapshot);
-                setProgramFit(score.data.program_fit);
-            }
+            if (sessionIdRef.current)
+                await api.completeSession(sessionIdRef.current);
         }
         catch {
-            setError("Session ended with errors. Transcript was kept locally.");
+            setError("Session ended with errors. Transcript kept locally.");
         }
         finally {
             mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-            setStep("end");
+            setVoicePhase("ended");
         }
     };
     const resetFlow = async () => {
         await realtimeSessionRef.current?.disconnect();
         mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-        setSessionId(null);
+        window.speechSynthesis?.cancel();
         clear();
-        setProgramId(programId);
-        setMode("voice");
-        setConnectionState("idle");
-        setMicReady(false);
-        setActiveTraitId(null);
-        setCurrentQuestionIndex(0);
-        questionIndexRef.current = 0;
-        transcriptRef.current = [];
+        setTransportState("idle");
         setError(null);
-        setStep("start");
+        setCheckpointOpen(false);
+        setCurrentQuestion(null);
+        setAskedQuestionIds([]);
+        setAskedTraitIds([]);
+        kickoffStartedRef.current = false;
         onRestart();
     };
-    const statusLabel = useMemo(() => {
-        if (connectionState === "connected")
+    const connectionLabel = useMemo(() => {
+        if (isConnectedPhase(voicePhase))
             return "Connected";
-        if (connectionState === "connecting")
+        if (transportState === "connecting" || voicePhase === "connecting")
             return "Connecting";
-        if (connectionState === "disconnected")
-            return "Disconnected";
-        if (connectionState === "error")
+        if (transportState === "error" || voicePhase === "error")
             return "Error";
-        return "Idle";
-    }, [connectionState]);
-    const currentQuestion = voiceQuestions[currentQuestionIndex];
-    return (_jsx("main", { className: "mx-auto min-h-screen max-w-7xl px-4 py-8", children: _jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]", children: [_jsxs(Card, { children: [step === "start" && (_jsxs("section", { className: "space-y-4", children: [_jsx("h1", { className: "text-3xl font-bold", children: "Voice Interview" }), _jsx("p", { className: "text-sm text-slate-600", children: "We only capture your interview audio and transcript for evaluation. Click start when you are ready." }), _jsx(Button, { onClick: startPermissionCheck, children: "Start voice interview" })] })), step === "permissions" && (_jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "Mic and device check" }), _jsxs("p", { className: "text-sm text-slate-700", children: ["Device: ", deviceLabel] }), _jsxs("p", { className: "text-sm text-slate-700", children: ["Permission: ", micReady ? "Granted" : "Not granted"] }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: connectRealtime, disabled: !isOnline ||
-                                                !micReady ||
-                                                questionsQuery.isLoading ||
-                                                createSessionMutation.isPending ||
-                                                tokenMutation.isPending, children: "Continue to interview" }), _jsx(Button, { className: "bg-slate-500", onClick: startPermissionCheck, children: "Retry device check" })] })] })), step === "session" && (_jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "In-session voice" }), _jsxs("p", { className: "text-sm text-slate-700", children: ["Connection status: ", statusLabel] }), currentQuestion && (_jsxs("p", { className: "rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700", children: ["Current trait: ", _jsx("span", { className: "font-semibold", children: currentQuestion.traitName })] })), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onMouseDown: () => realtimeSessionRef.current?.setPushToTalk(true), onMouseUp: () => realtimeSessionRef.current?.setPushToTalk(false), onMouseLeave: () => realtimeSessionRef.current?.setPushToTalk(false), onTouchStart: () => realtimeSessionRef.current?.setPushToTalk(true), onTouchEnd: () => realtimeSessionRef.current?.setPushToTalk(false), disabled: !isOnline || connectionState !== "connected", children: "Hold to talk" }), _jsx(Button, { className: "bg-slate-500", onClick: connectRealtime, disabled: !isOnline || tokenMutation.isPending, children: "Retry connection" }), _jsx(Button, { className: "bg-red-700", onClick: endSession, children: "End session" })] }), _jsxs("div", { className: "max-h-72 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3", children: [transcript.length === 0 && _jsx("p", { className: "text-sm text-slate-500", children: "Transcript appears here once the conversation starts." }), transcript.map((turn) => (_jsxs("div", { className: "rounded bg-slate-50 p-2 text-sm", children: [_jsxs("span", { className: "font-semibold capitalize", children: [turn.speaker, ":"] }), " ", turn.text] }, `${turn.id}-${turn.ts}`)))] })] })), step === "end" && (_jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "Interview complete" }), _jsxs("div", { className: "max-h-72 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3", children: [transcript.map((turn) => (_jsxs("div", { className: "rounded bg-slate-50 p-2 text-sm", children: [_jsxs("span", { className: "font-semibold capitalize", children: [turn.speaker, ":"] }), " ", turn.text] }, `${turn.id}-${turn.ts}`))), transcript.length === 0 && _jsx("p", { className: "text-sm text-slate-500", children: "No transcript captured." })] }), _jsx(Button, { onClick: () => {
-                                        navigate("/widget/results");
-                                    }, children: "Save and view results" }), _jsx(Button, { className: "bg-slate-500", onClick: resetFlow, children: "Start over" })] })), !isOnline && _jsx("p", { className: "mt-4 text-sm text-red-700", children: "You are offline. Reconnect to continue." }), error && _jsx("p", { className: "mt-4 text-sm text-red-700", children: error })] }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, activeTraitId: activeTraitId, done: step === "end" })] }) }));
+        if (transportState === "disconnected")
+            return "Disconnected";
+        return "Not connected";
+    }, [transportState, voicePhase]);
+    const canStart = voicePhase === "init" || voicePhase === "permissions" || voicePhase === "error";
+    const activeSession = !["init", "permissions", "connecting", "error", "ended"].includes(voicePhase);
+    return (_jsx("main", { className: "mx-auto min-h-screen max-w-7xl px-4 py-8", children: _jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]", children: [_jsxs(Card, { children: [_jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "Adaptive voice interview" }), _jsx(VoiceBlob, { state: toVoiceBlobState(voicePhase) }), _jsxs("p", { className: "text-sm text-slate-700", children: ["State: ", _jsx("span", { className: "font-semibold", children: getVoicePhaseLabel(voicePhase) }), " | Connection: ", connectionLabel] }), _jsxs("div", { className: "space-y-2", children: [_jsx("p", { className: "text-sm text-slate-700", children: "Language" }), _jsx(LanguagePills, { valueTag: sessionLanguageTag, options: PRIMARY_LANGUAGE_OPTIONS, customLanguage: PRIMARY_LANGUAGE_OPTIONS.some((option) => option.tag.toLowerCase() === sessionLanguageTag.toLowerCase())
+                                                ? null
+                                                : { tag: sessionLanguageTag, label: sessionLanguageLabel }, onChangeTag: (tag, label) => setSessionLanguage(tag, label), onOpenOther: () => setLanguagePickerOpen(true) })] }), detectedLanguageSuggestion && !detectedLanguageSuggestion.dismissed && (_jsxs("div", { className: "rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900", children: ["We detected ", detectedLanguageSuggestion.label, ". Switch?", _jsxs("div", { className: "mt-2 flex gap-2", children: [_jsx(Button, { className: "bg-slate-700", onClick: () => setSessionLanguage(detectedLanguageSuggestion.tag, detectedLanguageSuggestion.label), children: "Switch" }), _jsxs(Button, { className: "bg-slate-500", onClick: dismissDetectedLanguage, children: ["Keep ", sessionLanguageLabel] })] })] })), _jsxs("p", { className: "text-sm text-slate-700", children: ["Input mode: ", voiceInputMode === "handsfree" ? "Hands-free" : "Hold-to-talk", " | Device: ", deviceLabel] }), canStart && (_jsx(Button, { onClick: startInterview, disabled: !isOnline || createInterviewMutation.isPending || tokenMutation.isPending, children: "Start interview" })), connectStalled && (_jsxs("div", { className: "rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900", children: ["Connection is taking longer than expected.", _jsx("div", { className: "mt-2", children: _jsx(Button, { className: "bg-slate-600", onClick: startInterview, children: "Retry connect" }) })] })), currentQuestion && (_jsxs("p", { className: "rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700", children: ["Current trait: ", _jsx("span", { className: "font-semibold", children: currentQuestion.traitName })] })), activeSession && (_jsxs("div", { className: "flex flex-wrap gap-2", children: [_jsx(Button, { className: "bg-slate-500", onClick: () => setVoicePhase(voicePhase === "paused" ? "listening" : "paused"), children: voicePhase === "paused" ? "Resume" : "Pause" }), _jsx(Button, { className: "bg-slate-500", onClick: () => setVoiceInputMode(voiceInputMode === "handsfree" ? "hold_to_talk" : "handsfree"), children: voiceInputMode === "handsfree" ? "Use hold-to-talk" : "Use hands-free" }), voiceInputMode === "hold_to_talk" && (_jsx(Button, { onMouseDown: () => {
+                                                if (voicePhase !== "paused")
+                                                    setVoicePhase("listening");
+                                                realtimeSessionRef.current?.setPushToTalk(true);
+                                            }, onMouseUp: () => realtimeSessionRef.current?.setPushToTalk(false), onMouseLeave: () => realtimeSessionRef.current?.setPushToTalk(false), onTouchStart: () => {
+                                                if (voicePhase !== "paused")
+                                                    setVoicePhase("listening");
+                                                realtimeSessionRef.current?.setPushToTalk(true);
+                                            }, onTouchEnd: () => realtimeSessionRef.current?.setPushToTalk(false), disabled: voicePhase === "paused", children: "Hold to talk" })), _jsx(Button, { className: "bg-red-700", onClick: endSession, children: "End" })] })), _jsxs("div", { className: "max-h-72 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3", children: [transcript.length === 0 && _jsx("p", { className: "text-sm text-slate-500", children: "Transcript appears as the conversation runs." }), transcript.map((turn) => (_jsxs("div", { className: "rounded bg-slate-50 p-2 text-sm", children: [_jsxs("span", { className: "font-semibold capitalize", children: [turn.speaker, ":"] }), " ", turn.text] }, `${turn.id}-${turn.ts}`)))] }), checkpointOpen && checkpoint && (_jsxs("div", { className: "rounded-md border border-blue-200 bg-blue-50 p-3 text-sm", children: [_jsx("p", { className: "font-semibold text-slate-900", children: checkpoint.prompt }), _jsxs("div", { className: "mt-2 flex flex-wrap gap-2", children: [_jsx(Button, { className: "bg-slate-700", onClick: () => void handleCheckpointAction("stop"), children: "Stop and review" }), _jsx(Button, { onClick: () => void handleCheckpointAction("continue"), children: "Keep going" }), _jsx(Button, { className: "bg-slate-500", onClick: () => void handleCheckpointAction("focus"), disabled: checkpoint.suggestedTraitIds.length === 0, children: "Focus trait area" })] })] })), voicePhase === "ended" && (_jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: () => navigate("/widget/results"), children: "Review results" }), _jsx(Button, { className: "bg-slate-500", onClick: resetFlow, children: "Start over" })] })), !isOnline && _jsx("p", { className: "text-sm text-red-700", children: "You are offline. Reconnect to continue." }), error && _jsx("p", { className: "text-sm text-red-700", children: error })] }), _jsx(LanguagePickerModal, { open: languagePickerOpen, options: EXTRA_LANGUAGE_OPTIONS, onClose: () => setLanguagePickerOpen(false), onSelect: (tag, label) => {
+                                setSessionLanguage(tag, label);
+                                setLanguagePickerOpen(false);
+                            } })] }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, activeTraitId: currentQuestion?.traitId ?? null, done: voicePhase === "ended" })] }) }));
 };
-const ChatFlow = ({ programId, onRestart }) => {
+const ChatFlow = ({ mode, programFilterIds, onRestart }) => {
     const navigate = useNavigate();
     const [input, setInput] = useState("");
-    const [currentIndex, setCurrentIndex] = useState(0);
     const [started, setStarted] = useState(false);
     const [error, setError] = useState(null);
-    const [pendingScoreRetry, setPendingScoreRetry] = useState(false);
+    const [currentQuestion, setCurrentQuestion] = useState(null);
+    const [askedTraitIds, setAskedTraitIds] = useState([]);
+    const [askedQuestionIds, setAskedQuestionIds] = useState([]);
     const isOnline = useOnlineStatus();
-    const { transcript, sessionId, scoringSnapshot, programFit, setSessionId, addTranscriptTurn, setMode, setProgramId, setScorecard, setScoringSnapshot, setProgramFit, clear } = useWidgetStore();
-    const transcriptRef = useRef([]);
-    const [activeTraitId, setActiveTraitId] = useState(null);
-    const questionsQuery = useQuery({
-        queryKey: ["program-questions", programId, "chat"],
-        queryFn: async () => {
-            const response = await api.getProgramQuestions(programId, "chat");
-            return response.data.orderedQuestions;
-        }
-    });
-    const createSessionMutation = useMutation({ mutationFn: () => api.startVoiceSession("chat", { programId }) });
-    const appendTranscriptMutation = useMutation({
-        mutationFn: ({ id, turns }) => api.appendTranscript(id, turns)
-    });
-    const completeSessionMutation = useMutation({ mutationFn: (id) => api.completeSession(id) });
-    const scoreSessionMutation = useMutation({
-        mutationFn: () => api.scoreSession({
-            sessionId: sessionId,
-            mode: "chat",
-            programId,
-            transcriptTurns: transcriptRef.current,
-            activeTraitId: activeTraitId ?? undefined
+    const { transcript, sessionId, scoringSnapshot, programFit, sessionLanguageTag, setSessionId, addTranscriptTurn, setMode, setProgramFilterIds, setScoringSnapshot, setProgramFit, clear } = useWidgetStore();
+    const createInterviewMutation = useMutation({
+        mutationFn: () => api.createInterviewSession({
+            mode,
+            language: sessionLanguageTag,
+            programFilterIds: programFilterIds.length > 0 ? programFilterIds : undefined
         })
     });
-    const scoreTurnMutation = useMutation({
-        mutationFn: (traitId) => api.scoreSessionTurn({
-            sessionId: sessionId,
-            mode: "chat",
-            programId,
-            transcriptTurns: transcriptRef.current,
-            activeTraitId: traitId
+    const turnMutation = useMutation({
+        mutationFn: (text) => api.submitInterviewTurn(sessionId, {
+            mode,
+            text,
+            language: sessionLanguageTag,
+            traitId: currentQuestion?.traitId,
+            questionId: currentQuestion?.id,
+            askedTraitIds,
+            askedQuestionIds,
+            programFilterIds: programFilterIds.length > 0 ? programFilterIds : undefined
         })
     });
-    const finalizeWithScoring = async () => {
-        if (!sessionId)
-            return;
-        try {
-            await completeSessionMutation.mutateAsync(sessionId);
-            const score = await scoreSessionMutation.mutateAsync();
-            setScorecard(score.data);
-            setScoringSnapshot(score.data.scoring_snapshot);
-            setProgramFit(score.data.program_fit);
-            setPendingScoreRetry(false);
-            navigate("/widget/results");
-        }
-        catch (finalizeError) {
-            setPendingScoreRetry(true);
-            setError(finalizeError instanceof Error ? finalizeError.message : "Scoring failed. Please retry.");
-        }
-    };
     useEffect(() => {
         clear();
-        setProgramId(programId);
-        setMode("chat");
-        setScoringSnapshot(null);
-        setProgramFit(null);
-    }, [clear, programId, setMode, setProgramId, setProgramFit, setScoringSnapshot]);
-    const pushTurn = async (id, speaker, text) => {
-        const turn = { id, speaker, text, ts: new Date().toISOString() };
-        addTranscriptTurn(turn);
-        transcriptRef.current.push({ ts: turn.ts, speaker: turn.speaker, text: turn.text });
-        const currentSessionId = useWidgetStore.getState().sessionId;
-        if (currentSessionId) {
-            await appendTranscriptMutation.mutateAsync({ id: currentSessionId, turns: [{ ts: turn.ts, speaker, text }] });
-        }
-    };
+        setMode(mode);
+        setProgramFilterIds(programFilterIds);
+    }, [clear, mode, programFilterIds, setMode, setProgramFilterIds]);
     const startInterview = async () => {
-        const questions = questionsQuery.data ?? [];
-        if (questions.length === 0) {
-            setError("No chat questions are configured for this program.");
-            return;
-        }
-        setError(null);
         try {
-            const session = await createSessionMutation.mutateAsync();
-            setSessionId(session.id);
+            const session = await createInterviewMutation.mutateAsync();
+            const id = session.sessionId;
+            if (!id)
+                throw new Error("Session id missing");
+            setSessionId(id);
             setScoringSnapshot(session.scoring_snapshot ?? null);
             setProgramFit(session.program_fit ?? null);
             setStarted(true);
-            setCurrentIndex(0);
-            setActiveTraitId(questions[0]?.traitId ?? null);
-            await pushTurn(transcriptId("assistant"), "assistant", questions[0].prompt);
+            setCurrentQuestion(session.nextQuestion ?? null);
+            if (session.nextQuestion) {
+                addTranscriptTurn({ id: transcriptId("assistant"), speaker: "assistant", text: session.nextQuestion.prompt, ts: new Date().toISOString() });
+            }
         }
         catch (sessionError) {
             setError(sessionError instanceof Error ? sessionError.message : "Could not start chat interview.");
@@ -438,172 +469,113 @@ const ChatFlow = ({ programId, onRestart }) => {
     };
     const submitAnswer = async () => {
         const answer = input.trim();
-        if (!answer)
-            return;
-        const questions = questionsQuery.data ?? [];
-        const question = questions[currentIndex];
-        if (!question)
+        if (!answer || !currentQuestion)
             return;
         setInput("");
+        addTranscriptTurn({ id: transcriptId("candidate"), speaker: "candidate", text: answer, ts: new Date().toISOString() });
+        setAskedTraitIds((prev) => [...prev, currentQuestion.traitId]);
+        setAskedQuestionIds((prev) => [...prev, currentQuestion.id]);
         try {
-            await pushTurn(transcriptId("candidate"), "candidate", answer);
-            setActiveTraitId(question.traitId);
-            const liveScore = await scoreTurnMutation.mutateAsync(question.traitId);
-            setScorecard(liveScore.data);
-            setScoringSnapshot(liveScore.data.scoring_snapshot);
-            setProgramFit(liveScore.data.program_fit);
-            const nextIndex = currentIndex + 1;
-            if (nextIndex >= questions.length) {
-                await finalizeWithScoring();
-                return;
+            const result = await turnMutation.mutateAsync(answer);
+            setScoringSnapshot(result.scoring_snapshot);
+            setProgramFit(result.program_fit);
+            if (result.nextQuestion) {
+                setCurrentQuestion(result.nextQuestion);
+                addTranscriptTurn({
+                    id: transcriptId("assistant"),
+                    speaker: "assistant",
+                    text: result.nextQuestion.prompt,
+                    ts: new Date().toISOString()
+                });
             }
-            setCurrentIndex(nextIndex);
-            await pushTurn(transcriptId("assistant"), "assistant", questions[nextIndex].prompt);
+            else {
+                await api.completeSession(sessionId);
+                navigate("/widget/results");
+            }
         }
         catch (submitError) {
             setError(submitError instanceof Error ? submitError.message : "Could not submit answer.");
         }
     };
-    const questions = questionsQuery.data ?? [];
-    return (_jsx("main", { className: "mx-auto min-h-screen max-w-7xl px-4 py-8", children: _jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]", children: [_jsx(Card, { children: _jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "Chat Interview" }), !started && (_jsxs(_Fragment, { children: [_jsx("p", { className: "text-sm text-slate-600", children: "You will answer short text questions based on this program's priority traits." }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: startInterview, disabled: !isOnline || questionsQuery.isLoading || createSessionMutation.isPending, children: "Start chat" }), _jsx(Button, { className: "bg-slate-500", onClick: onRestart, children: "Back" })] })] })), started && (_jsxs(_Fragment, { children: [_jsxs("p", { className: "text-sm text-slate-700", children: ["Progress: ", Math.min(currentIndex + 1, questions.length), " of ", questions.length] }), _jsx("div", { className: "max-h-80 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3", children: transcript.map((turn) => (_jsxs("div", { className: `rounded p-2 text-sm ${turn.speaker === "candidate" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-900"}`, children: [_jsxs("span", { className: "font-semibold capitalize", children: [turn.speaker, ":"] }), " ", turn.text] }, `${turn.id}-${turn.ts}`))) }), _jsxs("div", { className: "flex gap-2", children: [_jsx("input", { className: "w-full rounded-md border border-slate-300 px-3 py-2 text-sm", value: input, onChange: (event) => setInput(event.target.value), onKeyDown: (event) => {
+    return (_jsx("main", { className: "mx-auto min-h-screen max-w-7xl px-4 py-8", children: _jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]", children: [_jsx(Card, { children: _jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "Chat Interview" }), !started && (_jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: startInterview, disabled: !isOnline || createInterviewMutation.isPending, children: "Start chat" }), _jsx(Button, { className: "bg-slate-500", onClick: onRestart, children: "Back" })] })), started && (_jsxs(_Fragment, { children: [_jsx("div", { className: "max-h-80 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3", children: transcript.map((turn) => (_jsxs("div", { className: `rounded p-2 text-sm ${turn.speaker === "candidate" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-900"}`, children: [_jsxs("span", { className: "font-semibold capitalize", children: [turn.speaker, ":"] }), " ", turn.text] }, `${turn.id}-${turn.ts}`))) }), _jsxs("div", { className: "flex gap-2", children: [_jsx("input", { className: "w-full rounded-md border border-slate-300 px-3 py-2 text-sm", value: input, onChange: (event) => setInput(event.target.value), onKeyDown: (event) => {
                                                     if (event.key === "Enter") {
                                                         event.preventDefault();
                                                         void submitAnswer();
                                                     }
-                                                }, placeholder: "Type your answer" }), _jsx(Button, { onClick: submitAnswer, disabled: !isOnline || appendTranscriptMutation.isPending || scoreSessionMutation.isPending || scoreTurnMutation.isPending, children: "Send" })] }), pendingScoreRetry && (_jsx(Button, { className: "bg-slate-500", onClick: () => void finalizeWithScoring(), disabled: !isOnline || scoreSessionMutation.isPending, children: "Retry scoring" }))] })), !isOnline && _jsx("p", { className: "text-sm text-red-700", children: "You are offline. Reconnect to continue." }), error && _jsx("p", { className: "text-sm text-red-700", children: error })] }) }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, activeTraitId: activeTraitId })] }) }));
+                                                }, placeholder: "Type your answer" }), _jsx(Button, { onClick: submitAnswer, disabled: !isOnline || turnMutation.isPending, children: "Send" })] })] })), error && _jsx("p", { className: "text-sm text-red-700", children: error })] }) }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, activeTraitId: currentQuestion?.traitId ?? null })] }) }));
 };
-const QuizFlow = ({ programId, onRestart }) => {
+const QuizFlow = ({ mode, programFilterIds, onRestart }) => {
     const navigate = useNavigate();
     const [started, setStarted] = useState(false);
-    const [currentIndex, setCurrentIndex] = useState(0);
     const [error, setError] = useState(null);
-    const [pendingScoreRetry, setPendingScoreRetry] = useState(false);
+    const [currentQuestion, setCurrentQuestion] = useState(null);
+    const [askedTraitIds, setAskedTraitIds] = useState([]);
+    const [askedQuestionIds, setAskedQuestionIds] = useState([]);
     const isOnline = useOnlineStatus();
-    const { sessionId, scoringSnapshot, programFit, setSessionId, addTranscriptTurn, setProgramId, setMode, setScorecard, setScoringSnapshot, setProgramFit, clear } = useWidgetStore();
-    const responsesRef = useRef([]);
-    const transcriptRef = useRef([]);
-    const [activeTraitId, setActiveTraitId] = useState(null);
-    const questionsQuery = useQuery({
-        queryKey: ["program-questions", programId, "quiz"],
-        queryFn: async () => {
-            const response = await api.getProgramQuestions(programId, "quiz");
-            return response.data.orderedQuestions;
-        }
-    });
-    const createSessionMutation = useMutation({ mutationFn: () => api.startVoiceSession("quiz", { programId }) });
-    const appendTranscriptMutation = useMutation({
-        mutationFn: ({ id, turns }) => api.appendTranscript(id, turns)
-    });
-    const completeSessionMutation = useMutation({ mutationFn: (id) => api.completeSession(id) });
-    const scoreSessionMutation = useMutation({
-        mutationFn: () => api.scoreSession({
-            sessionId: sessionId,
-            mode: "quiz",
-            programId,
-            transcriptTurns: transcriptRef.current,
-            responses: responsesRef.current,
-            activeTraitId: activeTraitId ?? undefined
+    const { sessionId, scoringSnapshot, programFit, sessionLanguageTag, setSessionId, addTranscriptTurn, setMode, setProgramFilterIds, setScoringSnapshot, setProgramFit, clear } = useWidgetStore();
+    const createInterviewMutation = useMutation({
+        mutationFn: () => api.createInterviewSession({
+            mode,
+            language: sessionLanguageTag,
+            programFilterIds: programFilterIds.length > 0 ? programFilterIds : undefined
         })
     });
-    const scoreTurnMutation = useMutation({
-        mutationFn: (traitId) => api.scoreSessionTurn({
-            sessionId: sessionId,
-            mode: "quiz",
-            programId,
-            transcriptTurns: transcriptRef.current,
-            responses: responsesRef.current,
-            activeTraitId: traitId
+    const turnMutation = useMutation({
+        mutationFn: (text) => api.submitInterviewTurn(sessionId, {
+            mode,
+            text,
+            language: sessionLanguageTag,
+            traitId: currentQuestion?.traitId,
+            questionId: currentQuestion?.id,
+            askedTraitIds,
+            askedQuestionIds,
+            programFilterIds: programFilterIds.length > 0 ? programFilterIds : undefined
         })
     });
-    const finalizeWithScoring = async () => {
-        if (!sessionId)
-            return;
-        try {
-            await completeSessionMutation.mutateAsync(sessionId);
-            const score = await scoreSessionMutation.mutateAsync();
-            setScorecard(score.data);
-            setScoringSnapshot(score.data.scoring_snapshot);
-            setProgramFit(score.data.program_fit);
-            setPendingScoreRetry(false);
-            navigate("/widget/results");
-        }
-        catch (finalizeError) {
-            setPendingScoreRetry(true);
-            setError(finalizeError instanceof Error ? finalizeError.message : "Scoring failed. Please retry.");
-        }
-    };
     useEffect(() => {
         clear();
-        setProgramId(programId);
-        setMode("quiz");
-        setScoringSnapshot(null);
-        setProgramFit(null);
-    }, [clear, programId, setMode, setProgramFit, setProgramId, setScoringSnapshot]);
-    const pushTurn = async (speaker, text) => {
-        const turn = { id: transcriptId(speaker), speaker, text, ts: new Date().toISOString() };
-        addTranscriptTurn(turn);
-        transcriptRef.current.push({ ts: turn.ts, speaker: turn.speaker, text: turn.text });
-        const currentSessionId = useWidgetStore.getState().sessionId;
-        if (currentSessionId) {
-            await appendTranscriptMutation.mutateAsync({ id: currentSessionId, turns: [{ ts: turn.ts, speaker, text }] });
-        }
-    };
+        setMode(mode);
+        setProgramFilterIds(programFilterIds);
+    }, [clear, mode, programFilterIds, setMode, setProgramFilterIds]);
     const startQuiz = async () => {
-        const questions = questionsQuery.data ?? [];
-        if (questions.length === 0) {
-            setError("No quiz questions are configured for this program.");
-            return;
-        }
-        setError(null);
         try {
-            const session = await createSessionMutation.mutateAsync();
-            setSessionId(session.id);
+            const session = await createInterviewMutation.mutateAsync();
+            const id = session.sessionId;
+            if (!id)
+                throw new Error("Session id missing");
+            setSessionId(id);
             setScoringSnapshot(session.scoring_snapshot ?? null);
             setProgramFit(session.program_fit ?? null);
             setStarted(true);
-            setCurrentIndex(0);
-            setActiveTraitId(questions[0]?.traitId ?? null);
-            responsesRef.current = [];
-            transcriptRef.current = [];
-            await pushTurn("assistant", questions[0].prompt);
+            setCurrentQuestion(session.nextQuestion ?? null);
         }
         catch (startError) {
             setError(startError instanceof Error ? startError.message : "Could not start quiz.");
         }
     };
-    const selectAnswer = async (question, option) => {
+    const selectAnswer = async (answer) => {
+        if (!currentQuestion)
+            return;
+        addTranscriptTurn({ id: transcriptId("candidate"), speaker: "candidate", text: answer, ts: new Date().toISOString() });
+        setAskedTraitIds((prev) => [...prev, currentQuestion.traitId]);
+        setAskedQuestionIds((prev) => [...prev, currentQuestion.id]);
         try {
-            const cleanAnswer = sanitizeOptionLabel(option);
-            responsesRef.current.push({ questionId: question.id, answer: cleanAnswer });
-            await pushTurn("candidate", cleanAnswer);
-            setActiveTraitId(question.traitId);
-            const liveScore = await scoreTurnMutation.mutateAsync(question.traitId);
-            setScorecard(liveScore.data);
-            setScoringSnapshot(liveScore.data.scoring_snapshot);
-            setProgramFit(liveScore.data.program_fit);
-            const questions = questionsQuery.data ?? [];
-            const nextIndex = currentIndex + 1;
-            if (nextIndex >= questions.length) {
-                await finalizeWithScoring();
-                return;
+            const result = await turnMutation.mutateAsync(answer);
+            setScoringSnapshot(result.scoring_snapshot);
+            setProgramFit(result.program_fit);
+            if (result.nextQuestion) {
+                setCurrentQuestion(result.nextQuestion);
             }
-            setCurrentIndex(nextIndex);
-            await pushTurn("assistant", questions[nextIndex].prompt);
+            else {
+                await api.completeSession(sessionId);
+                navigate("/widget/results");
+            }
         }
         catch (selectError) {
             setError(selectError instanceof Error ? selectError.message : "Could not submit quiz answer.");
         }
     };
-    const questions = questionsQuery.data ?? [];
-    const currentQuestion = questions[currentIndex];
-    return (_jsx("main", { className: "mx-auto min-h-screen max-w-7xl px-4 py-8", children: _jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]", children: [_jsx(Card, { children: _jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "Quiz" }), !started && (_jsxs(_Fragment, { children: [_jsx("p", { className: "text-sm text-slate-600", children: "Pick the option that best matches you for each question." }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: startQuiz, disabled: !isOnline || questionsQuery.isLoading || createSessionMutation.isPending, children: "Start quiz" }), _jsx(Button, { className: "bg-slate-500", onClick: onRestart, children: "Back" })] })] })), started && currentQuestion && (_jsxs(_Fragment, { children: [_jsxs("p", { className: "text-sm text-slate-700", children: ["Progress: ", currentIndex + 1, " of ", questions.length] }), _jsx("h3", { className: "text-lg font-semibold text-slate-900", children: currentQuestion.prompt }), _jsx("div", { className: "grid gap-2", children: currentQuestion.options.map((option) => (_jsx("button", { type: "button", className: "rounded-md border border-slate-300 bg-white px-4 py-2 text-left text-sm hover:border-slate-900", onClick: () => void selectAnswer(currentQuestion, option), disabled: !isOnline || appendTranscriptMutation.isPending || scoreSessionMutation.isPending || scoreTurnMutation.isPending, children: sanitizeOptionLabel(option) }, `${currentQuestion.id}-${option}`))) })] })), pendingScoreRetry && (_jsx(Button, { className: "bg-slate-500", onClick: () => void finalizeWithScoring(), disabled: !isOnline || scoreSessionMutation.isPending, children: "Retry scoring" })), !isOnline && _jsx("p", { className: "text-sm text-red-700", children: "You are offline. Reconnect to continue." }), error && _jsx("p", { className: "text-sm text-red-700", children: error })] }) }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, activeTraitId: activeTraitId })] }) }));
-};
-const confidenceLabel = (value) => {
-    if (value >= 0.75)
-        return "High";
-    if (value >= 0.5)
-        return "Medium";
-    return "Low";
+    return (_jsx("main", { className: "mx-auto min-h-screen max-w-7xl px-4 py-8", children: _jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]", children: [_jsx(Card, { children: _jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "Quiz" }), !started && (_jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: startQuiz, disabled: !isOnline || createInterviewMutation.isPending, children: "Start quiz" }), _jsx(Button, { className: "bg-slate-500", onClick: onRestart, children: "Back" })] })), started && currentQuestion && (_jsxs(_Fragment, { children: [_jsx("h3", { className: "text-lg font-semibold text-slate-900", children: currentQuestion.prompt }), _jsx("div", { className: "grid gap-2", children: currentQuestion.options.map((option) => (_jsx("button", { type: "button", className: "rounded-md border border-slate-300 bg-white px-4 py-2 text-left text-sm hover:border-slate-900", onClick: () => void selectAnswer(option), disabled: !isOnline || turnMutation.isPending, children: option }, `${currentQuestion.id}-${option}`))) })] })), error && _jsx("p", { className: "text-sm text-red-700", children: error })] }) }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, activeTraitId: currentQuestion?.traitId ?? null })] }) }));
 };
 const ResultsPage = () => {
     const navigate = useNavigate();
@@ -652,25 +624,7 @@ const ResultsPage = () => {
         setLeadValidationError(null);
         createLeadMutation.mutate();
     };
-    const grouped = useMemo(() => {
-        if (!scorecard)
-            return [];
-        return bucketOrder
-            .map((bucket) => ({
-            bucket,
-            items: scorecard.perTrait.filter((item) => item.bucket === bucket)
-        }))
-            .filter((group) => group.items.length > 0);
-    }, [scorecard]);
-    const topTraits = useMemo(() => {
-        if (!scorecard)
-            return [];
-        return [...scorecard.perTrait]
-            .sort((a, b) => b.score0to5 * bucketWeight[b.bucket] - a.score0to5 * bucketWeight[a.bucket])
-            .slice(0, 3);
-    }, [scorecard]);
-    const leadCapture = (_jsxs("div", { className: "rounded-md border border-slate-200 p-3", children: [_jsx("p", { className: "mb-2 text-sm font-semibold text-slate-900", children: "Request Info / Talk to an advisor" }), !leadSubmitted && (_jsxs("div", { className: "space-y-2", children: [_jsxs("div", { className: "grid gap-2 sm:grid-cols-2", children: [_jsx("input", { className: "rounded-md border border-slate-300 px-3 py-2 text-sm", placeholder: "First name", value: firstName, onChange: (event) => setFirstName(event.target.value) }), _jsx("input", { className: "rounded-md border border-slate-300 px-3 py-2 text-sm", placeholder: "Last name", value: lastName, onChange: (event) => setLastName(event.target.value) })] }), _jsxs("div", { className: "grid gap-2 sm:grid-cols-2", children: [_jsx("input", { className: "rounded-md border border-slate-300 px-3 py-2 text-sm", placeholder: "Email", type: "email", value: email, onChange: (event) => setEmail(event.target.value) }), _jsx("input", { className: "rounded-md border border-slate-300 px-3 py-2 text-sm", placeholder: "Phone (optional)", value: phone, onChange: (event) => setPhone(event.target.value) })] }), _jsxs("select", { className: "w-full rounded-md border border-slate-300 px-3 py-2 text-sm", value: preferredChannel, onChange: (event) => setPreferredChannel(event.target.value), children: [_jsx("option", { value: "email", children: "Email" }), _jsx("option", { value: "sms", children: "SMS" }), _jsx("option", { value: "phone", children: "Phone" })] }), _jsx(Button, { onClick: submitLead, disabled: createLeadMutation.isPending, children: createLeadMutation.isPending ? "Submitting..." : "Request Info" }), leadValidationError && _jsx("p", { className: "text-sm text-red-700", children: leadValidationError }), createLeadMutation.error && _jsx("p", { className: "text-sm text-red-700", children: "Failed to submit lead." })] })), leadSubmitted && _jsx("p", { className: "text-sm text-emerald-700", children: "Thanks - we'll reach out soon." })] }));
-    return (_jsx("main", { className: "mx-auto min-h-screen max-w-7xl px-4 py-8", children: _jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]", children: [_jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-2xl font-semibold", children: "Results" }), !scorecard && (_jsxs(_Fragment, { children: [_jsx("p", { className: "mb-4 text-sm text-slate-600", children: "No scorecard is available for this session." }), leadCapture, _jsx(Button, { onClick: () => navigate("/widget"), children: "Back to start" })] })), scorecard && (_jsxs("section", { className: "space-y-4", children: [_jsxs("p", { className: "text-sm text-slate-700", children: ["Overall score: ", scorecard.overallScore.toFixed(2), " / 5.00"] }), _jsxs("div", { className: "rounded-md border border-slate-200 p-3", children: [_jsx("p", { className: "mb-2 text-sm font-semibold text-slate-900", children: "Top contributing traits" }), _jsx("div", { className: "space-y-1", children: topTraits.map((trait) => (_jsxs("p", { className: "text-sm text-slate-700", children: [trait.traitName, ": ", trait.score0to5.toFixed(2), " (", trait.bucket, ")"] }, trait.traitId))) })] }), grouped.map((group) => (_jsxs("div", { className: "rounded-md border border-slate-200 p-3", children: [_jsx("p", { className: "mb-2 text-sm font-semibold text-slate-900", children: group.bucket.replaceAll("_", " ") }), _jsx("div", { className: "space-y-2", children: group.items.map((item) => (_jsxs("div", { className: "rounded bg-slate-50 p-2 text-sm text-slate-700", children: [_jsxs("p", { className: "font-semibold text-slate-900", children: [item.traitName, ": ", item.score0to5.toFixed(2), " / 5"] }), _jsxs("p", { children: ["Confidence: ", confidenceLabel(item.confidence)] }), (item.evidence ?? []).length > 0 && _jsxs("p", { className: "mt-1 text-xs text-slate-600", children: ["Evidence: ", item.evidence.slice(0, 2).join(" | ")] }), item.rationale && _jsxs("p", { className: "mt-1 text-xs text-slate-600", children: ["Why this score: ", item.rationale] })] }, item.traitId))) })] }, group.bucket))), leadCapture, _jsx(Button, { className: "bg-slate-500", onClick: () => navigate("/widget"), children: "Start over" })] }))] }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, done: true })] }) }));
+    return (_jsx("main", { className: "mx-auto min-h-screen max-w-7xl px-4 py-8", children: _jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]", children: [_jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-2xl font-semibold", children: "Results" }), _jsxs("p", { className: "text-sm text-slate-700", children: ["Interview mode: ", mode?.toUpperCase() ?? "N/A"] }), scorecard && _jsxs("p", { className: "text-sm text-slate-700", children: ["Overall score: ", scorecard.overallScore.toFixed(2), " / 5.00"] }), !scorecard && _jsx("p", { className: "text-sm text-slate-600", children: "Review rankings and trait evidence in the side panel." }), _jsxs("div", { className: "mt-4 rounded-md border border-slate-200 p-3", children: [_jsx("p", { className: "mb-2 text-sm font-semibold text-slate-900", children: "Request Info / Talk to an advisor" }), !leadSubmitted && (_jsxs("div", { className: "space-y-2", children: [_jsxs("div", { className: "grid gap-2 sm:grid-cols-2", children: [_jsx("input", { className: "rounded-md border border-slate-300 px-3 py-2 text-sm", placeholder: "First name", value: firstName, onChange: (event) => setFirstName(event.target.value) }), _jsx("input", { className: "rounded-md border border-slate-300 px-3 py-2 text-sm", placeholder: "Last name", value: lastName, onChange: (event) => setLastName(event.target.value) })] }), _jsxs("div", { className: "grid gap-2 sm:grid-cols-2", children: [_jsx("input", { className: "rounded-md border border-slate-300 px-3 py-2 text-sm", placeholder: "Email", type: "email", value: email, onChange: (event) => setEmail(event.target.value) }), _jsx("input", { className: "rounded-md border border-slate-300 px-3 py-2 text-sm", placeholder: "Phone (optional)", value: phone, onChange: (event) => setPhone(event.target.value) })] }), _jsxs("select", { className: "w-full rounded-md border border-slate-300 px-3 py-2 text-sm", value: preferredChannel, onChange: (event) => setPreferredChannel(event.target.value), children: [_jsx("option", { value: "email", children: "Email" }), _jsx("option", { value: "sms", children: "SMS" }), _jsx("option", { value: "phone", children: "Phone" })] }), _jsx(Button, { onClick: submitLead, disabled: createLeadMutation.isPending, children: createLeadMutation.isPending ? "Submitting..." : "Request Info" }), leadValidationError && _jsx("p", { className: "text-sm text-red-700", children: leadValidationError })] })), leadSubmitted && _jsx("p", { className: "text-sm text-emerald-700", children: "Thanks - we'll reach out soon." })] }), _jsx(Button, { className: "mt-4 bg-slate-500", onClick: () => navigate("/widget"), children: "Start over" })] }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, done: true })] }) }));
 };
 const App = () => (_jsx(BrowserRouter, { children: _jsxs(Routes, { children: [_jsx(Route, { path: "/", element: _jsx(Navigate, { to: "/widget", replace: true }) }), _jsx(Route, { path: "/widget", element: _jsx(WidgetSetup, {}) }), _jsx(Route, { path: "/widget/results", element: _jsx(ResultsPage, {}) })] }) }));
 ReactDOM.createRoot(document.getElementById("root")).render(_jsx(React.StrictMode, { children: _jsx(QueryClientProvider, { client: queryClient, children: _jsx(App, {}) }) }));

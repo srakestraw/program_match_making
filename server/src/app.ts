@@ -83,6 +83,7 @@ export const createApp = () => {
   });
 
   app.use("/api/sessions", sessionsRouter);
+  app.use("/api/interview/sessions", sessionsRouter);
   app.use("/api/voice/session", sessionsRouter);
   app.use("/api/realtime", realtimeRouter);
   app.use("/api/admin", adminRouter);
