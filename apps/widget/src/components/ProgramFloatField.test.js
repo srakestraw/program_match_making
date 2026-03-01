@@ -22,7 +22,9 @@ describe("ProgramFloatField", () => {
         expect(screen.getByText("High 81%")).toBeInTheDocument();
         expect(screen.getByText("High fit")).toBeInTheDocument();
         expect(screen.getByText("Trending upward")).toBeInTheDocument();
+        expect(screen.getByText("High 81%")).toHaveClass("quiz-chip");
         fireEvent.click(screen.getByText("Why this match?"));
+        expect(screen.getByText("Hide explainability")).toHaveClass("why-match-link");
         expect(screen.getByText("Top contributing traits")).toBeInTheDocument();
         expect(screen.getByText("Weak or missing traits")).toBeInTheDocument();
         expect(screen.getByText("What increases confidence")).toBeInTheDocument();

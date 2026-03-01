@@ -118,8 +118,237 @@ body {
 }
 
 .quiz-question-swap {
-  animation: quizQuestionSwap 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: quizQuestionSwap 460ms cubic-bezier(0.2, 0.9, 0.25, 1);
   transform-origin: left center;
+}
+
+.quiz-intro-panel {
+  background:
+    linear-gradient(
+      140deg,
+      color-mix(in srgb, var(--pm-primary) 12%, var(--pm-surface)) 0%,
+      color-mix(in srgb, var(--pm-primary) 4%, var(--pm-surface)) 56%,
+      var(--pm-surface) 100%
+    );
+  border: 1px solid color-mix(in srgb, var(--pm-primary) 16%, var(--pm-border));
+}
+
+.quiz-progress-pill {
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--pm-primary);
+  background: color-mix(in srgb, var(--pm-primary) 10%, var(--pm-surface));
+  border: 1px solid color-mix(in srgb, var(--pm-primary) 26%, transparent);
+}
+
+.quiz-streak-badge {
+  border-radius: 999px;
+  display: inline-block;
+  padding: 4px 10px;
+  color: var(--pm-primary);
+  background: color-mix(in srgb, var(--pm-primary) 12%, var(--pm-surface));
+  border: 1px solid color-mix(in srgb, var(--pm-primary) 26%, transparent);
+  animation: streakBanner 900ms ease;
+}
+
+.quiz-answer-card {
+  position: relative;
+  overflow: hidden;
+  border-color: var(--pm-border);
+  background: color-mix(in srgb, var(--pm-surface) 95%, var(--pm-primary) 5%);
+}
+
+.quiz-answer-card:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--pm-primary-hover) 64%, var(--pm-border));
+}
+
+.quiz-answer-card-selected {
+  border-color: color-mix(in srgb, var(--pm-primary) 80%, var(--pm-border));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pm-primary) 40%, transparent),
+    0 8px 18px color-mix(in srgb, var(--pm-primary) 16%, transparent);
+  background: color-mix(in srgb, var(--pm-primary) 7%, var(--pm-surface));
+}
+
+.quiz-answer-card-spark::after {
+  content: "";
+  position: absolute;
+  inset: -15% -60%;
+  background: linear-gradient(110deg, transparent 35%, color-mix(in srgb, var(--pm-primary) 35%, transparent) 50%, transparent 65%);
+  animation: selectedSparkSweep 380ms ease-out;
+  pointer-events: none;
+}
+
+.quiz-option-chip {
+  color: var(--pm-primary);
+  background: color-mix(in srgb, var(--pm-primary) 9%, var(--pm-surface));
+  border: 1px solid color-mix(in srgb, var(--pm-primary) 24%, transparent);
+}
+
+.quiz-option-check {
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 180ms ease, transform 180ms ease;
+  color: var(--pm-primary);
+}
+
+.quiz-option-check-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.swipe-transition-root {
+  position: relative;
+}
+
+.swipe-transition-item {
+  will-change: transform, opacity, filter;
+}
+
+.swipe-transition-floating {
+  position: absolute;
+  inset: 0;
+}
+
+.swipe-transition-enter-forward {
+  animation: swipeEnterForward 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.swipe-transition-exit-forward {
+  animation: swipeExitForward 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.swipe-transition-enter-back {
+  animation: swipeEnterBack 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.swipe-transition-exit-back {
+  animation: swipeExitBack 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.swipe-transition-fade {
+  animation: swipeFade 180ms ease;
+}
+
+.surprise-layer {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 14px;
+  z-index: 20;
+}
+
+.surprise-particle {
+  position: absolute;
+  left: var(--sx);
+  top: var(--sy);
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--pm-primary) 55%, var(--pm-surface));
+  opacity: 0;
+  animation: confettiMicroburst 580ms ease-out forwards;
+  animation-delay: var(--sd);
+}
+
+.surprise-layer-spark .surprise-spark-line {
+  position: absolute;
+  inset: 14% -60%;
+  background: linear-gradient(110deg, transparent 40%, color-mix(in srgb, var(--pm-primary) 42%, transparent) 52%, transparent 66%);
+  animation: selectedSparkSweep 420ms ease-out;
+}
+
+.surprise-layer-pulse .surprise-pulse-ring {
+  position: absolute;
+  left: 50%;
+  top: 36%;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--pm-primary) 50%, transparent);
+  transform: translate(-50%, -50%) scale(0.92);
+  opacity: 0;
+  animation: surprisePulse 420ms ease-out;
+}
+
+.live-chip,
+.quiz-chip,
+.status-chip {
+  color: var(--pm-primary);
+  background: color-mix(in srgb, var(--pm-primary) 9%, var(--pm-surface));
+  border: 1px solid color-mix(in srgb, var(--pm-primary) 24%, transparent);
+}
+
+.live-chip {
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.status-unanswered {
+  color: var(--pm-muted);
+  border-color: color-mix(in srgb, var(--pm-muted) 24%, transparent);
+}
+
+.status-active {
+  color: var(--pm-primary);
+}
+
+.status-complete {
+  color: color-mix(in srgb, var(--pm-primary) 78%, #0b6e4f);
+}
+
+.confidence-low {
+  color: var(--pm-muted);
+}
+
+.confidence-medium,
+.confidence-high {
+  color: var(--pm-primary);
+}
+
+.trait-row-active,
+.program-rank-card-selected {
+  border-color: color-mix(in srgb, var(--pm-primary) 60%, var(--pm-border));
+  background: color-mix(in srgb, var(--pm-primary) 8%, var(--pm-surface));
+}
+
+.program-rank-card-pulse {
+  animation: matchPulse 420ms ease-out;
+}
+
+.movement-up {
+  color: var(--pm-primary);
+}
+
+.movement-down {
+  color: var(--pm-muted);
+}
+
+.movement-badge {
+  animation: movementBadge 820ms ease;
+}
+
+.why-match-link {
+  color: var(--pm-muted);
+  transition: color 180ms ease;
+}
+
+.why-match-link:hover {
+  color: var(--pm-primary-hover);
+}
+
+.quiz-action-primary {
+  border-color: color-mix(in srgb, var(--pm-primary) 40%, var(--pm-border));
+  background: color-mix(in srgb, var(--pm-primary) 12%, var(--pm-surface));
+  color: var(--pm-primary);
+}
+
+.rankings-updating {
+  margin-top: -2px;
+  margin-bottom: 8px;
+  color: var(--pm-muted);
+  animation: rankingsUpdating 640ms ease;
 }
 
 .pm-theme-root .mode-option-selected {
@@ -217,61 +446,72 @@ body {
     animation-delay: 320ms;
   }
 
-  .interview-type-ill--quiz .iti-card-front {
+  .interview-type-ill--quiz-swipe .iti-card {
     stroke-width: 2;
-    fill: color-mix(in srgb, var(--iti-surface) 95%, var(--iti-accent) 5%);
     stroke: color-mix(in srgb, var(--iti-border) 76%, var(--iti-accent) 24%);
+    fill: color-mix(in srgb, var(--iti-surface) 94%, var(--iti-accent) 6%);
   }
 
-  .interview-type-ill--quiz .iti-header {
-    fill: color-mix(in srgb, var(--iti-muted-fg) 42%, transparent);
+  .interview-type-ill--quiz-swipe .iti-card-back {
+    opacity: 0.42;
   }
 
-  .interview-type-ill--quiz .iti-badge {
-    fill: color-mix(in srgb, var(--iti-accent) 15%, var(--iti-surface));
-    stroke: color-mix(in srgb, var(--iti-accent) 70%, var(--iti-border));
-    stroke-width: 2;
-    animation: itiQuizBadge 3200ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
-    transform-origin: 31px 14px;
+  .interview-type-ill--quiz-swipe .iti-card-mid {
+    opacity: 0.64;
   }
 
-  .interview-type-ill--quiz .iti-badge-mark {
+  .interview-type-ill--quiz-swipe .iti-card-top {
+    opacity: 0.95;
+    transform-origin: 28px 21px;
+    will-change: transform;
+  }
+
+  .interview-type-ill--quiz-swipe .iti-swipe-arrow {
     fill: none;
-    stroke: var(--iti-accent);
-    stroke-width: 1.8;
-    opacity: 0.82;
+    stroke: color-mix(in srgb, var(--iti-muted-fg) 74%, var(--iti-accent));
+    stroke-width: 2;
+    opacity: 0.8;
+    transform-origin: 33px 35px;
+    will-change: transform, opacity;
   }
 
-  .interview-type-ill--quiz .iti-badge-mark-dot {
-    fill: var(--iti-accent);
-    opacity: 0.82;
+  .interview-type-ill--quiz-swipe .iti-ghost-card {
+    fill: color-mix(in srgb, var(--iti-accent) 10%, var(--iti-surface));
+    stroke: color-mix(in srgb, var(--iti-border) 65%, var(--iti-accent));
+    stroke-width: 2;
+    opacity: 0;
+    transform-origin: 28px 21px;
+    will-change: transform, opacity;
   }
 
-  .interview-type-ill--quiz .iti-option {
-    fill: color-mix(in srgb, var(--iti-border) 78%, transparent);
-    stroke: color-mix(in srgb, var(--iti-border) 60%, transparent);
-    stroke-width: 1.4;
+  .interview-type-ill--quiz-arrow .iti-ghost-card {
+    display: none;
   }
 
-  .interview-type-ill--quiz .iti-option-active {
-    fill: color-mix(in srgb, var(--iti-accent) 16%, var(--iti-surface));
-    stroke: var(--iti-accent);
-    stroke-width: 1.8;
-    opacity: 0.92;
-    animation: itiQuizChoice 3200ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  .interview-type-ill--quiz-ghost .iti-swipe-arrow {
+    display: none;
   }
 
-  .interview-type-ill--quiz .iti-progress-track {
-    fill: color-mix(in srgb, var(--iti-border) 72%, transparent);
+  .interview-type-option-quiz .interview-type-ill--quiz-swipe .iti-card-top {
+    animation: itiQuizCardShuffle 5200ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
   }
 
-  .interview-type-ill--quiz .iti-progress-fill {
-    fill: var(--iti-accent-2);
-    transform-origin: 16px 36px;
-    transform-box: fill-box;
-    animation: itiQuizProgress 3200ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
-    animation-delay: 160ms;
+  .interview-type-option-quiz .interview-type-ill--quiz-arrow .iti-swipe-arrow {
+    animation: itiQuizArrowShuffle 5200ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
   }
+
+  .interview-type-option-quiz .interview-type-ill--quiz-ghost .iti-ghost-card {
+    animation: itiQuizGhostShuffle 5200ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+
+  .quiz-demo-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 4px;
+    border-radius: 8px;
+  }
+
 }
 
 @keyframes modeOptionSettle {
@@ -289,11 +529,162 @@ body {
 @keyframes quizQuestionSwap {
   0% {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(12px) scale(0.985);
+    filter: blur(2px);
   }
   100% {
     opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes swipeEnterForward {
+  0% {
+    opacity: 0;
+    transform: translateX(44px) scale(0.99);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes swipeExitForward {
+  0% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-44px) scale(0.99);
+  }
+}
+
+@keyframes swipeEnterBack {
+  0% {
+    opacity: 0;
+    transform: translateX(-44px) scale(0.99);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes swipeExitBack {
+  0% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(44px) scale(0.99);
+  }
+}
+
+@keyframes swipeFade {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes confettiMicroburst {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) scale(0.72);
+  }
+  15% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--dx), var(--dy), 0) scale(1);
+  }
+}
+
+@keyframes selectedSparkSweep {
+  0% {
+    transform: translateX(-22%);
+    opacity: 0;
+  }
+  20% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translateX(22%);
+    opacity: 0;
+  }
+}
+
+@keyframes surprisePulse {
+  0% {
+    opacity: 0.3;
+    transform: translate(-50%, -50%) scale(0.82);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.18);
+  }
+}
+
+@keyframes matchPulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--pm-primary) 32%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 7px color-mix(in srgb, var(--pm-primary) 14%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--pm-primary) 0%, transparent);
+  }
+}
+
+@keyframes movementBadge {
+  0% {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  20%,
+  75% {
+    opacity: 1;
     transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes streakBanner {
+  0% {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  25%,
+  75% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes rankingsUpdating {
+  0% {
+    opacity: 0;
+  }
+  30%,
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
   }
 }
 
@@ -360,47 +751,40 @@ body {
   }
 }
 
-@keyframes itiQuizBadge {
+@keyframes itiQuizCardShuffle {
   0%,
+  75%,
   100% {
-    transform: scale(1);
+    transform: translateX(0) rotate(0deg);
   }
-  42% {
-    transform: scale(1.05);
+  86% {
+    transform: translateX(10px) rotate(1.6deg);
   }
 }
 
-@keyframes itiQuizChoice {
+@keyframes itiQuizArrowShuffle {
   0%,
-  22% {
-    transform: translateY(0);
-  }
-  36%,
-  56% {
-    transform: translateY(5px);
-  }
-  70%,
-  88% {
-    transform: translateY(10px);
-  }
+  75%,
   100% {
-    transform: translateY(0);
+    opacity: 0.8;
+    transform: translateX(0);
+  }
+  86% {
+    opacity: 1;
+    transform: translateX(2px);
   }
 }
 
-@keyframes itiQuizProgress {
+@keyframes itiQuizGhostShuffle {
   0%,
+  75%,
   100% {
-    transform: scaleX(0.28);
+    opacity: 0;
+    transform: translateX(0) rotate(0deg);
   }
-  35% {
-    transform: scaleX(0.7);
-  }
-  62% {
-    transform: scaleX(0.78);
-  }
-  84% {
-    transform: scaleX(0.4);
+  86% {
+    opacity: 0.35;
+    transform: translateX(10px) rotate(1.6deg);
   }
 }
 
@@ -416,6 +800,22 @@ body {
 
   .quiz-question-swap {
     animation: none;
+  }
+
+  .swipe-transition-item,
+  .swipe-transition-enter-forward,
+  .swipe-transition-exit-forward,
+  .swipe-transition-enter-back,
+  .swipe-transition-exit-back,
+  .swipe-transition-fade,
+  .surprise-layer,
+  .quiz-answer-card-spark::after,
+  .program-rank-card-pulse,
+  .movement-badge,
+  .quiz-streak-badge,
+  .rankings-updating {
+    animation: none !important;
+    transition: none !important;
   }
 
   /* Keep illustration graphics visible but static when reduced motion is preferred. */

@@ -15,15 +15,16 @@ import { createLanguageUtterance } from "./lib/browserTts";
 import { EXTRA_LANGUAGE_OPTIONS, PRIMARY_LANGUAGE_OPTIONS, languageLabelFromTag } from "./constants/languages";
 import { LanguagePills } from "./components/LanguagePills";
 import { LanguagePickerModal } from "./components/LanguagePickerModal";
-import { IllustrationsDemo } from "./components/illustrations/IllustrationsDemo";
 import { InterviewTypeIllustration } from "./components/illustrations/InterviewTypeIllustration";
+import { SwipeTransition } from "./components/quiz/SwipeTransition";
+import { SurpriseAnimationLayer, pickSurpriseVariant } from "./components/quiz/SurpriseAnimationLayer";
 import "./styles.css";
 const queryClient = new QueryClient();
 const api = createApiClient({ baseUrl: import.meta.env.VITE_API_URL ?? "http://localhost:4000" });
 const modeOptions = [
     { id: "voice", label: "Voice", description: "Live conversational interview" },
     { id: "chat", label: "Chat", description: "Trait-driven text interview" },
-    { id: "quiz", label: "Quiz", description: "Structured trait questions" }
+    { id: "quiz", label: "Quiz", description: "Swipe through quick questions" }
 ];
 const parseModeParam = (value) => {
     if (value === "voice" || value === "chat" || value === "quiz")
@@ -33,6 +34,21 @@ const parseModeParam = (value) => {
 const transcriptId = (prefix) => `${prefix}-${crypto.randomUUID()}`;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const interestOnboardingPrompt = "Before we begin trait matching, what are you most interested in studying and what skills do you most enjoy using?";
+const formatTraitKickoffPrefix = (nextQuestion, prefetchedQuestions) => {
+    const traitNames = Array.from(new Set([nextQuestion.traitName, ...(prefetchedQuestions ?? []).map((question) => question.traitName)]
+        .map((name) => (name ?? "").trim())
+        .filter((name) => name.length > 0))).slice(0, 3);
+    if (traitNames.length === 0) {
+        return "Thanks. I heard your interests and skills. Let us begin trait matching.";
+    }
+    if (traitNames.length === 1) {
+        return `Thanks. I heard your interests and skills. We will start by evaluating ${traitNames[0]}.`;
+    }
+    if (traitNames.length === 2) {
+        return `Thanks. I heard your interests and skills. We will start by evaluating ${traitNames[0]} and ${traitNames[1]}.`;
+    }
+    return `Thanks. I heard your interests and skills. We will start by evaluating ${traitNames[0]}, ${traitNames[1]}, and ${traitNames[2]}.`;
+};
 const defaultWidgetThemeTokens = {
     fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif",
     headingFontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif",
@@ -89,7 +105,20 @@ const useOnlineStatus = () => {
     }, []);
     return isOnline;
 };
-const LiveInsightsSidebar = ({ snapshot, programFit, activeTraitId, done = false, onActiveTraitAction, activeTraitActionPending }) => (_jsxs("aside", { className: "space-y-3", children: [_jsx(TraitScorePanel, { traits: snapshot?.traits ?? [], activeTraitId: activeTraitId ?? null, done: done, onActiveTraitAction: onActiveTraitAction, actionPending: activeTraitActionPending }), _jsx(ProgramFloatField, { programs: programFit?.programs ?? [], selectedProgramId: programFit?.selectedProgramId ?? null, done: done })] }));
+const usePrefersReducedMotion = () => {
+    const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+    useEffect(() => {
+        if (typeof window === "undefined")
+            return;
+        const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+        const sync = () => setPrefersReducedMotion(media.matches);
+        sync();
+        media.addEventListener("change", sync);
+        return () => media.removeEventListener("change", sync);
+    }, []);
+    return prefersReducedMotion;
+};
+const LiveInsightsSidebar = ({ snapshot, programFit, activeTraitId, done = false, onActiveTraitAction, activeTraitActionPending, updatingMatches = false, reducedMotion = false, rankingPulseToken = null }) => (_jsxs("aside", { className: "space-y-3", children: [_jsx(TraitScorePanel, { traits: snapshot?.traits ?? [], activeTraitId: activeTraitId ?? null, done: done, onActiveTraitAction: onActiveTraitAction, actionPending: activeTraitActionPending }), _jsx(ProgramFloatField, { programs: programFit?.programs ?? [], selectedProgramId: programFit?.selectedProgramId ?? null, done: done, updatingMatches: updatingMatches, reducedMotion: reducedMotion, pulseToken: rankingPulseToken })] }));
 const WidgetSetup = () => {
     const [searchParams] = useSearchParams();
     const queryMode = parseModeParam(searchParams.get("mode"));
@@ -184,14 +213,14 @@ const WidgetSetup = () => {
                                         const isSelected = selectedMode === mode.id;
                                         return (_jsx("button", { type: "button", "aria-pressed": isSelected, ref: (element) => {
                                                 modeButtonRefs.current[mode.id] = element;
-                                            }, className: `relative z-10 rounded-md border p-3 text-left transition ${isSelected ? "mode-option-selected border-slate-900 bg-slate-100 ring-1 ring-slate-900/10" : "border-slate-200 bg-white hover:border-slate-300"} ${prefersReducedMotion ? "motion-reduce:transition-none" : "duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]"}`, onClick: () => setSelectedMode(mode.id), children: _jsxs("div", { className: "flex items-start gap-3", children: [_jsx("div", { className: "mode-option-ill-wrap", "aria-hidden": "true", children: _jsx(InterviewTypeIllustration, { type: mode.id, size: 44 }) }), _jsxs("div", { className: "min-w-0 flex-1 space-y-1", children: [_jsxs("div", { className: "flex items-start justify-between gap-2", children: [_jsx("p", { className: "text-sm font-semibold text-slate-900", children: mode.label }), isSelected && (_jsx("span", { className: "rounded-full bg-slate-900 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white", children: "Selected" }))] }), _jsx("p", { className: "text-xs text-slate-600", children: mode.description })] })] }) }, mode.id));
+                                            }, className: `interview-type-option relative z-10 rounded-md border p-3 text-left transition ${isSelected ? "mode-option-selected border-slate-900 bg-slate-100 ring-1 ring-slate-900/10" : "border-slate-200 bg-white hover:border-slate-300"} ${mode.id === "quiz" ? "interview-type-option-quiz" : ""} ${prefersReducedMotion ? "motion-reduce:transition-none" : "duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]"}`, onClick: () => setSelectedMode(mode.id), children: _jsxs("div", { className: "flex items-start gap-3", children: [_jsx("div", { className: "mode-option-ill-wrap", "aria-hidden": "true", children: _jsx(InterviewTypeIllustration, { type: mode.id, size: 44, quizVariant: "ghost" }) }), _jsxs("div", { className: "min-w-0 flex-1 space-y-1", children: [_jsxs("div", { className: "flex items-start justify-between gap-2", children: [_jsx("p", { className: "text-sm font-semibold text-slate-900", children: mode.label }), isSelected && (_jsx("span", { className: "rounded-full bg-slate-900 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white", children: "Selected" }))] }), _jsx("p", { className: "text-xs text-slate-600", children: mode.description })] })] }) }, mode.id));
                                     })] })] })), lockMode && selectedMode && (_jsxs("p", { className: "rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-700", children: ["Mode locked to: ", selectedMode.toUpperCase()] })), programFilterIds.length > 0 && (_jsx("p", { className: "rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-700", children: "Program filter from URL is active (1 program)." })), _jsx(Button, { disabled: !canStart, onClick: () => {
                             clear();
                             setMode(selectedMode);
                             setProgramFilterIds(programFilterIds);
                             setProgramId(programFilterIds[0] ?? null);
                             setStarted(true);
-                        }, children: "Start" }), import.meta.env.DEV && _jsx(IllustrationsDemo, {})] }) }) }));
+                        }, children: "Start" })] }) }) }));
 };
 const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
     const navigate = useNavigate();
@@ -209,6 +238,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
     const [lastMintedVoice, setLastMintedVoice] = useState(null);
     const [debugVoiceEnabled, setDebugVoiceEnabled] = useState(false);
     const realtimeSessionRef = useRef(null);
+    const onTranscriptTurnRef = useRef(null);
     const mediaStreamRef = useRef(null);
     const sessionIdRef = useRef(null);
     const lastCandidateTurnIdRef = useRef(null);
@@ -453,6 +483,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
             setProgramFit(result.program_fit);
             setAnsweredTraitCount(result.answeredTraitCount);
             setCheckpoint(result.checkpoint);
+            const wasCollectingPreferences = collectingPreferences;
             if (collectingPreferences) {
                 setCollectingPreferences(false);
             }
@@ -462,7 +493,10 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
                 return;
             }
             if (result.nextQuestion) {
-                await pushAssistantQuestion(result.nextQuestion);
+                const kickoffPrefix = wasCollectingPreferences
+                    ? formatTraitKickoffPrefix(result.nextQuestion, result.prefetchedQuestions)
+                    : undefined;
+                await pushAssistantQuestion(result.nextQuestion, kickoffPrefix);
             }
             else {
                 setVoicePhase("ended");
@@ -473,6 +507,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
             setVoicePhase("error");
         }
     };
+    onTranscriptTurnRef.current = onTranscriptTurn;
     const startInterview = async () => {
         setError(null);
         if (sessionIdRef.current && transcript.length > 0 && currentQuestion) {
@@ -537,7 +572,12 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
                     }
                     transitionPhase("assistant_done");
                 },
-                onTranscriptTurn
+                onTranscriptTurn: (turn) => {
+                    const handler = onTranscriptTurnRef.current;
+                    if (!handler)
+                        return;
+                    void handler(turn);
+                }
             });
             realtimeSession.setAudioTrack(track);
             realtimeSessionRef.current = realtimeSession;
@@ -641,7 +681,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
                                                 if (voicePhase !== "paused")
                                                     setVoicePhase("listening");
                                                 realtimeSessionRef.current?.setPushToTalk(true);
-                                            }, onTouchEnd: () => realtimeSessionRef.current?.setPushToTalk(false), disabled: voicePhase === "paused", children: "Hold to talk" })), _jsx(Button, { className: "bg-red-700", onClick: endSession, children: "End" })] })), _jsxs("div", { className: "max-h-72 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3", children: [transcript.length === 0 && _jsx("p", { className: "text-sm text-slate-500", children: "Transcript appears as the conversation runs." }), transcript.map((turn) => (_jsxs("div", { className: "rounded bg-slate-50 p-2 text-sm", children: [_jsxs("span", { className: "font-semibold capitalize", children: [turn.speaker, ":"] }), " ", turn.text] }, `${turn.id}-${turn.ts}`)))] }), checkpointOpen && checkpoint && (_jsxs("div", { className: "rounded-md border border-blue-200 bg-blue-50 p-3 text-sm", children: [_jsx("p", { className: "font-semibold text-slate-900", children: checkpoint.prompt }), _jsxs("div", { className: "mt-2 flex flex-wrap gap-2", children: [_jsx(Button, { className: "bg-slate-700", onClick: () => void handleCheckpointAction("stop"), children: "Stop and review" }), _jsx(Button, { onClick: () => void handleCheckpointAction("continue"), children: "Keep going" }), _jsx(Button, { className: "bg-blue-700", onClick: () => void handleCheckpointAction("deepen"), disabled: !currentQuestion?.traitId, children: "Go deeper on current trait" }), _jsx(Button, { className: "bg-slate-500", onClick: () => void handleCheckpointAction("focus"), disabled: checkpoint.suggestedTraitIds.length === 0, children: "Focus trait area" })] })] })), voicePhase === "ended" && (_jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: () => navigate("/widget/results"), children: "Review results" }), _jsx(Button, { className: "bg-slate-500", onClick: resetFlow, children: "Start over" })] })), !isOnline && _jsx("p", { className: "text-sm text-red-700", children: "You are offline. Reconnect to continue." }), error && _jsx("p", { className: "text-sm text-red-700", children: error }), debugVoiceEnabled && (_jsxs("div", { className: "rounded-md border border-slate-300 bg-slate-50 p-2 text-xs text-slate-700", children: [_jsxs("p", { children: ["Debug voice: engine=", _jsx("span", { className: "font-semibold", children: speechEngine })] }), _jsxs("p", { children: ["Minted voice=", _jsx("span", { className: "font-semibold", children: lastMintedVoice ?? "(none)" })] }), _jsxs("p", { children: ["Language=", _jsx("span", { className: "font-semibold", children: sessionLanguageTag })] })] }))] }), _jsx(LanguagePickerModal, { open: languagePickerOpen, options: EXTRA_LANGUAGE_OPTIONS, onClose: () => setLanguagePickerOpen(false), onSelect: (tag, label) => {
+                                            }, onTouchEnd: () => realtimeSessionRef.current?.setPushToTalk(false), disabled: voicePhase === "paused", children: "Hold to talk" })), _jsx(Button, { className: "bg-red-700", onClick: endSession, children: "End" })] })), checkpointOpen && checkpoint && (_jsxs("div", { className: "rounded-md border border-blue-200 bg-blue-50 p-3 text-sm", children: [_jsx("p", { className: "font-semibold text-slate-900", children: checkpoint.prompt }), _jsxs("div", { className: "mt-2 flex flex-wrap gap-2", children: [_jsx(Button, { className: "bg-slate-700", onClick: () => void handleCheckpointAction("stop"), children: "Stop and review" }), _jsx(Button, { onClick: () => void handleCheckpointAction("continue"), children: "Keep going" }), _jsx(Button, { className: "bg-blue-700", onClick: () => void handleCheckpointAction("deepen"), disabled: !currentQuestion?.traitId, children: "Go deeper on current trait" }), _jsx(Button, { className: "bg-slate-500", onClick: () => void handleCheckpointAction("focus"), disabled: checkpoint.suggestedTraitIds.length === 0, children: "Focus trait area" })] })] })), voicePhase === "ended" && (_jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: () => navigate("/widget/results"), children: "Review results" }), _jsx(Button, { className: "bg-slate-500", onClick: resetFlow, children: "Start over" })] })), !isOnline && _jsx("p", { className: "text-sm text-red-700", children: "You are offline. Reconnect to continue." }), error && _jsx("p", { className: "text-sm text-red-700", children: error }), debugVoiceEnabled && (_jsxs("div", { className: "rounded-md border border-slate-300 bg-slate-50 p-2 text-xs text-slate-700", children: [_jsxs("p", { children: ["Debug voice: engine=", _jsx("span", { className: "font-semibold", children: speechEngine })] }), _jsxs("p", { children: ["Minted voice=", _jsx("span", { className: "font-semibold", children: lastMintedVoice ?? "(none)" })] }), _jsxs("p", { children: ["Language=", _jsx("span", { className: "font-semibold", children: sessionLanguageTag })] })] }))] }), _jsx(LanguagePickerModal, { open: languagePickerOpen, options: EXTRA_LANGUAGE_OPTIONS, onClose: () => setLanguagePickerOpen(false), onSelect: (tag, label) => {
                                 setSessionLanguage(tag, label);
                                 setLanguagePickerOpen(false);
                             } })] }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, activeTraitId: currentQuestion?.traitId ?? null, done: voicePhase === "ended", onActiveTraitAction: (action) => void handleCheckpointAction(action), activeTraitActionPending: checkpointMutation.isPending })] }) }));
@@ -749,12 +789,21 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }) => {
     const [started, setStarted] = useState(false);
     const [error, setError] = useState(null);
     const [currentQuestion, setCurrentQuestion] = useState(null);
+    const [questionDirection, setQuestionDirection] = useState("forward");
     const [collectingPreferences, setCollectingPreferences] = useState(false);
     const [preferenceInput, setPreferenceInput] = useState("");
+    const [selectedOption, setSelectedOption] = useState(null);
+    const [selectionLocked, setSelectionLocked] = useState(false);
+    const [surpriseKey, setSurpriseKey] = useState(null);
+    const [surpriseVariant, setSurpriseVariant] = useState("none");
+    const [rankingUpdating, setRankingUpdating] = useState(false);
+    const [rankingPulseToken, setRankingPulseToken] = useState(null);
+    const [streakMessage, setStreakMessage] = useState(null);
     const [quizExperience, setQuizExperience] = useState(null);
     const [askedTraitIds, setAskedTraitIds] = useState([]);
     const [askedQuestionIds, setAskedQuestionIds] = useState([]);
     const isOnline = useOnlineStatus();
+    const prefersReducedMotion = usePrefersReducedMotion();
     const { sessionId, scoringSnapshot, programFit, sessionLanguageTag, setSessionId, addTranscriptTurn, setMode, setProgramFilterIds, setScoringSnapshot, setProgramFit, clear } = useWidgetStore();
     const createInterviewMutation = useMutation({
         mutationFn: () => api.createInterviewSession({
@@ -839,6 +888,7 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }) => {
             setProgramFit(result.program_fit);
             setCollectingPreferences(false);
             if (result.nextQuestion) {
+                setQuestionDirection("forward");
                 setCurrentQuestion(result.nextQuestion);
             }
             else {
@@ -850,17 +900,41 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }) => {
             setError(selectError instanceof Error ? selectError.message : "Could not submit your preferences.");
         }
     };
+    const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
     const selectAnswer = async (answer) => {
-        if (!currentQuestion)
+        if (!currentQuestion || selectionLocked || turnMutation.isPending)
             return;
+        const nextAnswerCount = askedQuestionIds.length + 1;
+        const triggerKey = `${sessionId ?? "local"}::${currentQuestion.id}::${answer}::${Date.now()}`;
+        const variant = pickSurpriseVariant(currentQuestion.id, sessionId ?? null, prefersReducedMotion);
+        setSelectedOption(answer);
+        setSelectionLocked(true);
+        setSurpriseKey(triggerKey);
+        setSurpriseVariant(variant);
+        if (nextAnswerCount % 3 === 0) {
+            setStreakMessage("Nice - you're on a roll.");
+            window.setTimeout(() => setStreakMessage(null), 900);
+        }
+        await wait(prefersReducedMotion ? 120 : 360);
+        setRankingUpdating(true);
         addTranscriptTurn({ id: transcriptId("candidate"), speaker: "candidate", text: answer, ts: new Date().toISOString() });
         setAskedTraitIds((prev) => [...prev, currentQuestion.traitId]);
         setAskedQuestionIds((prev) => [...prev, currentQuestion.id]);
+        const startedAt = Date.now();
         try {
             const result = await turnMutation.mutateAsync(answer);
+            const elapsed = Date.now() - startedAt;
+            const rankingDelayMs = prefersReducedMotion ? 0 : 480;
+            if (elapsed < rankingDelayMs) {
+                await wait(rankingDelayMs - elapsed);
+            }
             setScoringSnapshot(result.scoring_snapshot);
             setProgramFit(result.program_fit);
+            if (variant === "pulse" && !prefersReducedMotion) {
+                setRankingPulseToken(Date.now());
+            }
             if (result.nextQuestion) {
+                setQuestionDirection("forward");
                 setCurrentQuestion(result.nextQuestion);
             }
             else {
@@ -871,6 +945,21 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }) => {
         catch (selectError) {
             setError(selectError instanceof Error ? selectError.message : "Could not submit quiz answer.");
         }
+        finally {
+            setRankingUpdating(false);
+            setSelectionLocked(false);
+            setSelectedOption(null);
+            if (prefersReducedMotion) {
+                setSurpriseKey(null);
+                setSurpriseVariant("none");
+            }
+            else {
+                window.setTimeout(() => {
+                    setSurpriseKey(null);
+                    setSurpriseVariant("none");
+                }, 680);
+            }
+        }
     };
     const totalTraits = scoringSnapshot?.traits.length ?? 0;
     const completedTraits = (scoringSnapshot?.traits ?? []).filter((trait) => trait.status === "complete").length;
@@ -879,7 +968,10 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }) => {
         .filter((item) => typeof item?.label === "string")
         .map((item) => [String(item.label), item]));
     const traitDisplayName = currentQuestion?.publicLabel ?? currentQuestion?.traitName;
-    return (_jsx("main", { className: "mx-auto min-h-screen max-w-7xl px-4 py-8", children: _jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]", children: [_jsx(Card, { children: _jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "Quiz" }), !started && (_jsxs("div", { className: "space-y-4 rounded-xl bg-gradient-to-br from-amber-100 via-orange-50 to-rose-100 p-4", children: [_jsx("p", { className: "text-xs font-semibold uppercase tracking-wide text-slate-600", children: quizExperience?.estimatedTimeLabel ?? "3-5 min" }), _jsx("h3", { className: "text-2xl font-bold text-slate-900", children: quizExperience?.headline ?? "Discover your best-fit graduate path" }), _jsx("p", { className: "text-sm text-slate-700", children: quizExperience?.subheadline ?? "A quick, personality-first quiz to see where you thrive." }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: startQuiz, disabled: !isOnline || createInterviewMutation.isPending, children: "Start" }), _jsx(Button, { className: "bg-slate-500", onClick: onRestart, children: "Back" })] })] })), started && collectingPreferences && (_jsxs("div", { className: "space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4", children: [_jsx("p", { className: "text-sm font-semibold text-slate-900", children: "Tell us your interests and favorite skills" }), _jsx("p", { className: "text-sm text-slate-700", children: "Share what you are most interested in studying and which skills you enjoy using. We will tailor the quiz flow from this." }), _jsx("textarea", { className: "w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm", rows: 4, value: preferenceInput, onChange: (event) => setPreferenceInput(event.target.value), placeholder: "Example: I enjoy data storytelling, dashboards, and solving business problems with SQL and Python." }), _jsx("div", { className: "flex gap-2", children: _jsx(Button, { onClick: () => void submitPreferenceProfile(), disabled: !isOnline || turnMutation.isPending || preferenceInput.trim().length === 0, children: "Continue" }) })] })), started && currentQuestion && (_jsxs(_Fragment, { children: [_jsxs("div", { className: "quiz-question-swap space-y-4", children: [_jsxs("div", { className: "flex items-center justify-between", children: [_jsx("p", { className: "text-xs uppercase tracking-wide text-slate-500", children: traitDisplayName }), progressLabel && _jsxs("p", { className: "text-xs font-semibold text-slate-600", children: ["Progress: ", progressLabel] })] }), currentQuestion.narrativeIntro && _jsx("p", { className: "text-sm text-slate-600", children: currentQuestion.narrativeIntro }), _jsx("h3", { className: "text-lg font-semibold text-slate-900", children: currentQuestion.prompt })] }, currentQuestion.id), _jsx("div", { className: "grid gap-2", children: currentQuestion.options.map((option) => (_jsx("button", { type: "button", className: "rounded-xl border border-slate-300 bg-white px-4 py-3 text-left text-sm shadow-sm transition hover:-translate-y-0.5 hover:border-slate-900", onClick: () => void selectAnswer(option), disabled: !isOnline || turnMutation.isPending, children: _jsxs("div", { className: "flex items-start justify-between gap-3", children: [_jsxs("div", { children: [_jsx("p", { className: "font-semibold text-slate-900", children: option }), optionMetaByLabel.get(option)?.microCopy && (_jsx("p", { className: "mt-1 text-xs text-slate-600", children: optionMetaByLabel.get(option)?.microCopy }))] }), _jsx("span", { className: "rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-600", children: (optionMetaByLabel.get(option)?.iconToken ?? "spark").slice(0, 10) })] }) }, `${currentQuestion.id}-${option}`))) })] })), error && _jsx("p", { className: "text-sm text-red-700", children: error })] }) }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, activeTraitId: currentQuestion?.traitId ?? null })] }) }));
+    return (_jsx("main", { className: "mx-auto min-h-screen max-w-7xl px-4 py-8", children: _jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]", children: [_jsx(Card, { children: _jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "Quiz" }), !started && (_jsxs("div", { className: "quiz-intro-panel space-y-4 rounded-xl p-4", children: [_jsx("p", { className: "text-xs font-semibold uppercase tracking-wide text-slate-600", children: quizExperience?.estimatedTimeLabel ?? "3-5 min" }), _jsx("h3", { className: "text-2xl font-bold text-slate-900", children: quizExperience?.headline ?? "Discover your best-fit graduate path" }), _jsx("p", { className: "text-sm text-slate-700", children: quizExperience?.subheadline ?? "A quick, personality-first quiz to see where you thrive." }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: startQuiz, disabled: !isOnline || createInterviewMutation.isPending, children: "Start" }), _jsx(Button, { className: "bg-slate-500", onClick: onRestart, children: "Back" })] })] })), started && collectingPreferences && (_jsxs("div", { className: "space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4", children: [_jsx("p", { className: "text-sm font-semibold text-slate-900", children: "Tell us your interests and favorite skills" }), _jsx("p", { className: "text-sm text-slate-700", children: "Share what you are most interested in studying and which skills you enjoy using. We will tailor the quiz flow from this." }), _jsx("textarea", { className: "w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm", rows: 4, value: preferenceInput, onChange: (event) => setPreferenceInput(event.target.value), placeholder: "Example: I enjoy data storytelling, dashboards, and solving business problems with SQL and Python." }), _jsx("div", { className: "flex gap-2", children: _jsx(Button, { onClick: () => void submitPreferenceProfile(), disabled: !isOnline || turnMutation.isPending || preferenceInput.trim().length === 0, children: "Continue" }) })] })), started && currentQuestion && (_jsx(SwipeTransition, { activeKey: currentQuestion.id, direction: questionDirection, reducedMotion: prefersReducedMotion, className: "space-y-4", children: _jsxs("div", { className: "relative space-y-4", children: [_jsx(SurpriseAnimationLayer, { triggerKey: surpriseKey, variant: surpriseVariant, reducedMotion: prefersReducedMotion }), _jsxs("div", { className: "flex items-center justify-between", children: [_jsx("p", { className: "text-xs uppercase tracking-wide text-slate-500", children: traitDisplayName }), progressLabel && _jsxs("p", { className: "quiz-progress-pill text-xs font-semibold", children: ["Progress: ", progressLabel] })] }), streakMessage && _jsx("p", { className: "quiz-streak-badge text-xs font-semibold", children: streakMessage }), currentQuestion.narrativeIntro && _jsx("p", { className: "text-sm text-slate-600", children: currentQuestion.narrativeIntro }), _jsx("h3", { className: "text-lg font-semibold text-slate-900", children: currentQuestion.prompt }), _jsx("div", { className: "grid gap-2", children: currentQuestion.options.map((option) => {
+                                                const isSelected = selectedOption === option;
+                                                return (_jsx("button", { type: "button", className: `quiz-answer-card rounded-xl border px-4 py-3 text-left text-sm shadow-sm transition ${isSelected ? "quiz-answer-card-selected" : "quiz-answer-card-idle"} ${isSelected && surpriseVariant === "spark" && !prefersReducedMotion ? "quiz-answer-card-spark" : ""}`, onClick: () => void selectAnswer(option), disabled: !isOnline || turnMutation.isPending || selectionLocked, children: _jsxs("div", { className: "flex items-start justify-between gap-3", children: [_jsxs("div", { children: [_jsx("p", { className: "font-semibold text-slate-900", children: option }), optionMetaByLabel.get(option)?.microCopy && (_jsx("p", { className: "mt-1 text-xs text-slate-600", children: optionMetaByLabel.get(option)?.microCopy }))] }), _jsxs("div", { className: "flex flex-col items-end gap-1", children: [_jsx("span", { className: "quiz-option-chip rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase", children: (optionMetaByLabel.get(option)?.iconToken ?? "spark").slice(0, 10) }), _jsx("span", { className: `quiz-option-check ${isSelected ? "quiz-option-check-visible" : ""}`, "aria-hidden": "true", children: "\u2713" })] })] }) }, `${currentQuestion.id}-${option}`));
+                                            }) })] }) })), error && _jsx("p", { className: "text-sm text-red-700", children: error })] }) }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, activeTraitId: currentQuestion?.traitId ?? null, updatingMatches: rankingUpdating, reducedMotion: prefersReducedMotion, rankingPulseToken: rankingPulseToken })] }) }));
 };
 const ResultsPage = () => {
     const navigate = useNavigate();

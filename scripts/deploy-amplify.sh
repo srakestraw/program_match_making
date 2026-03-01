@@ -9,8 +9,14 @@ set -e
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# Load deploy-related env vars from .env if present (APP_ID, HOSTED_ZONE_ID, VITE_API_URL, etc.)
+if [[ -f .env ]]; then
+  set -a
+  source .env
+  set +a
+fi
 
-APP_NAME="${APP_NAME:-pmm-widget}"
+APP_NAME="${APP_NAME:-Program Match Making}"
 BRANCH_NAME="${BRANCH_NAME:-main}"
 DOMAIN_ROOT="${DOMAIN_ROOT:-gravytylabs.com}"
 SUBDOMAIN_PREFIX="${SUBDOMAIN_PREFIX:-program}"

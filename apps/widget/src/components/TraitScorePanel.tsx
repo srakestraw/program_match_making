@@ -10,15 +10,15 @@ type TraitScorePanelProps = {
 };
 
 const confidenceClass: Record<"low" | "medium" | "high", string> = {
-  low: "bg-rose-100 text-rose-700",
-  medium: "bg-amber-100 text-amber-700",
-  high: "bg-emerald-100 text-emerald-700"
+  low: "quiz-chip confidence-low",
+  medium: "quiz-chip confidence-medium",
+  high: "quiz-chip confidence-high"
 };
 
 const statusClass: Record<"unanswered" | "active" | "complete", string> = {
-  unanswered: "bg-slate-100 text-slate-600",
-  active: "bg-blue-100 text-blue-700",
-  complete: "bg-emerald-100 text-emerald-700"
+  unanswered: "status-chip status-unanswered",
+  active: "status-chip status-active",
+  complete: "status-chip status-complete"
 };
 
 const SegmentedScore = ({ score }: { score: number | null }) => {
@@ -51,7 +51,7 @@ export const TraitScorePanel = ({
     <section className="rounded-xl border border-slate-200 bg-white/80 p-3">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-slate-900">Trait scoring</h3>
-        <span className="text-xs text-slate-500">Live</span>
+        <span className="live-chip text-xs">Live</span>
       </div>
       <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
         {ordered.map((trait) => {
@@ -62,7 +62,7 @@ export const TraitScorePanel = ({
           return (
             <article
               key={trait.traitId}
-              className={`rounded-md border p-2 ${isActive ? "border-blue-400 bg-blue-50/50" : "border-slate-200 bg-white"}`}
+              className={`rounded-md border p-2 ${isActive ? "trait-row-active" : "border-slate-200 bg-white"}`}
               data-testid={`trait-row-${trait.traitId}`}
             >
               <div className="mb-1 flex items-center justify-between gap-2">
@@ -83,7 +83,7 @@ export const TraitScorePanel = ({
                   </button>
                   <button
                     type="button"
-                    className="rounded-md border border-blue-300 bg-blue-100 px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="rounded-md border px-2 py-1 text-[11px] font-semibold quiz-action-primary disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={() => onActiveTraitAction("deepen")}
                     disabled={actionPending}
                   >
@@ -121,7 +121,7 @@ export const TraitScorePanel = ({
                 {trait.rationale && (
                   <button
                     type="button"
-                    className="text-slate-700 underline"
+                    className="why-match-link underline"
                     onClick={() => setExpandedTraitIds((prev) => ({ ...prev, [trait.traitId]: !expanded }))}
                   >
                     Why this score?

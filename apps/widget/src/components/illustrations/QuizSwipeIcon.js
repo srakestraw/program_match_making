@@ -1,0 +1,4 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+export const QuizSwipeIcon = ({ size = 48, className, variant = "arrow" }) => {
+    return (_jsxs("svg", { className: `interview-type-ill interview-type-ill--quiz-swipe interview-type-ill--quiz-${variant} ${className ?? ""}`.trim(), width: size, height: size, viewBox: "0 0 48 48", fill: "none", "aria-hidden": "true", children: [_jsx("rect", { className: "iti-card iti-card-back", x: "11", y: "12", width: "22", height: "26", rx: "5" }), _jsx("rect", { className: "iti-card iti-card-mid", x: "14", y: "10", width: "22", height: "26", rx: "5" }), _jsx("rect", { className: "iti-card iti-card-top", x: "17", y: "8", width: "22", height: "26", rx: "5" }), _jsx("rect", { className: "iti-ghost-card", x: "17", y: "8", width: "22", height: "26", rx: "5" }), _jsx("path", { className: "iti-swipe-arrow", d: "M30.5 38C34.5 38 37 35.6 37 32.8M37 32.8L34.6 34.7M37 32.8L34.5 30.8" })] }));
+};

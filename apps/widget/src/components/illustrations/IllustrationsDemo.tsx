@@ -19,6 +19,16 @@ export const IllustrationsDemo = () => {
           </div>
         ))}
       </div>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <div className="quiz-demo-state">
+          <InterviewTypeIllustration type="quiz" size={38} quizVariant="arrow" />
+          <span className="text-[11px] text-slate-500">ambient shuffle</span>
+        </div>
+        <div className="quiz-demo-state">
+          <InterviewTypeIllustration type="quiz" size={38} quizVariant="ghost" />
+          <span className="text-[11px] text-slate-500">variant B</span>
+        </div>
+      </div>
     </section>
   );
 };

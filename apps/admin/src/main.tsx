@@ -652,36 +652,14 @@ function TraitDefinitionSection({
   setForm,
   titleInputRef,
   actionableMissing,
-  showActivationNotice,
-  isEditing,
-  experienceDraft,
-  generatingExperienceDraft,
-  onGenerateExperienceDraft,
-  onApplyExperienceDraft,
-  onDiscardExperienceDraft
+  showActivationNotice
 }: {
   form: TraitFormState;
   setForm: React.Dispatch<React.SetStateAction<TraitFormState>>;
   titleInputRef: React.MutableRefObject<HTMLInputElement | null>;
   actionableMissing: string[];
   showActivationNotice: boolean;
-  isEditing: boolean;
-  experienceDraft: {
-    publicLabel: string;
-    oneLineHook: string;
-    archetypeTag: ArchetypeTag;
-    displayIcon: string;
-    visualMood: TraitVisualMood;
-  } | null;
-  generatingExperienceDraft: boolean;
-  onGenerateExperienceDraft: (action: "generate" | "gen_z" | "simplify" | "aspirational") => void;
-  onApplyExperienceDraft: () => void;
-  onDiscardExperienceDraft: () => void;
 }) {
-  const [showAdvancedWhyPopover, setShowAdvancedWhyPopover] = useState(false);
-  const normalizedDisplayIconToken = form.displayIcon.trim().toLowerCase();
-  const hasInvalidDisplayIconToken = normalizedDisplayIconToken.length > 0 && !knownDisplayIconTokens.includes(normalizedDisplayIconToken);
-
   return (
     <section className="space-y-4 rounded-md border border-slate-200 bg-white p-5">
       <h2 className="text-xl font-semibold text-slate-900">Definition</h2>
@@ -755,124 +733,6 @@ function TraitDefinitionSection({
           <FieldMeta value={form.definition} />
         </div>
       </div>
-
-      <details className="rounded-md border border-slate-200 bg-slate-50/50 p-3">
-        <summary className="cursor-pointer text-sm font-semibold text-slate-800">Student-Facing Label</summary>
-        <div className="mt-3 space-y-4">
-          <p className="text-xs text-slate-600">Used in the quiz UI and results. Does not affect scoring.</p>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className={subtleButtonClass} disabled={!isEditing || generatingExperienceDraft} onClick={() => onGenerateExperienceDraft("generate")}>
-              {generatingExperienceDraft ? "Generating..." : "Generate with AI"}
-            </button>
-            <button type="button" className={subtleButtonClass} disabled={!isEditing || generatingExperienceDraft} onClick={() => onGenerateExperienceDraft("gen_z")}>
-              Rewrite for Gen Z
-            </button>
-            <button type="button" className={subtleButtonClass} disabled={!isEditing || generatingExperienceDraft} onClick={() => onGenerateExperienceDraft("simplify")}>
-              Simplify
-            </button>
-            <button type="button" className={subtleButtonClass} disabled={!isEditing || generatingExperienceDraft} onClick={() => onGenerateExperienceDraft("aspirational")}>
-              Make more aspirational
-            </button>
-          </div>
-
-          {experienceDraft && (
-            <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm">
-              <p className="font-semibold text-slate-900">AI Draft Ready</p>
-              <p className="mt-1 text-xs text-slate-700">{experienceDraft.publicLabel || form.name} · {experienceDraft.archetypeTag} · {experienceDraft.visualMood}</p>
-              <p className="mt-1 text-xs text-slate-700">{experienceDraft.oneLineHook}</p>
-              <div className="mt-2 flex gap-2">
-                <button type="button" className={subtleButtonClass} onClick={onApplyExperienceDraft}>Apply</button>
-                <button type="button" className={subtleButtonClass} onClick={onDiscardExperienceDraft}>Discard</button>
-              </div>
-            </div>
-          )}
-
-          <div>
-            <label className={labelClass}>Display Name</label>
-            <input className={inputClass} value={form.publicLabel} onChange={(event) => setForm((prev) => ({ ...prev, publicLabel: event.target.value }))} />
-            <p className="mt-1 text-xs text-slate-500">
-              Preview label: <span className="font-medium text-slate-700">{form.publicLabel.trim() || form.name.trim() || "Untitled trait"}</span>
-            </p>
-          </div>
-          <div>
-            <label className={labelClass}>Short Description</label>
-            <textarea className={inputClass} value={form.oneLineHook} onChange={(event) => setForm((prev) => ({ ...prev, oneLineHook: event.target.value }))} />
-          </div>
-
-          <details className="rounded-md border border-slate-200 bg-white p-3">
-            <summary className="cursor-pointer text-xs font-semibold tracking-wide text-slate-600">Advanced (Optional - visuals + grouping)</summary>
-            <div className="mt-3 grid gap-3 md:grid-cols-2">
-              <div className="md:col-span-2">
-                <div className="flex items-start justify-between gap-3">
-                  <p className="text-xs text-slate-600">Optional controls for result grouping and visuals. Does not affect scoring.</p>
-                  <div className="relative">
-                    <button
-                      type="button"
-                      className="text-xs font-medium text-slate-700 underline"
-                      onClick={() => setShowAdvancedWhyPopover((prev) => !prev)}
-                    >
-                      Why use this?
-                    </button>
-                    {showAdvancedWhyPopover && (
-                      <div role="dialog" className="absolute right-0 z-10 mt-2 w-72 rounded-md border border-slate-200 bg-white p-3 text-xs text-slate-700 shadow-md">
-                        <ul className="list-disc space-y-1 pl-4">
-                          <li>Archetype: enables a personality-style reveal headline.</li>
-                          <li>Icon: makes choices and results more visual.</li>
-                          <li>Mood: helps traits feel consistent with the quiz theme.</li>
-                        </ul>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <div>
-                <label className={labelClass}>Archetype Tag</label>
-                <p className="mt-1 text-xs text-slate-600">Groups traits into personality-style results (e.g., Analyst, Builder) for the reveal headline.</p>
-                <p className="mt-1 text-xs text-slate-500"><span className="font-medium text-slate-600">Used in:</span> Results reveal headline and trait grouping.</p>
-                <select className={inputClass} value={form.archetypeTag} onChange={(event) => setForm((prev) => ({ ...prev, archetypeTag: event.target.value as ArchetypeTag }))}>
-                  {archetypeTagOptions.map((option) => (
-                    <option key={option} value={option}>{option}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className={labelClass}>Display Icon</label>
-                <p className="mt-1 text-xs text-slate-600">Icon token shown next to this label in answer cards, trait sidebar, and results.</p>
-                <p className="mt-1 text-xs text-slate-500"><span className="font-medium text-slate-600">Used in:</span> Answer cards, trait sidebar, results.</p>
-                <input
-                  className={inputClass}
-                  list="trait-display-icon-tokens"
-                  value={form.displayIcon}
-                  onChange={(event) => setForm((prev) => ({ ...prev, displayIcon: event.target.value }))}
-                />
-                <datalist id="trait-display-icon-tokens">
-                  {knownDisplayIconTokens.map((token) => (
-                    <option key={token} value={token} />
-                  ))}
-                </datalist>
-                {hasInvalidDisplayIconToken && <p className="mt-1 text-xs text-red-700">Unknown icon token - choose from the list.</p>}
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <label className={`${labelClass} mb-0`}>Visual Mood</label>
-                  {!isVisualMoodStylingActive && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">Future</span>}
-                </div>
-                {isVisualMoodStylingActive ? (
-                  <p className="mt-1 text-xs text-slate-600">Theme hint that can change subtle accents (like gradients) in the quiz UI.</p>
-                ) : (
-                  <p className="mt-1 text-xs text-slate-600">Reserved for future styling - safe to leave blank.</p>
-                )}
-                <p className="mt-1 text-xs text-slate-500"><span className="font-medium text-slate-600">Used in:</span> Optional UI styling (cards and results).</p>
-                <select className={inputClass} value={form.visualMood} onChange={(event) => setForm((prev) => ({ ...prev, visualMood: event.target.value as TraitVisualMood }))}>
-                  {visualMoodOptions.map((option) => (
-                    <option key={option} value={option}>{option}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </details>
-        </div>
-      </details>
 
       {showActivationNotice && (
         <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
@@ -1018,6 +878,156 @@ function TraitRubricEditor({
   );
 }
 
+function StudentFacingLabelEditor({
+  form,
+  setForm,
+  isEditing,
+  experienceDraft,
+  generatingExperienceDraft,
+  onGenerateExperienceDraft,
+  onApplyExperienceDraft,
+  onDiscardExperienceDraft
+}: {
+  form: TraitFormState;
+  setForm: React.Dispatch<React.SetStateAction<TraitFormState>>;
+  isEditing: boolean;
+  experienceDraft: {
+    publicLabel: string;
+    oneLineHook: string;
+    archetypeTag: ArchetypeTag;
+    displayIcon: string;
+    visualMood: TraitVisualMood;
+  } | null;
+  generatingExperienceDraft: boolean;
+  onGenerateExperienceDraft: (action: "generate" | "gen_z" | "simplify" | "aspirational") => void;
+  onApplyExperienceDraft: () => void;
+  onDiscardExperienceDraft: () => void;
+}) {
+  const [showAdvancedWhyPopover, setShowAdvancedWhyPopover] = useState(false);
+  const normalizedDisplayIconToken = form.displayIcon.trim().toLowerCase();
+  const hasInvalidDisplayIconToken = normalizedDisplayIconToken.length > 0 && !knownDisplayIconTokens.includes(normalizedDisplayIconToken);
+
+  return (
+    <details className="rounded-md border border-slate-200 bg-slate-50/50 p-3">
+      <summary className="cursor-pointer text-sm font-semibold text-slate-800">Student-Facing Label</summary>
+      <div className="mt-3 space-y-4">
+        <p className="text-xs text-slate-600">Used in the quiz UI and results. Does not affect scoring.</p>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={subtleButtonClass} disabled={!isEditing || generatingExperienceDraft} onClick={() => onGenerateExperienceDraft("generate")}>
+            {generatingExperienceDraft ? "Generating..." : "Generate with AI"}
+          </button>
+          <button type="button" className={subtleButtonClass} disabled={!isEditing || generatingExperienceDraft} onClick={() => onGenerateExperienceDraft("gen_z")}>
+            Rewrite for Gen Z
+          </button>
+          <button type="button" className={subtleButtonClass} disabled={!isEditing || generatingExperienceDraft} onClick={() => onGenerateExperienceDraft("simplify")}>
+            Simplify
+          </button>
+          <button type="button" className={subtleButtonClass} disabled={!isEditing || generatingExperienceDraft} onClick={() => onGenerateExperienceDraft("aspirational")}>
+            Make more aspirational
+          </button>
+        </div>
+
+        {experienceDraft && (
+          <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm">
+            <p className="font-semibold text-slate-900">AI Draft Ready</p>
+            <p className="mt-1 text-xs text-slate-700">{experienceDraft.publicLabel || form.name} · {experienceDraft.archetypeTag} · {experienceDraft.visualMood}</p>
+            <p className="mt-1 text-xs text-slate-700">{experienceDraft.oneLineHook}</p>
+            <div className="mt-2 flex gap-2">
+              <button type="button" className={subtleButtonClass} onClick={onApplyExperienceDraft}>Apply</button>
+              <button type="button" className={subtleButtonClass} onClick={onDiscardExperienceDraft}>Discard</button>
+            </div>
+          </div>
+        )}
+
+        <div>
+          <label className={labelClass}>Display Name</label>
+          <input className={inputClass} value={form.publicLabel} onChange={(event) => setForm((prev) => ({ ...prev, publicLabel: event.target.value }))} />
+          <p className="mt-1 text-xs text-slate-500">
+            Preview label: <span className="font-medium text-slate-700">{form.publicLabel.trim() || form.name.trim() || "Untitled trait"}</span>
+          </p>
+        </div>
+        <div>
+          <label className={labelClass}>Short Description</label>
+          <textarea className={inputClass} value={form.oneLineHook} onChange={(event) => setForm((prev) => ({ ...prev, oneLineHook: event.target.value }))} />
+        </div>
+
+        <details className="rounded-md border border-slate-200 bg-white p-3">
+          <summary className="cursor-pointer text-xs font-semibold tracking-wide text-slate-600">Advanced (Optional - visuals + grouping)</summary>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <div className="flex items-start justify-between gap-3">
+                <p className="text-xs text-slate-600">Optional controls for result grouping and visuals. Does not affect scoring.</p>
+                <div className="relative">
+                  <button
+                    type="button"
+                    className="text-xs font-medium text-slate-700 underline"
+                    onClick={() => setShowAdvancedWhyPopover((prev) => !prev)}
+                  >
+                    Why use this?
+                  </button>
+                  {showAdvancedWhyPopover && (
+                    <div role="dialog" className="absolute right-0 z-10 mt-2 w-72 rounded-md border border-slate-200 bg-white p-3 text-xs text-slate-700 shadow-md">
+                      <ul className="list-disc space-y-1 pl-4">
+                        <li>Archetype: enables a personality-style reveal headline.</li>
+                        <li>Icon: makes choices and results more visual.</li>
+                        <li>Mood: helps traits feel consistent with the quiz theme.</li>
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div>
+              <label className={labelClass}>Archetype Tag</label>
+              <p className="mt-1 text-xs text-slate-600">Groups traits into personality-style results (e.g., Analyst, Builder) for the reveal headline.</p>
+              <p className="mt-1 text-xs text-slate-500"><span className="font-medium text-slate-600">Used in:</span> Results reveal headline and trait grouping.</p>
+              <select className={inputClass} value={form.archetypeTag} onChange={(event) => setForm((prev) => ({ ...prev, archetypeTag: event.target.value as ArchetypeTag }))}>
+                {archetypeTagOptions.map((option) => (
+                  <option key={option} value={option}>{option}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelClass}>Display Icon</label>
+              <p className="mt-1 text-xs text-slate-600">Icon token shown next to this label in answer cards, trait sidebar, and results.</p>
+              <p className="mt-1 text-xs text-slate-500"><span className="font-medium text-slate-600">Used in:</span> Answer cards, trait sidebar, results.</p>
+              <input
+                className={inputClass}
+                list="trait-display-icon-tokens"
+                value={form.displayIcon}
+                onChange={(event) => setForm((prev) => ({ ...prev, displayIcon: event.target.value }))}
+              />
+              <datalist id="trait-display-icon-tokens">
+                {knownDisplayIconTokens.map((token) => (
+                  <option key={token} value={token} />
+                ))}
+              </datalist>
+              {hasInvalidDisplayIconToken && <p className="mt-1 text-xs text-red-700">Unknown icon token - choose from the list.</p>}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <label className={`${labelClass} mb-0`}>Visual Mood</label>
+                {!isVisualMoodStylingActive && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">Future</span>}
+              </div>
+              {isVisualMoodStylingActive ? (
+                <p className="mt-1 text-xs text-slate-600">Theme hint that can change subtle accents (like gradients) in the quiz UI.</p>
+              ) : (
+                <p className="mt-1 text-xs text-slate-600">Reserved for future styling - safe to leave blank.</p>
+              )}
+              <p className="mt-1 text-xs text-slate-500"><span className="font-medium text-slate-600">Used in:</span> Optional UI styling (cards and results).</p>
+              <select className={inputClass} value={form.visualMood} onChange={(event) => setForm((prev) => ({ ...prev, visualMood: event.target.value as TraitVisualMood }))}>
+                {visualMoodOptions.map((option) => (
+                  <option key={option} value={option}>{option}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </details>
+      </div>
+    </details>
+  );
+}
+
 function TraitQuestionsEditor({
   selectedTrait,
   lockReason,
@@ -1026,7 +1036,15 @@ function TraitQuestionsEditor({
   onSaveQuizDesign,
   onSaveChatDesign,
   questions,
-  rubricFollowUps
+  rubricFollowUps,
+  form,
+  setForm,
+  isEditing,
+  experienceDraft,
+  generatingExperienceDraft,
+  onGenerateExperienceDraft,
+  onApplyExperienceDraft,
+  onDiscardExperienceDraft
 }: {
   selectedTrait: Trait | null;
   lockReason: InteractionLockReason;
@@ -1049,6 +1067,20 @@ function TraitQuestionsEditor({
   onSaveChatDesign: (input: { chatQuestion1: string; chatQuestion2: string; rubricFollowUps: string }) => Promise<void>;
   questions: TraitQuestion[];
   rubricFollowUps: string;
+  form: TraitFormState;
+  setForm: React.Dispatch<React.SetStateAction<TraitFormState>>;
+  isEditing: boolean;
+  experienceDraft: {
+    publicLabel: string;
+    oneLineHook: string;
+    archetypeTag: ArchetypeTag;
+    displayIcon: string;
+    visualMood: TraitVisualMood;
+  } | null;
+  generatingExperienceDraft: boolean;
+  onGenerateExperienceDraft: (action: "generate" | "gen_z" | "simplify" | "aspirational") => void;
+  onApplyExperienceDraft: () => void;
+  onDiscardExperienceDraft: () => void;
 }) {
   const [tab, setTab] = useState<"quiz" | "chat">("quiz");
   const [savingQuiz, setSavingQuiz] = useState(false);
@@ -1155,6 +1187,19 @@ function TraitQuestionsEditor({
           <p className="font-medium text-slate-800">No trait selected</p>
           <p className="mt-1 text-xs text-slate-600">Select a trait to configure scoring and interview questions.</p>
         </div>
+      )}
+
+      {lockReason === "NONE" && (
+        <StudentFacingLabelEditor
+          form={form}
+          setForm={setForm}
+          isEditing={isEditing}
+          experienceDraft={experienceDraft}
+          generatingExperienceDraft={generatingExperienceDraft}
+          onGenerateExperienceDraft={onGenerateExperienceDraft}
+          onApplyExperienceDraft={onApplyExperienceDraft}
+          onDiscardExperienceDraft={onDiscardExperienceDraft}
+        />
       )}
 
       {lockReason === "NONE" && tab === "quiz" && (
@@ -2123,12 +2168,6 @@ export function TraitsPage() {
                 titleInputRef={titleInputRef}
                 actionableMissing={actionableMissing}
                 showActivationNotice={showActivationNotice}
-                isEditing={isEditing}
-                experienceDraft={experienceDraft}
-                generatingExperienceDraft={generatingExperienceDraft}
-                onGenerateExperienceDraft={(action) => void generateExperienceDraftWithAi(action)}
-                onApplyExperienceDraft={applyExperienceDraft}
-                onDiscardExperienceDraft={discardExperienceDraft}
               />
 
               <TraitScoringInterviewSection lockReason={interactionLockReason}>
@@ -2154,6 +2193,14 @@ export function TraitsPage() {
                   onSaveChatDesign={saveChatDesign}
                   questions={questions}
                   rubricFollowUps={form.rubricFollowUps}
+                  form={form}
+                  setForm={setForm}
+                  isEditing={isEditing}
+                  experienceDraft={experienceDraft}
+                  generatingExperienceDraft={generatingExperienceDraft}
+                  onGenerateExperienceDraft={(action) => void generateExperienceDraftWithAi(action)}
+                  onApplyExperienceDraft={applyExperienceDraft}
+                  onDiscardExperienceDraft={discardExperienceDraft}
                 />
               </TraitScoringInterviewSection>
 

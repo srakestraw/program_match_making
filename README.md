@@ -92,7 +92,7 @@ Deploy the widget app to AWS Amplify and add custom domain `program.gravytylabs.
 
 The script will:
 
-1. Create an Amplify app (or reuse existing `pmm-widget`), create branch `main` if needed.
+1. Create an Amplify app (or reuse existing **Program Match Making**), create branch `main` if needed.
 2. Build the widget, zip `apps/widget/dist`, and deploy via Amplify manual deployment APIs.
 3. Associate domain `gravytylabs.com` with subdomain `program` → branch `main`.
 4. Look up the Route 53 hosted zone for `gravytylabs.com` and add a **CNAME** record: `program.gravytylabs.com` → Amplify’s target.
@@ -130,6 +130,26 @@ After running, wait for the Amplify job to complete and for DNS/SSL propagation;
    aws amplify get-domain-association --app-id <APP_ID> --domain-name gravytylabs.com --query 'domainAssociation.{domainStatus:domainStatus,subDomains:subDomains}'
    ```
    If `domainStatus` is not `AVAILABLE` or the `program` subdomain is not verified, wait for certificate/DNS propagation (often 5–30 min) or fix the CNAME in Route 53 to match the `dnsRecord` value Amplify shows for that subdomain.
+
+### Connect Amplify app to GitHub
+
+To have the **Program Match Making** app (e.g. `d24xgu7n65zabj`) build from GitHub on push instead of only manual zip deploys:
+
+1. **Install Amplify GitHub App** (one-time): Open [Amplify Console](https://console.aws.amazon.com/amplify/) → **New app** → **Host web app** → **GitHub** → **Continue**. When GitHub asks, install the **AWS Amplify** app for your region (e.g. [us-east-1](https://github.com/apps/aws-amplify-us-east-1)) and grant access to `srakestraw/program_match_making` (or **All repositories**). You can cancel after the GitHub App is installed; you don’t have to finish creating a new app.
+
+2. **Connect the existing app**: In Amplify Console, open the **Program Match Making** app → **Hosting** (left nav). Under **Connect branch**, choose **Connect branch** (or **Connect repository**). Select **GitHub**, authorize if needed, then pick repository **srakestraw/program_match_making** and branch **main** → **Next** → **Save**. Amplify will use the repo’s `amplify.yml` at the root.
+
+3. **Monorepo env var**: In the app → **Hosting** → **Build settings** (or **Environment variables**), add **AMPLIFY_MONOREPO_APP_ROOT** = `apps/widget`.
+
+4. **Optional – production API**: Add **VITE_API_URL** = your server URL (e.g. `https://api.gravytylabs.com`) so the widget calls the right API.
+
+The repo includes `amplify.yml` that runs `pnpm install` and `pnpm --filter @pmm/widget build` and publishes `apps/widget/dist`. After connecting, pushes to `main` trigger a build and deploy.
+
+**CLI alternative** (after the GitHub App is installed and you have a personal access token with `repo` scope):
+```bash
+aws amplify update-app --app-id d24xgu7n65zabj --repository https://github.com/srakestraw/program_match_making --access-token YOUR_GITHUB_TOKEN
+```
+Then in the Console, add the branch and set `AMPLIFY_MONOREPO_APP_ROOT=apps/widget`.
 
 ## Per-App Dev Commands
 - Server: `pnpm --filter @pmm/server dev`

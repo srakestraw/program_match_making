@@ -27,8 +27,9 @@ import { createLanguageUtterance } from "./lib/browserTts";
 import { ALL_LANGUAGE_OPTIONS, EXTRA_LANGUAGE_OPTIONS, PRIMARY_LANGUAGE_OPTIONS, languageLabelFromTag } from "./constants/languages";
 import { LanguagePills } from "./components/LanguagePills";
 import { LanguagePickerModal } from "./components/LanguagePickerModal";
-import { IllustrationsDemo } from "./components/illustrations/IllustrationsDemo";
 import { InterviewTypeIllustration } from "./components/illustrations/InterviewTypeIllustration";
+import { SwipeTransition } from "./components/quiz/SwipeTransition";
+import { SurpriseAnimationLayer, pickSurpriseVariant } from "./components/quiz/SurpriseAnimationLayer";
 import "./styles.css";
 
 const queryClient = new QueryClient();
@@ -39,7 +40,7 @@ type InterviewMode = "voice" | "chat" | "quiz";
 const modeOptions: Array<{ id: InterviewMode; label: string; description: string }> = [
   { id: "voice", label: "Voice", description: "Live conversational interview" },
   { id: "chat", label: "Chat", description: "Trait-driven text interview" },
-  { id: "quiz", label: "Quiz", description: "Structured trait questions" }
+  { id: "quiz", label: "Quiz", description: "Swipe through quick questions" }
 ];
 
 const parseModeParam = (value: string | null): InterviewMode | null => {
@@ -51,6 +52,30 @@ const transcriptId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const interestOnboardingPrompt =
   "Before we begin trait matching, what are you most interested in studying and what skills do you most enjoy using?";
+
+const formatTraitKickoffPrefix = (nextQuestion: { traitName?: string }, prefetchedQuestions?: Array<{ traitName?: string }>) => {
+  const traitNames = Array.from(
+    new Set(
+      [nextQuestion.traitName, ...(prefetchedQuestions ?? []).map((question) => question.traitName)]
+        .map((name) => (name ?? "").trim())
+        .filter((name) => name.length > 0)
+    )
+  ).slice(0, 3);
+
+  if (traitNames.length === 0) {
+    return "Thanks. I heard your interests and skills. Let us begin trait matching.";
+  }
+
+  if (traitNames.length === 1) {
+    return `Thanks. I heard your interests and skills. We will start by evaluating ${traitNames[0]}.`;
+  }
+
+  if (traitNames.length === 2) {
+    return `Thanks. I heard your interests and skills. We will start by evaluating ${traitNames[0]} and ${traitNames[1]}.`;
+  }
+
+  return `Thanks. I heard your interests and skills. We will start by evaluating ${traitNames[0]}, ${traitNames[1]}, and ${traitNames[2]}.`;
+};
 
 const defaultWidgetThemeTokens: WidgetTheme["tokens"] = {
   fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif",
@@ -112,13 +137,29 @@ const useOnlineStatus = () => {
   return isOnline;
 };
 
+const usePrefersReducedMotion = () => {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const sync = () => setPrefersReducedMotion(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
+  return prefersReducedMotion;
+};
+
 const LiveInsightsSidebar = ({
   snapshot,
   programFit,
   activeTraitId,
   done = false,
   onActiveTraitAction,
-  activeTraitActionPending
+  activeTraitActionPending,
+  updatingMatches = false,
+  reducedMotion = false,
+  rankingPulseToken = null
 }: {
   snapshot: ScoringSnapshot | null;
   programFit: ProgramFit | null;
@@ -126,6 +167,9 @@ const LiveInsightsSidebar = ({
   done?: boolean;
   onActiveTraitAction?: (action: "continue" | "deepen") => void;
   activeTraitActionPending?: boolean;
+  updatingMatches?: boolean;
+  reducedMotion?: boolean;
+  rankingPulseToken?: number | null;
 }) => (
   <aside className="space-y-3">
     <TraitScorePanel
@@ -135,7 +179,14 @@ const LiveInsightsSidebar = ({
       onActiveTraitAction={onActiveTraitAction}
       actionPending={activeTraitActionPending}
     />
-    <ProgramFloatField programs={programFit?.programs ?? []} selectedProgramId={programFit?.selectedProgramId ?? null} done={done} />
+    <ProgramFloatField
+      programs={programFit?.programs ?? []}
+      selectedProgramId={programFit?.selectedProgramId ?? null}
+      done={done}
+      updatingMatches={updatingMatches}
+      reducedMotion={reducedMotion}
+      pulseToken={rankingPulseToken}
+    />
   </aside>
 );
 
@@ -262,12 +313,12 @@ const WidgetSetup = () => {
                       ref={(element) => {
                         modeButtonRefs.current[mode.id] = element;
                       }}
-                      className={`relative z-10 rounded-md border p-3 text-left transition ${isSelected ? "mode-option-selected border-slate-900 bg-slate-100 ring-1 ring-slate-900/10" : "border-slate-200 bg-white hover:border-slate-300"} ${prefersReducedMotion ? "motion-reduce:transition-none" : "duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}
+                      className={`interview-type-option relative z-10 rounded-md border p-3 text-left transition ${isSelected ? "mode-option-selected border-slate-900 bg-slate-100 ring-1 ring-slate-900/10" : "border-slate-200 bg-white hover:border-slate-300"} ${mode.id === "quiz" ? "interview-type-option-quiz" : ""} ${prefersReducedMotion ? "motion-reduce:transition-none" : "duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}
                       onClick={() => setSelectedMode(mode.id)}
                     >
                       <div className="flex items-start gap-3">
                         <div className="mode-option-ill-wrap" aria-hidden="true">
-                          <InterviewTypeIllustration type={mode.id} size={44} />
+                          <InterviewTypeIllustration type={mode.id} size={44} quizVariant="ghost" />
                         </div>
                         <div className="min-w-0 flex-1 space-y-1">
                           <div className="flex items-start justify-between gap-2">
@@ -309,7 +360,6 @@ const WidgetSetup = () => {
             Start
           </Button>
 
-          {import.meta.env.DEV && <IllustrationsDemo />}
         </section>
       </Card>
     </main>
@@ -333,6 +383,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
   const [debugVoiceEnabled, setDebugVoiceEnabled] = useState(false);
 
   const realtimeSessionRef = useRef<RealtimeSession | null>(null);
+  const onTranscriptTurnRef = useRef<((turn: TranscriptTurn) => Promise<void>) | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const lastCandidateTurnIdRef = useRef<string | null>(null);
@@ -614,6 +665,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
       setProgramFit(result.program_fit);
       setAnsweredTraitCount(result.answeredTraitCount);
       setCheckpoint(result.checkpoint);
+      const wasCollectingPreferences = collectingPreferences;
       if (collectingPreferences) {
         setCollectingPreferences(false);
       }
@@ -623,7 +675,10 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
         return;
       }
       if (result.nextQuestion) {
-        await pushAssistantQuestion(result.nextQuestion);
+        const kickoffPrefix = wasCollectingPreferences
+          ? formatTraitKickoffPrefix(result.nextQuestion, result.prefetchedQuestions)
+          : undefined;
+        await pushAssistantQuestion(result.nextQuestion, kickoffPrefix);
       } else {
         setVoicePhase("ended");
       }
@@ -632,6 +687,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
       setVoicePhase("error");
     }
   };
+  onTranscriptTurnRef.current = onTranscriptTurn;
 
   const startInterview = async () => {
     setError(null);
@@ -698,7 +754,11 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
           }
           transitionPhase("assistant_done");
         },
-        onTranscriptTurn
+        onTranscriptTurn: (turn) => {
+          const handler = onTranscriptTurnRef.current;
+          if (!handler) return;
+          void handler(turn);
+        }
       });
       realtimeSession.setAudioTrack(track);
       realtimeSessionRef.current = realtimeSession;
@@ -887,15 +947,6 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
                 </Button>
               </div>
             )}
-
-            <div className="max-h-72 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3">
-              {transcript.length === 0 && <p className="text-sm text-slate-500">Transcript appears as the conversation runs.</p>}
-              {transcript.map((turn) => (
-                <div key={`${turn.id}-${turn.ts}`} className="rounded bg-slate-50 p-2 text-sm">
-                  <span className="font-semibold capitalize">{turn.speaker}:</span> {turn.text}
-                </div>
-              ))}
-            </div>
 
             {checkpointOpen && checkpoint && (
               <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm">
@@ -1130,8 +1181,16 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; 
   const [started, setStarted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentQuestion, setCurrentQuestion] = useState<any>(null);
+  const [questionDirection, setQuestionDirection] = useState<"forward" | "back">("forward");
   const [collectingPreferences, setCollectingPreferences] = useState(false);
   const [preferenceInput, setPreferenceInput] = useState("");
+  const [selectedOption, setSelectedOption] = useState<string | null>(null);
+  const [selectionLocked, setSelectionLocked] = useState(false);
+  const [surpriseKey, setSurpriseKey] = useState<string | null>(null);
+  const [surpriseVariant, setSurpriseVariant] = useState<"confetti" | "spark" | "pulse" | "none">("none");
+  const [rankingUpdating, setRankingUpdating] = useState(false);
+  const [rankingPulseToken, setRankingPulseToken] = useState<number | null>(null);
+  const [streakMessage, setStreakMessage] = useState<string | null>(null);
   const [quizExperience, setQuizExperience] = useState<{
     headline: string;
     subheadline: string;
@@ -1140,6 +1199,7 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; 
   const [askedTraitIds, setAskedTraitIds] = useState<string[]>([]);
   const [askedQuestionIds, setAskedQuestionIds] = useState<string[]>([]);
   const isOnline = useOnlineStatus();
+  const prefersReducedMotion = usePrefersReducedMotion();
 
   const {
     sessionId,
@@ -1240,6 +1300,7 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; 
       setProgramFit(result.program_fit);
       setCollectingPreferences(false);
       if (result.nextQuestion) {
+        setQuestionDirection("forward");
         setCurrentQuestion(result.nextQuestion);
       } else {
         await api.completeSession(sessionId!);
@@ -1250,16 +1311,45 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; 
     }
   };
 
+  const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
   const selectAnswer = async (answer: string) => {
-    if (!currentQuestion) return;
+    if (!currentQuestion || selectionLocked || turnMutation.isPending) return;
+    const nextAnswerCount = askedQuestionIds.length + 1;
+    const triggerKey = `${sessionId ?? "local"}::${currentQuestion.id}::${answer}::${Date.now()}`;
+    const variant = pickSurpriseVariant(currentQuestion.id, sessionId ?? null, prefersReducedMotion);
+
+    setSelectedOption(answer);
+    setSelectionLocked(true);
+    setSurpriseKey(triggerKey);
+    setSurpriseVariant(variant);
+    if (nextAnswerCount % 3 === 0) {
+      setStreakMessage("Nice - you're on a roll.");
+      window.setTimeout(() => setStreakMessage(null), 900);
+    }
+
+    await wait(prefersReducedMotion ? 120 : 360);
+    setRankingUpdating(true);
+
     addTranscriptTurn({ id: transcriptId("candidate"), speaker: "candidate", text: answer, ts: new Date().toISOString() });
     setAskedTraitIds((prev) => [...prev, currentQuestion.traitId]);
     setAskedQuestionIds((prev) => [...prev, currentQuestion.id]);
+    const startedAt = Date.now();
     try {
       const result = await turnMutation.mutateAsync(answer);
+      const elapsed = Date.now() - startedAt;
+      const rankingDelayMs = prefersReducedMotion ? 0 : 480;
+      if (elapsed < rankingDelayMs) {
+        await wait(rankingDelayMs - elapsed);
+      }
+
       setScoringSnapshot(result.scoring_snapshot);
       setProgramFit(result.program_fit);
+      if (variant === "pulse" && !prefersReducedMotion) {
+        setRankingPulseToken(Date.now());
+      }
       if (result.nextQuestion) {
+        setQuestionDirection("forward");
         setCurrentQuestion(result.nextQuestion);
       } else {
         await api.completeSession(sessionId!);
@@ -1267,6 +1357,19 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; 
       }
     } catch (selectError) {
       setError(selectError instanceof Error ? selectError.message : "Could not submit quiz answer.");
+    } finally {
+      setRankingUpdating(false);
+      setSelectionLocked(false);
+      setSelectedOption(null);
+      if (prefersReducedMotion) {
+        setSurpriseKey(null);
+        setSurpriseVariant("none");
+      } else {
+        window.setTimeout(() => {
+          setSurpriseKey(null);
+          setSurpriseVariant("none");
+        }, 680);
+      }
     }
   };
 
@@ -1287,7 +1390,7 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; 
           <section className="space-y-4">
             <h2 className="text-2xl font-semibold">Quiz</h2>
             {!started && (
-              <div className="space-y-4 rounded-xl bg-gradient-to-br from-amber-100 via-orange-50 to-rose-100 p-4">
+              <div className="quiz-intro-panel space-y-4 rounded-xl p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">{quizExperience?.estimatedTimeLabel ?? "3-5 min"}</p>
                 <h3 className="text-2xl font-bold text-slate-900">{quizExperience?.headline ?? "Discover your best-fit graduate path"}</h3>
                 <p className="text-sm text-slate-700">{quizExperience?.subheadline ?? "A quick, personality-first quiz to see where you thrive."}</p>
@@ -1322,44 +1425,63 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; 
               </div>
             )}
             {started && currentQuestion && (
-              <>
-                <div key={currentQuestion.id} className="quiz-question-swap space-y-4">
+              <SwipeTransition activeKey={currentQuestion.id} direction={questionDirection} reducedMotion={prefersReducedMotion} className="space-y-4">
+                <div className="relative space-y-4">
+                  <SurpriseAnimationLayer triggerKey={surpriseKey} variant={surpriseVariant} reducedMotion={prefersReducedMotion} />
                   <div className="flex items-center justify-between">
                     <p className="text-xs uppercase tracking-wide text-slate-500">{traitDisplayName}</p>
-                    {progressLabel && <p className="text-xs font-semibold text-slate-600">Progress: {progressLabel}</p>}
+                    {progressLabel && <p className="quiz-progress-pill text-xs font-semibold">Progress: {progressLabel}</p>}
                   </div>
+                  {streakMessage && <p className="quiz-streak-badge text-xs font-semibold">{streakMessage}</p>}
                   {currentQuestion.narrativeIntro && <p className="text-sm text-slate-600">{currentQuestion.narrativeIntro}</p>}
                   <h3 className="text-lg font-semibold text-slate-900">{currentQuestion.prompt}</h3>
+                  <div className="grid gap-2">
+                    {currentQuestion.options.map((option: string) => {
+                      const isSelected = selectedOption === option;
+                      return (
+                        <button
+                          key={`${currentQuestion.id}-${option}`}
+                          type="button"
+                          className={`quiz-answer-card rounded-xl border px-4 py-3 text-left text-sm shadow-sm transition ${
+                            isSelected ? "quiz-answer-card-selected" : "quiz-answer-card-idle"
+                          } ${isSelected && surpriseVariant === "spark" && !prefersReducedMotion ? "quiz-answer-card-spark" : ""}`}
+                          onClick={() => void selectAnswer(option)}
+                          disabled={!isOnline || turnMutation.isPending || selectionLocked}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-semibold text-slate-900">{option}</p>
+                              {optionMetaByLabel.get(option)?.microCopy && (
+                                <p className="mt-1 text-xs text-slate-600">{optionMetaByLabel.get(option)?.microCopy}</p>
+                              )}
+                            </div>
+                            <div className="flex flex-col items-end gap-1">
+                              <span className="quiz-option-chip rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase">
+                                {(optionMetaByLabel.get(option)?.iconToken ?? "spark").slice(0, 10)}
+                              </span>
+                              <span className={`quiz-option-check ${isSelected ? "quiz-option-check-visible" : ""}`} aria-hidden="true">
+                                ✓
+                              </span>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-                <div className="grid gap-2">
-                  {currentQuestion.options.map((option: string) => (
-                    <button
-                      key={`${currentQuestion.id}-${option}`}
-                      type="button"
-                      className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-left text-sm shadow-sm transition hover:-translate-y-0.5 hover:border-slate-900"
-                      onClick={() => void selectAnswer(option)}
-                      disabled={!isOnline || turnMutation.isPending}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="font-semibold text-slate-900">{option}</p>
-                          {optionMetaByLabel.get(option)?.microCopy && (
-                            <p className="mt-1 text-xs text-slate-600">{optionMetaByLabel.get(option)?.microCopy}</p>
-                          )}
-                        </div>
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-600">
-                          {(optionMetaByLabel.get(option)?.iconToken ?? "spark").slice(0, 10)}
-                        </span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </>
+              </SwipeTransition>
             )}
             {error && <p className="text-sm text-red-700">{error}</p>}
           </section>
         </Card>
-        <LiveInsightsSidebar snapshot={scoringSnapshot} programFit={programFit} activeTraitId={currentQuestion?.traitId ?? null} />
+        <LiveInsightsSidebar
+          snapshot={scoringSnapshot}
+          programFit={programFit}
+          activeTraitId={currentQuestion?.traitId ?? null}
+          updatingMatches={rankingUpdating}
+          reducedMotion={prefersReducedMotion}
+          rankingPulseToken={rankingPulseToken}
+        />
       </div>
     </main>
   );

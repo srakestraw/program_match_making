@@ -797,6 +797,23 @@ export const handleInterviewTurn = async (input: {
       });
     }
     const context = await loadProgramContext({ mode: input.mode, programFilterIds: input.programFilterIds });
+    const questionTraitId = input.questionId
+      ? [...context.traitMeta.entries()].find(([, meta]) => meta.questions.some((question) => question.id === input.questionId))?.[0] ?? null
+      : null;
+    const effectiveTraitId = questionTraitId ?? input.traitId ?? null;
+    const askedTraitIds = unique([...(input.askedTraitIds ?? []), ...(effectiveTraitId ? [effectiveTraitId] : [])]);
+    const askedQuestionIds = unique([...(input.askedQuestionIds ?? []), ...(input.questionId ? [input.questionId] : [])]);
+
+    if (input.traitId && questionTraitId && input.traitId !== questionTraitId) {
+      log("warn", "interview.turn.trait_question_mismatch", {
+        sessionId: input.sessionId,
+        mode: input.mode,
+        traitId: input.traitId,
+        questionId: input.questionId,
+        questionTraitId
+      });
+    }
+
     const previousTraitStates = await loadTraitStates(input.sessionId, context.traitMeta);
     const previousProgramFit = buildProgramFit({
       programs: context.programs,
@@ -814,11 +831,11 @@ export const handleInterviewTurn = async (input: {
       }
     });
 
-    if (input.traitId) {
-      const existing = previousTraitStates.find((item) => item.traitId === input.traitId);
+    if (effectiveTraitId) {
+      const existing = previousTraitStates.find((item) => item.traitId === effectiveTraitId);
       const nextState = scoreTraitFromTurn({
         answer: input.text,
-        traitId: input.traitId,
+        traitId: effectiveTraitId,
         questionId: input.questionId,
         mode: input.mode,
         traitMeta: context.traitMeta,
@@ -837,7 +854,7 @@ export const handleInterviewTurn = async (input: {
           where: {
             sessionId_traitId: {
               sessionId: input.sessionId,
-              traitId: input.traitId
+              traitId: effectiveTraitId
             }
           },
           update: {
@@ -848,7 +865,7 @@ export const handleInterviewTurn = async (input: {
           },
           create: {
             sessionId: input.sessionId,
-            traitId: input.traitId,
+            traitId: effectiveTraitId,
             score0to5: nextState.score0to5,
             confidence0to1: nextState.confidence0to1,
             evidenceJson: JSON.stringify({ evidence: nextState.evidence }),
@@ -870,8 +887,8 @@ export const handleInterviewTurn = async (input: {
       traitMeta: context.traitMeta,
       traitStates,
       programs: context.programs,
-      recentTraitIds: input.askedTraitIds,
-      askedQuestionIds: input.askedQuestionIds,
+      recentTraitIds: askedTraitIds,
+      askedQuestionIds,
       preferredTraitIds: prioritizedTraitIds.length > 0 ? prioritizedTraitIds : undefined
     });
 
@@ -928,11 +945,17 @@ export const handleInterviewTurn = async (input: {
       output: {
         answeredTraitCount,
         checkpointRequired: Boolean(checkpoint?.required),
-        nextQuestionId: result.nextQuestion?.id ?? null
+        nextQuestionId: result.nextQuestion?.id ?? null,
+        nextQuestionTraitId: result.nextQuestion?.traitId ?? null,
+        effectiveTraitId,
+        questionTraitId
       },
       metadata: {
         durationMs: Date.now() - startedAt,
-        inferredPreferredTraitCount: inferredPreferredTraitIds.length
+        inferredPreferredTraitCount: inferredPreferredTraitIds.length,
+        inferredPreferredTraitIds,
+        traitQuestionMismatch:
+          Boolean(input.traitId) && Boolean(questionTraitId) && input.traitId !== questionTraitId
       }
     });
     spanClosed = true;

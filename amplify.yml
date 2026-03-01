@@ -1,0 +1,26 @@
+# AWS Amplify build spec for Program Match Making widget (monorepo).
+# Requires: AMPLIFY_MONOREPO_APP_ROOT = apps/widget (in Amplify Console env vars).
+# Optional: VITE_API_URL = https://your-api.example.com
+# Repo must have .npmrc with node-linker=hoisted for pnpm (see Amplify pnpm monorepo docs).
+version: 1
+applications:
+  - appRoot: apps/widget
+    frontend:
+      buildPath: /
+      phases:
+        preBuild:
+          commands:
+            - corepack enable && corepack prepare pnpm@latest --activate
+            - pnpm install --frozen-lockfile
+        build:
+          commands:
+            - pnpm --filter @pmm/widget build
+      artifacts:
+        baseDirectory: apps/widget/dist
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - node_modules/**/*
+          - apps/widget/node_modules/**/*
+          - packages/*/node_modules/**/*

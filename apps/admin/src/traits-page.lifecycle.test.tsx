@@ -696,8 +696,11 @@ describe("TraitsPage lifecycle UX", () => {
 
     renderPage();
     await screen.findByText("Guidance Trait");
+    await user.click(screen.getByTestId("trait-row-t1"));
 
-    const studentFacingSummary = screen.getByText("Student-Facing Label", { selector: "summary" });
+    const interactionSection = screen.getByRole("heading", { name: "Interaction Design" }).closest("section");
+    expect(interactionSection).toBeTruthy();
+    const studentFacingSummary = within(interactionSection!).getByText("Student-Facing Label", { selector: "summary" });
     await user.click(studentFacingSummary);
     const advancedSummary = await screen.findByText("Advanced (Optional - visuals + grouping)", { selector: "summary" });
     await user.click(advancedSummary);
