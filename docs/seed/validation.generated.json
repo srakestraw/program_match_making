@@ -1,0 +1,442 @@
+{
+  "pass": true,
+  "checks": {
+    "bucketCountsByProgram": [
+      {
+        "programName": "Interdisciplinary Studies: Accounting and Data Science Concentration, Master of",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "Master of Interdisciplinary Studies (Actuarial Science, Artificial Intelligence and Information Systems Concentration)",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "Master of Actuarial Science",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "Commercial Real Estate, M.S.",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "Executive MBA",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "Finance, M.S.",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "Health Administration, M.S.",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "Information Systems, M.S.",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "International Business, Master of",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "J.D. & Master of Science in Health Administration",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "J.D. & Master of Professional Accountancy",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "J.D. & Master of Business Administration & Master of Health Administration",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "J.D. & M.S.A. in Data Science and Analytics",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "Marketing, M.S.",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "MBA",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "MBA/Master of Health Administration",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "Professional Accountancy, Master of (Cohort)",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "Quantitative Risk Analysis & Management, M.S.",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "Supply Chain Management, M.S.",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      },
+      {
+        "programName": "Data Science and Analytics, M.S.A.",
+        "counts": {
+          "CRITICAL": 2,
+          "VERY_IMPORTANT": 1,
+          "IMPORTANT": 1,
+          "NICE_TO_HAVE": 1
+        },
+        "total": 5,
+        "pass": true
+      }
+    ],
+    "duplicateTraitNames": [],
+    "duplicateProgramTraitPairs": [],
+    "traitUsageFrequency": [
+      {
+        "traitName": "Accounting & Financial Reporting",
+        "count": 3
+      },
+      {
+        "traitName": "Analytical & Quantitative Reasoning",
+        "count": 6
+      },
+      {
+        "traitName": "Applied AI & Automation",
+        "count": 7
+      },
+      {
+        "traitName": "Cybersecurity & Privacy Governance",
+        "count": 1
+      },
+      {
+        "traitName": "Data Analytics & Visualization",
+        "count": 7
+      },
+      {
+        "traitName": "Financial Decision-Making",
+        "count": 7
+      },
+      {
+        "traitName": "Global & Cross-Cultural Agility",
+        "count": 2
+      },
+      {
+        "traitName": "Healthcare Systems Literacy",
+        "count": 4
+      },
+      {
+        "traitName": "Innovation & Entrepreneurial Drive",
+        "count": 3
+      },
+      {
+        "traitName": "Leadership & Team Direction",
+        "count": 6
+      },
+      {
+        "traitName": "Legal Reasoning",
+        "count": 4
+      },
+      {
+        "traitName": "Market & Customer Insight",
+        "count": 1
+      },
+      {
+        "traitName": "Operations & Supply Chain Orientation",
+        "count": 2
+      },
+      {
+        "traitName": "Real Estate Investment Analysis",
+        "count": 1
+      },
+      {
+        "traitName": "Regulatory & Ethical Judgment",
+        "count": 9
+      },
+      {
+        "traitName": "Risk Assessment & Management",
+        "count": 4
+      },
+      {
+        "traitName": "Stakeholder Communication",
+        "count": 14
+      },
+      {
+        "traitName": "Statistical Modeling",
+        "count": 6
+      },
+      {
+        "traitName": "Strategic Business Acumen",
+        "count": 9
+      },
+      {
+        "traitName": "Technology Systems Thinking",
+        "count": 4
+      }
+    ],
+    "traitsUsedOnce": [
+      "Cybersecurity & Privacy Governance",
+      "Market & Customer Insight",
+      "Real Estate Investment Analysis"
+    ],
+    "questionCountByTrait": [
+      {
+        "traitName": "Analytical & Quantitative Reasoning",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Statistical Modeling",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Data Analytics & Visualization",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Applied AI & Automation",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Accounting & Financial Reporting",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Financial Decision-Making",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Risk Assessment & Management",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Regulatory & Ethical Judgment",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Healthcare Systems Literacy",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Legal Reasoning",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Leadership & Team Direction",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Strategic Business Acumen",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Stakeholder Communication",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Technology Systems Thinking",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Cybersecurity & Privacy Governance",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Global & Cross-Cultural Agility",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Operations & Supply Chain Orientation",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Market & Customer Insight",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Innovation & Entrepreneurial Drive",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      },
+      {
+        "traitName": "Real Estate Investment Analysis",
+        "chatCount": 2,
+        "quizCount": 1,
+        "pass": true
+      }
+    ]
+  },
+  "summary": [
+    "PASS",
+    "Traits used once: Cybersecurity & Privacy Governance, Market & Customer Insight, Real Estate Investment Analysis"
+  ]
+}

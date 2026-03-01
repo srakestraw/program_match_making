@@ -138,6 +138,14 @@ enum WidgetThemeSource {
   PRESET
 }
 
+enum QuizExperiencePreset {
+  ADMISSIONS_MARKETING
+  EXECUTIVE_MBA
+  GEN_Z_SOCIAL
+  TRADITIONAL_ACADEMIC
+  EXPERIMENTAL_AI
+}
+
 model Candidate {
   id               String            @id @default(cuid())
   firstName        String?
@@ -272,6 +280,8 @@ model QuizExperienceConfig {
   motionIntensity    String   @default("MEDIUM")
   rankingMotionStyle String   @default("SPRING")
   revealStyle        String   @default("IDENTITY")
+  experiencePreset   QuizExperiencePreset?
+  experienceOverrides Json?
   introMediaPrompt   String?
   revealMediaPrompt  String?
   createdAt          DateTime @default(now())

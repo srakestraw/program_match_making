@@ -11,19 +11,13 @@ const prisma = new PrismaClient();
 async function run() {
   const traitResult = await prisma.trait.deleteMany({
     where: {
-      OR: [
-        { name: { startsWith: "Failure Trait " } },
-        { name: { startsWith: "Integration Trait " } }
-      ]
+      OR: [{ name: { startsWith: "Failure Trait " } }]
     }
   });
 
   const programResult = await prisma.program.deleteMany({
     where: {
-      OR: [
-        { name: { startsWith: "Failure Program " } },
-        { name: { startsWith: "Integration Program " } }
-      ]
+      OR: [{ name: { startsWith: "Failure Program " } }]
     }
   });
 

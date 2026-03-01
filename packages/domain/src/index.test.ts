@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   boardStateToProgramTraitRows,
+  QUIZ_EXPERIENCE_PRESETS,
   computeProgramStatus,
   computeTraitImpacts,
   generateBrandVoicePreview,
   isProgramDraft,
   pickNextTrait,
   rankProgramsByTraits,
+  resolveQuizExperienceConfig,
   scoreCandidateSession,
   shouldTriggerCheckpoint
 } from "./index.js";
@@ -249,5 +251,52 @@ describe("computeProgramStatus", () => {
   it("matches isProgramDraft helper", () => {
     expect(isProgramDraft({ degreeLevel: null, department: "Business" })).toBe(true);
     expect(isProgramDraft({ degreeLevel: "Masters", department: "Business" })).toBe(false);
+  });
+});
+
+describe("resolveQuizExperienceConfig", () => {
+  it("returns preset defaults when only preset is provided", () => {
+    const result = resolveQuizExperienceConfig("GEN_Z_SOCIAL", null, null);
+    expect(result).toEqual(QUIZ_EXPERIENCE_PRESETS.GEN_Z_SOCIAL);
+  });
+
+  it("applies overrides on top of preset defaults", () => {
+    const result = resolveQuizExperienceConfig("ADMISSIONS_MARKETING", {
+      revealStyle: "RANKED_LIST",
+      motionIntensity: "HIGH"
+    });
+
+    expect(result.revealStyle).toBe("RANKED_LIST");
+    expect(result.motionIntensity).toBe("HIGH");
+    expect(result.gradientSet).toBe(QUIZ_EXPERIENCE_PRESETS.ADMISSIONS_MARKETING.gradientSet);
+  });
+
+  it("supports overrides without a preset", () => {
+    const result = resolveQuizExperienceConfig(null, {
+      tonePreset: "PROFESSIONAL"
+    });
+    expect(result.tonePreset).toBe("PROFESSIONAL");
+  });
+
+  it("lets explicit fields override preset and overrides", () => {
+    const result = resolveQuizExperienceConfig(
+      "GEN_Z_SOCIAL",
+      {
+        tonePreset: "PLAYFUL"
+      },
+      {
+        tonePreset: "NEUTRAL"
+      }
+    );
+
+    expect(result.tonePreset).toBe("NEUTRAL");
+  });
+
+  it("restores preset defaults when overrides are cleared", () => {
+    const withOverrides = resolveQuizExperienceConfig("TRADITIONAL_ACADEMIC", { revealStyle: "IDENTITY" }, null);
+    const reset = resolveQuizExperienceConfig("TRADITIONAL_ACADEMIC", {}, null);
+
+    expect(withOverrides.revealStyle).toBe("IDENTITY");
+    expect(reset.revealStyle).toBe(QUIZ_EXPERIENCE_PRESETS.TRADITIONAL_ACADEMIC.revealStyle);
   });
 });

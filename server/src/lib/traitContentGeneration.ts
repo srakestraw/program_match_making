@@ -62,6 +62,41 @@ function ensureString(value: unknown): string {
   return "";
 }
 
+function extractResponsesJsonText(payload: unknown): string {
+  const topLevel = payload as { output_text?: unknown };
+  if (typeof topLevel.output_text === "string" && topLevel.output_text.trim()) {
+    return topLevel.output_text.trim();
+  }
+
+  const output = (payload as { output?: unknown }).output;
+  if (!Array.isArray(output)) {
+    return "";
+  }
+
+  for (const item of output) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const content = (item as { content?: unknown }).content;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+
+    for (const part of content) {
+      if (!part || typeof part !== "object") {
+        continue;
+      }
+      const text = (part as { text?: unknown }).text;
+      if (typeof text === "string" && text.trim()) {
+        return text.trim();
+      }
+    }
+  }
+
+  return "";
+}
+
 export async function generateTraitSignals(input: GenerateTraitSignalsInput): Promise<GenerateTraitSignalsOutput> {
   const apiKey = ensureApiKey();
   const categoryLabel = input.category.replace(/_/g, " ").toLowerCase();
@@ -271,10 +306,7 @@ export async function generateTraitExperienceDraft(
     throw new Error(`OPENAI_UPSTREAM: ${message}`);
   }
 
-  const jsonText =
-    (payload as { output_text?: unknown }).output_text && typeof (payload as { output_text?: unknown }).output_text === "string"
-      ? ((payload as { output_text: string }).output_text ?? "")
-      : "";
+  const jsonText = extractResponsesJsonText(payload);
 
   if (!jsonText) {
     throw new Error("Experience draft generation returned an invalid response");

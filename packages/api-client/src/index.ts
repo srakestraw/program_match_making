@@ -173,8 +173,24 @@ const quizExperienceConfigSchema = z.object({
   motionIntensity: z.enum(["LOW", "MEDIUM", "HIGH"]),
   rankingMotionStyle: z.string(),
   revealStyle: z.string(),
+  experiencePreset: z
+    .enum(["ADMISSIONS_MARKETING", "EXECUTIVE_MBA", "GEN_Z_SOCIAL", "TRADITIONAL_ACADEMIC", "EXPERIMENTAL_AI"])
+    .nullable()
+    .optional(),
+  experienceOverrides: z
+    .object({
+      gradientSet: z.string().optional(),
+      motionIntensity: z.enum(["LOW", "MEDIUM", "HIGH"]).optional(),
+      rankingMotionStyle: z.string().optional(),
+      revealStyle: z.string().optional(),
+      tonePreset: z.string().optional()
+    })
+    .nullable()
+    .optional(),
   introMediaPrompt: z.string().nullable(),
-  revealMediaPrompt: z.string().nullable()
+  revealMediaPrompt: z.string().nullable(),
+  createdAt: z.string().nullable().optional(),
+  updatedAt: z.string().nullable().optional()
 });
 
 const widgetThemeTokensSchema = z.object({
@@ -593,9 +609,10 @@ export const createApiClient = ({ baseUrl }: ApiClientConfig) => {
       sessionId: string,
       input: {
         mode: "voice" | "chat" | "quiz";
-        action: "stop" | "continue" | "focus";
+        action: "stop" | "continue" | "focus" | "deepen";
         language?: string;
         focusTraitIds?: string[];
+        currentTraitId?: string;
         askedTraitIds?: string[];
         askedQuestionIds?: string[];
         programFilterIds?: string[];

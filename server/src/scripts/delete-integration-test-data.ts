@@ -4,11 +4,11 @@
  *
  * Trait name prefixes (from test files):
  *   Lifecycle Incomplete, Lifecycle Review, Lifecycle Active, Lifecycle Draft,
- *   Quiz Trait A, Quiz Trait B, Integration Trait 1, Integration Trait 2,
+ *   Quiz Trait A, Quiz Trait B, Admin Trait 1, Admin Trait 2,
  *   Lead Trait, Failure Trait, Phone Trait, Question Contract Trait,
  *   SMS Trait, Inbound SMS Trait
  * Program name prefixes:
- *   Lifecycle Program, Quiz Program, Integration Program, Lead Program,
+ *   Lifecycle Program, Quiz Program, Admin Program, Lead Program,
  *   Failure Program, Phone Program, SMS Program, Inbound SMS Program
  */
 import { PrismaClient } from "@prisma/client";
@@ -27,8 +27,8 @@ const TRAIT_NAME_PREFIXES = [
   "Lifecycle Draft ",
   "Quiz Trait A ",
   "Quiz Trait B ",
-  "Integration Trait 1 ",
-  "Integration Trait 2 ",
+  "Admin Trait 1 ",
+  "Admin Trait 2 ",
   "Lead Trait ",
   "Failure Trait ",
   "Phone Trait ",
@@ -40,7 +40,7 @@ const TRAIT_NAME_PREFIXES = [
 const PROGRAM_NAME_PREFIXES = [
   "Lifecycle Program ",
   "Quiz Program ",
-  "Integration Program ",
+  "Admin Program ",
   "Lead Program ",
   "Failure Program ",
   "Phone Program ",

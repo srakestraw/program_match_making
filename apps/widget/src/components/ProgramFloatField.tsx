@@ -14,6 +14,18 @@ const confidenceLabel = (value?: number) => {
   return "Low";
 };
 
+const fitNarrativeLabel = (score: number) => {
+  if (score >= 80) return "High fit";
+  if (score >= 55) return "Strong alignment forming";
+  return "Alignment still forming";
+};
+
+const deltaNarrativeLabel = (delta: number) => {
+  if (delta > 0.25) return "Trending upward";
+  if (delta < -0.25) return "Rebalancing fit signals";
+  return "Holding steady";
+};
+
 export const ProgramFloatField = ({ programs, selectedProgramId, done = false }: ProgramFloatFieldProps) => {
   const [expandedProgramId, setExpandedProgramId] = useState<string | null>(null);
   const ranked = useMemo(() => [...programs].sort((a, b) => b.fitScore_0_to_100 - a.fitScore_0_to_100).slice(0, 3), [programs]);
@@ -49,7 +61,8 @@ export const ProgramFloatField = ({ programs, selectedProgramId, done = false }:
           const isSelected = selectedProgramId === program.programId;
           const confidencePct = Math.round((program.confidence_0_to_1 ?? 0) * 100);
           const delta = program.deltaFromLast_0_to_100 ?? 0;
-          const positiveDelta = delta > 0;
+          const fitNarrative = fitNarrativeLabel(program.fitScore_0_to_100);
+          const deltaNarrative = deltaNarrativeLabel(delta);
 
           return (
             <article
@@ -61,7 +74,7 @@ export const ProgramFloatField = ({ programs, selectedProgramId, done = false }:
                   <p className="text-sm font-semibold text-slate-900">
                     {index + 1}. {program.programName}
                   </p>
-                  <p className="text-xs text-slate-600">Score: {program.fitScore_0_to_100.toFixed(1)}%</p>
+                  <p className="text-xs font-semibold text-slate-700">{fitNarrative}</p>
                 </div>
                 <div className="text-right">
                   <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-700">
@@ -76,9 +89,8 @@ export const ProgramFloatField = ({ programs, selectedProgramId, done = false }:
                       {(rankDelta[program.programId] ?? 0) > 0 ? "▲" : "▼"} {Math.abs(rankDelta[program.programId] ?? 0)} rank
                     </p>
                   )}
-                  <p className={`mt-1 text-xs font-medium ${positiveDelta ? "text-emerald-700" : delta < 0 ? "text-rose-700" : "text-slate-500"}`}>
-                    Delta {positiveDelta ? "+" : ""}
-                    {delta.toFixed(1)}
+                  <p className={`mt-1 text-xs font-medium ${delta > 0.25 ? "text-emerald-700" : delta < -0.25 ? "text-rose-700" : "text-slate-500"}`}>
+                    {deltaNarrative}
                   </p>
                 </div>
               </div>

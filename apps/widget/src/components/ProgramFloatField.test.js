@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { ProgramFloatField } from "./ProgramFloatField";
 describe("ProgramFloatField", () => {
-    it("renders confidence, delta, and explainability content", () => {
+    it("renders confidence, narrative fit status, and explainability content", () => {
         render(_jsx(ProgramFloatField, { programs: [
                 {
                     programId: "p1",
@@ -20,7 +20,8 @@ describe("ProgramFloatField", () => {
                 }
             ] }));
         expect(screen.getByText("High 81%")).toBeInTheDocument();
-        expect(screen.getByText("Delta +3.2")).toBeInTheDocument();
+        expect(screen.getByText("High fit")).toBeInTheDocument();
+        expect(screen.getByText("Trending upward")).toBeInTheDocument();
         fireEvent.click(screen.getByText("Why this match?"));
         expect(screen.getByText("Top contributing traits")).toBeInTheDocument();
         expect(screen.getByText("Weak or missing traits")).toBeInTheDocument();

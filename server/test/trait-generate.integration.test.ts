@@ -12,6 +12,7 @@ dotenv.config({ path: path.resolve(__dirname, "../.env") });
 const findUniqueTraitMock = vi.fn();
 const generateTraitSignalsMock = vi.fn();
 const generateTraitQuestionsMock = vi.fn();
+const generateTraitExperienceDraftMock = vi.fn();
 
 vi.mock("../src/lib/prisma.js", () => ({
   prisma: {
@@ -23,7 +24,8 @@ vi.mock("../src/lib/prisma.js", () => ({
 
 vi.mock("../src/lib/traitContentGeneration.js", () => ({
   generateTraitSignals: (input: unknown) => generateTraitSignalsMock(input),
-  generateTraitQuestions: (input: unknown) => generateTraitQuestionsMock(input)
+  generateTraitQuestions: (input: unknown) => generateTraitQuestionsMock(input),
+  generateTraitExperienceDraft: (input: unknown) => generateTraitExperienceDraftMock(input)
 }));
 
 describe("POST /api/admin/traits/:id/generate-signals and generate-questions", () => {
@@ -31,6 +33,7 @@ describe("POST /api/admin/traits/:id/generate-signals and generate-questions", (
     findUniqueTraitMock.mockReset();
     generateTraitSignalsMock.mockReset();
     generateTraitQuestionsMock.mockReset();
+    generateTraitExperienceDraftMock.mockReset();
   });
 
   it("generate-signals returns generated signals shape", async () => {
@@ -127,5 +130,43 @@ describe("POST /api/admin/traits/:id/generate-signals and generate-questions", (
         ? response.body.error
         : (response.body.error as { message?: string })?.message ?? "";
     expect(errMsg).toMatch(/OPENAI_API_KEY|not configured/i);
+  });
+
+  it("experience-draft returns generated student-facing content", async () => {
+    findUniqueTraitMock.mockResolvedValue({
+      id: "trait-4",
+      name: "Collaboration",
+      definition: "Works well across teams.",
+      category: "TEAMWORK"
+    });
+    generateTraitExperienceDraftMock.mockResolvedValue({
+      publicLabel: "Team Connector",
+      oneLineHook: "Bring people together to solve hard problems.",
+      archetypeTag: "COMMUNICATOR",
+      displayIcon: "bridge",
+      visualMood: "PLAYFUL"
+    });
+
+    const { createApp } = await import("../src/app.js");
+    const app = createApp();
+
+    const response = await request(app)
+      .post("/api/admin/traits/trait-4/experience-draft")
+      .send({ action: "gen_z" });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual({
+      publicLabel: "Team Connector",
+      oneLineHook: "Bring people together to solve hard problems.",
+      archetypeTag: "COMMUNICATOR",
+      displayIcon: "bridge",
+      visualMood: "PLAYFUL"
+    });
+    expect(generateTraitExperienceDraftMock).toHaveBeenCalledWith({
+      action: "gen_z",
+      name: "Collaboration",
+      definition: "Works well across teams.",
+      category: "TEAMWORK"
+    });
   });
 });

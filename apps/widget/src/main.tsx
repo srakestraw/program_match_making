@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import {
   createBrowserRouter,
@@ -27,6 +27,8 @@ import { createLanguageUtterance } from "./lib/browserTts";
 import { ALL_LANGUAGE_OPTIONS, EXTRA_LANGUAGE_OPTIONS, PRIMARY_LANGUAGE_OPTIONS, languageLabelFromTag } from "./constants/languages";
 import { LanguagePills } from "./components/LanguagePills";
 import { LanguagePickerModal } from "./components/LanguagePickerModal";
+import { IllustrationsDemo } from "./components/illustrations/IllustrationsDemo";
+import { InterviewTypeIllustration } from "./components/illustrations/InterviewTypeIllustration";
 import "./styles.css";
 
 const queryClient = new QueryClient();
@@ -47,6 +49,8 @@ const parseModeParam = (value: string | null): InterviewMode | null => {
 
 const transcriptId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const interestOnboardingPrompt =
+  "Before we begin trait matching, what are you most interested in studying and what skills do you most enjoy using?";
 
 const defaultWidgetThemeTokens: WidgetTheme["tokens"] = {
   fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif",
@@ -112,15 +116,25 @@ const LiveInsightsSidebar = ({
   snapshot,
   programFit,
   activeTraitId,
-  done = false
+  done = false,
+  onActiveTraitAction,
+  activeTraitActionPending
 }: {
   snapshot: ScoringSnapshot | null;
   programFit: ProgramFit | null;
   activeTraitId?: string | null;
   done?: boolean;
+  onActiveTraitAction?: (action: "continue" | "deepen") => void;
+  activeTraitActionPending?: boolean;
 }) => (
   <aside className="space-y-3">
-    <TraitScorePanel traits={snapshot?.traits ?? []} activeTraitId={activeTraitId ?? null} done={done} />
+    <TraitScorePanel
+      traits={snapshot?.traits ?? []}
+      activeTraitId={activeTraitId ?? null}
+      done={done}
+      onActiveTraitAction={onActiveTraitAction}
+      actionPending={activeTraitActionPending}
+    />
     <ProgramFloatField programs={programFit?.programs ?? []} selectedProgramId={programFit?.selectedProgramId ?? null} done={done} />
   </aside>
 );
@@ -133,6 +147,14 @@ const WidgetSetup = () => {
   const programFilterIds = queryProgramId ? [queryProgramId] : [];
   const [selectedMode, setSelectedMode] = useState<InterviewMode | null>(queryMode);
   const [started, setStarted] = useState(false);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  const [selectorRailRect, setSelectorRailRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const modeGridRef = useRef<HTMLDivElement | null>(null);
+  const modeButtonRefs = useRef<Record<InterviewMode, HTMLButtonElement | null>>({
+    voice: null,
+    chat: null,
+    quiz: null
+  });
 
   const clear = useWidgetStore((state) => state.clear);
   const setMode = useWidgetStore((state) => state.setMode);
@@ -142,6 +164,59 @@ const WidgetSetup = () => {
   useEffect(() => {
     if (queryMode) setSelectedMode(queryMode);
   }, [queryMode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const syncPreference = () => setPrefersReducedMotion(media.matches);
+    syncPreference();
+    media.addEventListener("change", syncPreference);
+    return () => media.removeEventListener("change", syncPreference);
+  }, []);
+
+  const positionSelectorRail = useCallback(() => {
+    if (lockMode || !selectedMode) {
+      setSelectorRailRect(null);
+      return;
+    }
+    const gridEl = modeGridRef.current;
+    const buttonEl = modeButtonRefs.current[selectedMode];
+    if (!gridEl || !buttonEl) return;
+    const gridRect = gridEl.getBoundingClientRect();
+    const buttonRect = buttonEl.getBoundingClientRect();
+    setSelectorRailRect({
+      x: buttonRect.left - gridRect.left - 1,
+      y: buttonRect.top - gridRect.top - 1,
+      width: buttonRect.width + 2,
+      height: buttonRect.height + 2
+    });
+  }, [lockMode, selectedMode]);
+
+  useLayoutEffect(() => {
+    positionSelectorRail();
+  }, [positionSelectorRail]);
+
+  useEffect(() => {
+    if (lockMode) return;
+    const gridEl = modeGridRef.current;
+    if (!gridEl) return;
+    const onResize = () => positionSelectorRail();
+    window.addEventListener("resize", onResize);
+
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(onResize);
+      observer.observe(gridEl);
+      Object.values(modeButtonRefs.current).forEach((button) => {
+        if (button) observer?.observe(button);
+      });
+    }
+
+    return () => {
+      window.removeEventListener("resize", onResize);
+      observer?.disconnect();
+    };
+  }, [lockMode, positionSelectorRail]);
 
   const canStart = Boolean(selectedMode);
 
@@ -165,18 +240,50 @@ const WidgetSetup = () => {
           {!lockMode && (
             <div className="space-y-2">
               <p className="text-sm font-semibold text-slate-800">Interview type</p>
-              <div className="grid gap-2 sm:grid-cols-3">
-                {modeOptions.map((mode) => (
-                  <button
-                    key={mode.id}
-                    type="button"
-                    className={`rounded-md border p-3 text-left ${selectedMode === mode.id ? "border-slate-900 bg-slate-100" : "border-slate-200"}`}
-                    onClick={() => setSelectedMode(mode.id)}
-                  >
-                    <p className="text-sm font-semibold text-slate-900">{mode.label}</p>
-                    <p className="text-xs text-slate-600">{mode.description}</p>
-                  </button>
-                ))}
+              <div ref={modeGridRef} className="relative grid gap-2 sm:grid-cols-3">
+                {selectorRailRect && (
+                  <div
+                    aria-hidden="true"
+                    className={`selector-rail ${prefersReducedMotion ? "selector-rail-reduced-motion" : "selector-rail-animated"}`}
+                    style={{
+                      width: selectorRailRect.width,
+                      height: selectorRailRect.height,
+                      transform: `translate(${selectorRailRect.x}px, ${selectorRailRect.y}px)`
+                    }}
+                  />
+                )}
+                {modeOptions.map((mode) => {
+                  const isSelected = selectedMode === mode.id;
+                  return (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      aria-pressed={isSelected}
+                      ref={(element) => {
+                        modeButtonRefs.current[mode.id] = element;
+                      }}
+                      className={`relative z-10 rounded-md border p-3 text-left transition ${isSelected ? "mode-option-selected border-slate-900 bg-slate-100 ring-1 ring-slate-900/10" : "border-slate-200 bg-white hover:border-slate-300"} ${prefersReducedMotion ? "motion-reduce:transition-none" : "duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}
+                      onClick={() => setSelectedMode(mode.id)}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="mode-option-ill-wrap" aria-hidden="true">
+                          <InterviewTypeIllustration type={mode.id} size={44} />
+                        </div>
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-sm font-semibold text-slate-900">{mode.label}</p>
+                            {isSelected && (
+                              <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                                Selected
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-600">{mode.description}</p>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -201,6 +308,8 @@ const WidgetSetup = () => {
           >
             Start
           </Button>
+
+          {import.meta.env.DEV && <IllustrationsDemo />}
         </section>
       </Card>
     </main>
@@ -213,6 +322,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
   const [transportState, setTransportState] = useState<ConnectionState>("idle");
   const [deviceLabel, setDeviceLabel] = useState("Unknown microphone");
   const [currentQuestion, setCurrentQuestion] = useState<any>(null);
+  const [collectingPreferences, setCollectingPreferences] = useState(false);
   const [askedTraitIds, setAskedTraitIds] = useState<string[]>([]);
   const [askedQuestionIds, setAskedQuestionIds] = useState<string[]>([]);
   const [checkpointOpen, setCheckpointOpen] = useState(false);
@@ -229,6 +339,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
   const kickoffStartedRef = useRef(false);
   const realtimeSpeechFallbackTimerRef = useRef<number | null>(null);
   const realtimeAssistantStartedRef = useRef(false);
+  const intentionalDisconnectRef = useRef(false);
   const isOnline = useOnlineStatus();
 
   const {
@@ -274,6 +385,8 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
     realtimeSessionRef.current?.setPushToTalk(active);
     debugVoice("mic", { enabled: active, inputMode: voiceInputMode, phase: voicePhase });
   };
+
+  const isLiveInterviewPhase = (phase: VoicePhase) => ["kickoff", "speaking", "listening", "thinking"].includes(phase);
 
   useEffect(() => {
     setMode(mode);
@@ -347,12 +460,13 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
       })
   });
   const checkpointMutation = useMutation({
-    mutationFn: (action: "stop" | "continue" | "focus") =>
+    mutationFn: (action: "stop" | "continue" | "focus" | "deepen") =>
       api.submitInterviewCheckpoint(sessionIdRef.current!, {
         mode,
         action,
         language: sessionLanguageTag,
         focusTraitIds: action === "focus" ? checkpoint?.suggestedTraitIds : undefined,
+        currentTraitId: currentQuestion?.traitId,
         askedTraitIds,
         askedQuestionIds,
         programFilterIds: programFilterIds.length > 0 ? programFilterIds : undefined
@@ -433,7 +547,18 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
     setCheckpoint(interview.checkpoint ?? null);
     setAnsweredTraitCount(interview.answeredTraitCount ?? 0);
     if (interview.nextQuestion) {
-      await pushAssistantQuestion(interview.nextQuestion, interview.initialPrompt);
+      const onboardingText = interview.initialPrompt ? `${interview.initialPrompt} ${interestOnboardingPrompt}` : interestOnboardingPrompt;
+      setCurrentQuestion(null);
+      setCollectingPreferences(true);
+      addTranscriptTurn({ id: transcriptId("assistant"), speaker: "assistant", text: onboardingText, ts: new Date().toISOString() });
+      if (sessionIdRef.current) {
+        void appendTranscriptMutation.mutateAsync({
+          id: sessionIdRef.current,
+          turns: [{ ts: new Date().toISOString(), speaker: "assistant", text: onboardingText }]
+        });
+      }
+      transitionPhase("kickoff_ready");
+      speakPrompt(onboardingText);
       return;
     }
     if (interview.initialPrompt) {
@@ -489,6 +614,9 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
       setProgramFit(result.program_fit);
       setAnsweredTraitCount(result.answeredTraitCount);
       setCheckpoint(result.checkpoint);
+      if (collectingPreferences) {
+        setCollectingPreferences(false);
+      }
       if (result.checkpoint?.required) {
         setCheckpointOpen(true);
         setVoicePhase("paused");
@@ -533,14 +661,18 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
       if (!id) throw new Error("Session id missing");
       setSessionId(id);
       sessionIdRef.current = id;
+      intentionalDisconnectRef.current = false;
       debugVoice("session.ready", { sessionId: id });
 
       const realtimeSession = new RealtimeSession({
         onStateChange: (state) => {
           setTransportState(state);
           debugVoice("transport.state", { state });
-          if (state === "disconnected" && isConnectedPhase(useWidgetStore.getState().voicePhase)) {
-            setError("Connection dropped. Retry connection.");
+          if (state === "connected") {
+            intentionalDisconnectRef.current = false;
+          }
+          if (state === "disconnected" && isLiveInterviewPhase(useWidgetStore.getState().voicePhase) && !intentionalDisconnectRef.current) {
+            setError("Connection dropped. Please restart the interview when ready.");
             setVoicePhase("error");
           }
         },
@@ -585,7 +717,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
     }
   };
 
-  const handleCheckpointAction = async (action: "stop" | "continue" | "focus") => {
+  const handleCheckpointAction = async (action: "stop" | "continue" | "focus" | "deepen") => {
     try {
       const response = await checkpointMutation.mutateAsync(action);
       setScoringSnapshot(response.scoring_snapshot);
@@ -614,6 +746,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
         realtimeSpeechFallbackTimerRef.current = null;
       }
       window.speechSynthesis?.cancel();
+      intentionalDisconnectRef.current = true;
       await realtimeSessionRef.current?.disconnect();
       if (sessionIdRef.current) await api.completeSession(sessionIdRef.current);
     } catch {
@@ -625,6 +758,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
   };
 
   const resetFlow = async () => {
+    intentionalDisconnectRef.current = true;
     await realtimeSessionRef.current?.disconnect();
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
     if (realtimeSpeechFallbackTimerRef.current !== null) {
@@ -637,6 +771,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
     setError(null);
     setCheckpointOpen(false);
     setCurrentQuestion(null);
+    setCollectingPreferences(false);
     setAskedQuestionIds([]);
     setAskedTraitIds([]);
     kickoffStartedRef.current = false;
@@ -770,6 +905,9 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
                     Stop and review
                   </Button>
                   <Button onClick={() => void handleCheckpointAction("continue")}>Keep going</Button>
+                  <Button className="bg-blue-700" onClick={() => void handleCheckpointAction("deepen")} disabled={!currentQuestion?.traitId}>
+                    Go deeper on current trait
+                  </Button>
                   <Button className="bg-slate-500" onClick={() => void handleCheckpointAction("focus")} disabled={checkpoint.suggestedTraitIds.length === 0}>
                     Focus trait area
                   </Button>
@@ -812,7 +950,14 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
             }}
           />
         </Card>
-        <LiveInsightsSidebar snapshot={scoringSnapshot} programFit={programFit} activeTraitId={currentQuestion?.traitId ?? null} done={voicePhase === "ended"} />
+        <LiveInsightsSidebar
+          snapshot={scoringSnapshot}
+          programFit={programFit}
+          activeTraitId={currentQuestion?.traitId ?? null}
+          done={voicePhase === "ended"}
+          onActiveTraitAction={(action) => void handleCheckpointAction(action)}
+          activeTraitActionPending={checkpointMutation.isPending}
+        />
       </div>
     </main>
   );
@@ -824,6 +969,7 @@ const ChatFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; 
   const [started, setStarted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentQuestion, setCurrentQuestion] = useState<any>(null);
+  const [collectingPreferences, setCollectingPreferences] = useState(false);
   const [askedTraitIds, setAskedTraitIds] = useState<string[]>([]);
   const [askedQuestionIds, setAskedQuestionIds] = useState<string[]>([]);
   const isOnline = useOnlineStatus();
@@ -881,9 +1027,11 @@ const ChatFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; 
       setScoringSnapshot(session.scoring_snapshot ?? null);
       setProgramFit(session.program_fit ?? null);
       setStarted(true);
-      setCurrentQuestion(session.nextQuestion ?? null);
+      setCurrentQuestion(null);
       if (session.nextQuestion) {
-        addTranscriptTurn({ id: transcriptId("assistant"), speaker: "assistant", text: session.nextQuestion.prompt, ts: new Date().toISOString() });
+        const onboardingText = session.initialPrompt ? `${session.initialPrompt} ${interestOnboardingPrompt}` : interestOnboardingPrompt;
+        setCollectingPreferences(true);
+        addTranscriptTurn({ id: transcriptId("assistant"), speaker: "assistant", text: onboardingText, ts: new Date().toISOString() });
       }
     } catch (sessionError) {
       setError(sessionError instanceof Error ? sessionError.message : "Could not start chat interview.");
@@ -892,16 +1040,21 @@ const ChatFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; 
 
   const submitAnswer = async () => {
     const answer = input.trim();
-    if (!answer || !currentQuestion) return;
+    if (!answer || (!currentQuestion && !collectingPreferences)) return;
     setInput("");
     addTranscriptTurn({ id: transcriptId("candidate"), speaker: "candidate", text: answer, ts: new Date().toISOString() });
-    setAskedTraitIds((prev) => [...prev, currentQuestion.traitId]);
-    setAskedQuestionIds((prev) => [...prev, currentQuestion.id]);
+    if (currentQuestion) {
+      setAskedTraitIds((prev) => [...prev, currentQuestion.traitId]);
+      setAskedQuestionIds((prev) => [...prev, currentQuestion.id]);
+    }
 
     try {
       const result = await turnMutation.mutateAsync(answer);
       setScoringSnapshot(result.scoring_snapshot);
       setProgramFit(result.program_fit);
+      if (collectingPreferences) {
+        setCollectingPreferences(false);
+      }
       if (result.nextQuestion) {
         setCurrentQuestion(result.nextQuestion);
         addTranscriptTurn({
@@ -977,6 +1130,8 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; 
   const [started, setStarted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentQuestion, setCurrentQuestion] = useState<any>(null);
+  const [collectingPreferences, setCollectingPreferences] = useState(false);
+  const [preferenceInput, setPreferenceInput] = useState("");
   const [quizExperience, setQuizExperience] = useState<{
     headline: string;
     subheadline: string;
@@ -1063,9 +1218,35 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; 
       setScoringSnapshot(session.scoring_snapshot ?? null);
       setProgramFit(session.program_fit ?? null);
       setStarted(true);
-      setCurrentQuestion(session.nextQuestion ?? null);
+      setCurrentQuestion(null);
+      if (session.nextQuestion) {
+        const onboardingText = session.initialPrompt ? `${session.initialPrompt} ${interestOnboardingPrompt}` : interestOnboardingPrompt;
+        setCollectingPreferences(true);
+        addTranscriptTurn({ id: transcriptId("assistant"), speaker: "assistant", text: onboardingText, ts: new Date().toISOString() });
+      }
     } catch (startError) {
       setError(startError instanceof Error ? startError.message : "Could not start quiz.");
+    }
+  };
+
+  const submitPreferenceProfile = async () => {
+    const answer = preferenceInput.trim();
+    if (!answer || !collectingPreferences) return;
+    setPreferenceInput("");
+    addTranscriptTurn({ id: transcriptId("candidate"), speaker: "candidate", text: answer, ts: new Date().toISOString() });
+    try {
+      const result = await turnMutation.mutateAsync(answer);
+      setScoringSnapshot(result.scoring_snapshot);
+      setProgramFit(result.program_fit);
+      setCollectingPreferences(false);
+      if (result.nextQuestion) {
+        setCurrentQuestion(result.nextQuestion);
+      } else {
+        await api.completeSession(sessionId!);
+        navigate("/widget/results");
+      }
+    } catch (selectError) {
+      setError(selectError instanceof Error ? selectError.message : "Could not submit your preferences.");
     }
   };
 
@@ -1120,14 +1301,36 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; 
                 </div>
               </div>
             )}
+            {started && collectingPreferences && (
+              <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-semibold text-slate-900">Tell us your interests and favorite skills</p>
+                <p className="text-sm text-slate-700">
+                  Share what you are most interested in studying and which skills you enjoy using. We will tailor the quiz flow from this.
+                </p>
+                <textarea
+                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                  rows={4}
+                  value={preferenceInput}
+                  onChange={(event) => setPreferenceInput(event.target.value)}
+                  placeholder="Example: I enjoy data storytelling, dashboards, and solving business problems with SQL and Python."
+                />
+                <div className="flex gap-2">
+                  <Button onClick={() => void submitPreferenceProfile()} disabled={!isOnline || turnMutation.isPending || preferenceInput.trim().length === 0}>
+                    Continue
+                  </Button>
+                </div>
+              </div>
+            )}
             {started && currentQuestion && (
               <>
-                <div className="flex items-center justify-between">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">{traitDisplayName}</p>
-                  {progressLabel && <p className="text-xs font-semibold text-slate-600">Progress: {progressLabel}</p>}
+                <div key={currentQuestion.id} className="quiz-question-swap space-y-4">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs uppercase tracking-wide text-slate-500">{traitDisplayName}</p>
+                    {progressLabel && <p className="text-xs font-semibold text-slate-600">Progress: {progressLabel}</p>}
+                  </div>
+                  {currentQuestion.narrativeIntro && <p className="text-sm text-slate-600">{currentQuestion.narrativeIntro}</p>}
+                  <h3 className="text-lg font-semibold text-slate-900">{currentQuestion.prompt}</h3>
                 </div>
-                {currentQuestion.narrativeIntro && <p className="text-sm text-slate-600">{currentQuestion.narrativeIntro}</p>}
-                <h3 className="text-lg font-semibold text-slate-900">{currentQuestion.prompt}</h3>
                 <div className="grid gap-2">
                   {currentQuestion.options.map((option: string) => (
                     <button

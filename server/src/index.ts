@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import { createServer } from "node:http";
 import { createApp } from "./app.js";
 import { attachPhoneWebsocketServer } from "./phone/index.js";
+import { isLangfuseEnabled, shutdownLangfuse } from "./lib/langfuse.js";
 
 dotenv.config({ path: path.resolve(process.cwd(), "../.env") });
 dotenv.config();
@@ -14,4 +15,22 @@ attachPhoneWebsocketServer(server);
 
 server.listen(port, () => {
   console.log(`Server listening on http://localhost:${port}`);
+  if (isLangfuseEnabled()) {
+    console.log("Langfuse tracing enabled");
+  }
+});
+
+const gracefulShutdown = async () => {
+  server.close(async () => {
+    await shutdownLangfuse();
+    process.exit(0);
+  });
+};
+
+process.on("SIGINT", () => {
+  void gracefulShutdown();
+});
+
+process.on("SIGTERM", () => {
+  void gracefulShutdown();
 });

@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { TraitsPage } from "./main";
+// @ts-expect-error Vitest resolves TSX source directly for this test.
+import { TraitsPage } from "./main.tsx";
 
 const createdAt = "2026-02-24T00:00:00.000Z";
 const renderPage = () =>
@@ -472,5 +473,244 @@ describe("TraitsPage lifecycle UX", () => {
     });
     expect(existingRow.getAttribute("aria-current")).toBe("true");
     expect(screen.queryByText("Untitled trait")).toBeNull();
+  });
+
+  it("shows creating lock guidance while new trait request is in flight", async () => {
+    const user = userEvent.setup();
+    let createdDraft = false;
+    const createRequestControl: { resolve?: () => void } = {};
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/api/admin/traits?") && method === "GET") {
+        const traits: Array<Record<string, unknown>> = [
+          {
+            id: "t1",
+            name: "Existing Trait",
+            category: "ACADEMIC",
+            status: "ACTIVE",
+            definition: "Defined",
+            rubricScaleMin: 0,
+            rubricScaleMax: 5,
+            rubricPositiveSignals: "A\nB\nC",
+            rubricNegativeSignals: "X\nY",
+            rubricFollowUps: null,
+            completeness: {
+              isComplete: true,
+              percentComplete: 100,
+              missing: [],
+              counts: { positiveSignals: 3, negativeSignals: 2, questions: 1 }
+            },
+            createdAt,
+            updatedAt: createdAt
+          }
+        ];
+        if (createdDraft) {
+          traits.unshift({
+            id: "t-new",
+            name: "Untitled trait",
+            category: "ACADEMIC",
+            status: "DRAFT",
+            definition: "",
+            rubricScaleMin: 0,
+            rubricScaleMax: 5,
+            rubricPositiveSignals: "",
+            rubricNegativeSignals: "",
+            rubricFollowUps: null,
+            completeness: {
+              isComplete: false,
+              percentComplete: 0,
+              missing: ["Definition is required", "At least 1 question is required"] as string[],
+              counts: { positiveSignals: 0, negativeSignals: 0, questions: 0 }
+            },
+            createdAt,
+            updatedAt: createdAt
+          });
+        }
+        return new Response(JSON.stringify({ data: traits }), { status: 200 });
+      }
+      if (url.includes("/api/admin/traits/t1/questions") && method === "GET") {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      }
+      if (url.includes("/api/admin/traits/t-new/questions") && method === "GET") {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      }
+      if (url.endsWith("/api/admin/traits") && method === "POST") {
+        return new Promise<Response>((resolve) => {
+          createRequestControl.resolve = () => {
+            createdDraft = true;
+            resolve(
+              new Response(
+                JSON.stringify({
+                  data: {
+                    id: "t-new",
+                    name: "Untitled trait",
+                    category: "ACADEMIC",
+                    status: "DRAFT",
+                    definition: "",
+                    rubricScaleMin: 0,
+                    rubricScaleMax: 5,
+                    rubricPositiveSignals: "",
+                    rubricNegativeSignals: "",
+                    rubricFollowUps: null,
+                    completeness: {
+                      isComplete: false,
+                      percentComplete: 0,
+                      missing: ["Definition is required", "At least 1 question is required"],
+                      counts: { positiveSignals: 0, negativeSignals: 0, questions: 0 }
+                    },
+                    createdAt,
+                    updatedAt: createdAt
+                  }
+                }),
+                { status: 201 }
+              )
+            );
+          };
+        });
+      }
+      return new Response(JSON.stringify({ error: "Not Found" }), { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderPage();
+    await screen.findByText("Existing Trait");
+
+    await user.click(screen.getByRole("button", { name: "+ New Trait" }));
+
+    await screen.findByText("Creating new trait... interview settings are temporarily locked.");
+    expect(screen.getByText("Preparing interview setup")).toBeTruthy();
+    expect(screen.getByText("Creating your new trait. Interview questions will appear in a moment.")).toBeTruthy();
+    const scoringSignalsSection = screen.getByRole("heading", { name: "Scoring Signals" }).closest("section");
+    expect(scoringSignalsSection).toBeTruthy();
+    const rubricGenerateButton = within(scoringSignalsSection!).getByRole("button", { name: "Generate with AI" });
+    expect((rubricGenerateButton as HTMLButtonElement).disabled).toBe(true);
+    expect(rubricGenerateButton.getAttribute("title")).toBe("Finish creating the trait to enable");
+
+    if (createRequestControl.resolve) {
+      createRequestControl.resolve();
+    }
+
+    await screen.findByRole("heading", { name: "Untitled trait" });
+  });
+
+  it("locks scoring and questions until trait changes are saved", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/api/admin/traits?") && method === "GET") {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "t1",
+                name: "Existing Trait",
+                category: "ACADEMIC",
+                status: "ACTIVE",
+                definition: "Defined",
+                rubricScaleMin: 0,
+                rubricScaleMax: 5,
+                rubricPositiveSignals: "A\nB\nC",
+                rubricNegativeSignals: "X\nY",
+                rubricFollowUps: null,
+                completeness: {
+                  isComplete: true,
+                  percentComplete: 100,
+                  missing: [],
+                  counts: { positiveSignals: 3, negativeSignals: 2, questions: 1 }
+                },
+                createdAt,
+                updatedAt: createdAt
+              }
+            ]
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes("/api/admin/traits/t1/questions") && method === "GET") {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ error: "Not Found" }), { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderPage();
+    await screen.findByText("Existing Trait");
+    await user.click(screen.getByTestId("trait-row-t1"));
+
+    await user.clear(screen.getByLabelText("Name"));
+    await user.type(screen.getByLabelText("Name"), "Changed Trait");
+
+    expect(screen.getAllByText(/Save this trait to enable question generation and scoring setup\./).length).toBeGreaterThan(0);
+    expect(screen.getByText("Use Save Changes above, then return here to edit quiz/chat questions.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save Quiz Design" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save Chat Design" })).toBeNull();
+    const scoringSignalsSection = screen.getByRole("heading", { name: "Scoring Signals" }).closest("section");
+    expect(scoringSignalsSection).toBeTruthy();
+    const rubricGenerateButton = within(scoringSignalsSection!).getByRole("button", { name: "Generate with AI" });
+    expect((rubricGenerateButton as HTMLButtonElement).disabled).toBe(true);
+    expect(rubricGenerateButton.getAttribute("title")).toBe("Save Changes to enable");
+  });
+
+  it("shows advanced student-facing label guidance and why-use popover copy", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/api/admin/traits?") && method === "GET") {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "t1",
+                name: "Guidance Trait",
+                category: "ACADEMIC",
+                status: "ACTIVE",
+                definition: "Defined",
+                rubricScaleMin: 0,
+                rubricScaleMax: 5,
+                rubricPositiveSignals: "A\nB\nC",
+                rubricNegativeSignals: "X\nY",
+                rubricFollowUps: null,
+                completeness: {
+                  isComplete: true,
+                  percentComplete: 100,
+                  missing: [],
+                  counts: { positiveSignals: 3, negativeSignals: 2, questions: 1 }
+                },
+                createdAt,
+                updatedAt: createdAt
+              }
+            ]
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes("/api/admin/traits/t1/questions") && method === "GET") {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ error: "Not Found" }), { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderPage();
+    await screen.findByText("Guidance Trait");
+
+    const studentFacingSummary = screen.getByText("Student-Facing Label", { selector: "summary" });
+    await user.click(studentFacingSummary);
+    const advancedSummary = await screen.findByText("Advanced (Optional - visuals + grouping)", { selector: "summary" });
+    await user.click(advancedSummary);
+
+    expect(screen.getByText("Optional controls for result grouping and visuals. Does not affect scoring.")).toBeTruthy();
+    expect(screen.getByText("Groups traits into personality-style results (e.g., Analyst, Builder) for the reveal headline.")).toBeTruthy();
+    expect(screen.getByText("Results reveal headline and trait grouping.")).toBeTruthy();
+    expect(screen.getByText("Icon token shown next to this label in answer cards, trait sidebar, and results.")).toBeTruthy();
+    expect(screen.getByText("Answer cards, trait sidebar, results.")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Why use this?" }));
+    expect(screen.getByText("Archetype: enables a personality-style reveal headline.")).toBeTruthy();
+    expect(screen.getByText("Icon: makes choices and results more visual.")).toBeTruthy();
+    expect(screen.getByText("Mood: helps traits feel consistent with the quiz theme.")).toBeTruthy();
   });
 });

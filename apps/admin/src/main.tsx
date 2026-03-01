@@ -17,6 +17,8 @@ import {
   defaultStyleFlags,
   defaultToneProfile,
   generateBrandVoicePreview,
+  QUIZ_EXPERIENCE_PRESETS,
+  resolveQuizExperienceConfig,
   traitCategories
 } from "@pmm/domain";
 import { AppShell, Button, Card } from "@pmm/ui";
@@ -112,6 +114,7 @@ type TraitQuestion = {
 
 type ArchetypeTag = "ANALYST" | "BUILDER" | "STRATEGIST" | "OPERATOR" | "VISIONARY" | "LEADER" | "COMMUNICATOR";
 type TraitVisualMood = "NEUTRAL" | "ASPIRATIONAL" | "PLAYFUL" | "BOLD" | "SERIOUS";
+type InteractionLockReason = "NONE" | "CREATING_TRAIT" | "SAVE_REQUIRED" | "NO_SELECTION";
 
 type TraitFormState = {
   name: string;
@@ -177,7 +180,14 @@ const openAiVoiceOptions = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
 const traitStatusOptions: TraitStatus[] = ["DRAFT", "IN_REVIEW", "ACTIVE", "DEPRECATED"];
 const archetypeTagOptions: ArchetypeTag[] = ["ANALYST", "BUILDER", "STRATEGIST", "OPERATOR", "VISIONARY", "LEADER", "COMMUNICATOR"];
 const visualMoodOptions: TraitVisualMood[] = ["NEUTRAL", "ASPIRATIONAL", "PLAYFUL", "BOLD", "SERIOUS"];
+const knownDisplayIconTokens = ["spark", "seedling", "wrench", "target", "crown", "compass", "graph", "bridge"];
+const isVisualMoodStylingActive = false;
 const canonicalQuizOptions = ["Beginner", "Developing", "Proficient", "Advanced"];
+const answerStyleLabel: Record<"RADIO" | "CARD_GRID" | "SLIDER", string> = {
+  CARD_GRID: "Card Grid",
+  RADIO: "Radio",
+  SLIDER: "Slider"
+};
 const traitStatusRank: Record<TraitStatus, number> = {
   ACTIVE: 0,
   IN_REVIEW: 1,
@@ -595,7 +605,6 @@ function TraitHeader({
   name,
   category,
   status,
-  editorStatusLabel,
   isSaving,
   onSave,
   onDelete,
@@ -604,7 +613,6 @@ function TraitHeader({
   name: string;
   category: TraitCategory;
   status: TraitStatus;
-  editorStatusLabel: string | null;
   isSaving: boolean;
   onSave: () => void;
   onDelete: () => void;
@@ -625,9 +633,8 @@ function TraitHeader({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-3">
-          {editorStatusLabel && <p className="text-xs text-slate-500">{editorStatusLabel}</p>}
           <Button type="button" disabled={isSaving} onClick={onSave}>
-            Save Changes
+            {isSaving ? "Saving..." : "Save Changes"}
           </Button>
           {showDelete && (
             <button type="button" className="text-sm text-red-600 hover:text-red-700" onClick={onDelete}>
@@ -671,6 +678,10 @@ function TraitDefinitionSection({
   onApplyExperienceDraft: () => void;
   onDiscardExperienceDraft: () => void;
 }) {
+  const [showAdvancedWhyPopover, setShowAdvancedWhyPopover] = useState(false);
+  const normalizedDisplayIconToken = form.displayIcon.trim().toLowerCase();
+  const hasInvalidDisplayIconToken = normalizedDisplayIconToken.length > 0 && !knownDisplayIconTokens.includes(normalizedDisplayIconToken);
+
   return (
     <section className="space-y-4 rounded-md border border-slate-200 bg-white p-5">
       <h2 className="text-xl font-semibold text-slate-900">Definition</h2>
@@ -789,10 +800,35 @@ function TraitDefinitionSection({
           </div>
 
           <details className="rounded-md border border-slate-200 bg-white p-3">
-            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-600">Advanced</summary>
+            <summary className="cursor-pointer text-xs font-semibold tracking-wide text-slate-600">Advanced (Optional - visuals + grouping)</summary>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <div className="md:col-span-2">
+                <div className="flex items-start justify-between gap-3">
+                  <p className="text-xs text-slate-600">Optional controls for result grouping and visuals. Does not affect scoring.</p>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      className="text-xs font-medium text-slate-700 underline"
+                      onClick={() => setShowAdvancedWhyPopover((prev) => !prev)}
+                    >
+                      Why use this?
+                    </button>
+                    {showAdvancedWhyPopover && (
+                      <div role="dialog" className="absolute right-0 z-10 mt-2 w-72 rounded-md border border-slate-200 bg-white p-3 text-xs text-slate-700 shadow-md">
+                        <ul className="list-disc space-y-1 pl-4">
+                          <li>Archetype: enables a personality-style reveal headline.</li>
+                          <li>Icon: makes choices and results more visual.</li>
+                          <li>Mood: helps traits feel consistent with the quiz theme.</li>
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
               <div>
                 <label className={labelClass}>Archetype Tag</label>
+                <p className="mt-1 text-xs text-slate-600">Groups traits into personality-style results (e.g., Analyst, Builder) for the reveal headline.</p>
+                <p className="mt-1 text-xs text-slate-500"><span className="font-medium text-slate-600">Used in:</span> Results reveal headline and trait grouping.</p>
                 <select className={inputClass} value={form.archetypeTag} onChange={(event) => setForm((prev) => ({ ...prev, archetypeTag: event.target.value as ArchetypeTag }))}>
                   {archetypeTagOptions.map((option) => (
                     <option key={option} value={option}>{option}</option>
@@ -801,10 +837,32 @@ function TraitDefinitionSection({
               </div>
               <div>
                 <label className={labelClass}>Display Icon</label>
-                <input className={inputClass} value={form.displayIcon} onChange={(event) => setForm((prev) => ({ ...prev, displayIcon: event.target.value }))} />
+                <p className="mt-1 text-xs text-slate-600">Icon token shown next to this label in answer cards, trait sidebar, and results.</p>
+                <p className="mt-1 text-xs text-slate-500"><span className="font-medium text-slate-600">Used in:</span> Answer cards, trait sidebar, results.</p>
+                <input
+                  className={inputClass}
+                  list="trait-display-icon-tokens"
+                  value={form.displayIcon}
+                  onChange={(event) => setForm((prev) => ({ ...prev, displayIcon: event.target.value }))}
+                />
+                <datalist id="trait-display-icon-tokens">
+                  {knownDisplayIconTokens.map((token) => (
+                    <option key={token} value={token} />
+                  ))}
+                </datalist>
+                {hasInvalidDisplayIconToken && <p className="mt-1 text-xs text-red-700">Unknown icon token - choose from the list.</p>}
               </div>
               <div>
-                <label className={labelClass}>Visual Mood</label>
+                <div className="flex items-center gap-2">
+                  <label className={`${labelClass} mb-0`}>Visual Mood</label>
+                  {!isVisualMoodStylingActive && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">Future</span>}
+                </div>
+                {isVisualMoodStylingActive ? (
+                  <p className="mt-1 text-xs text-slate-600">Theme hint that can change subtle accents (like gradients) in the quiz UI.</p>
+                ) : (
+                  <p className="mt-1 text-xs text-slate-600">Reserved for future styling - safe to leave blank.</p>
+                )}
+                <p className="mt-1 text-xs text-slate-500"><span className="font-medium text-slate-600">Used in:</span> Optional UI styling (cards and results).</p>
                 <select className={inputClass} value={form.visualMood} onChange={(event) => setForm((prev) => ({ ...prev, visualMood: event.target.value as TraitVisualMood }))}>
                   {visualMoodOptions.map((option) => (
                     <option key={option} value={option}>{option}</option>
@@ -834,6 +892,7 @@ function TraitDefinitionSection({
 
 function TraitRubricEditor({
   isEditing,
+  lockReason,
   generatingRubric,
   onGenerateRubricWithAi,
   rubricDraft,
@@ -845,6 +904,7 @@ function TraitRubricEditor({
   setForm
 }: {
   isEditing: boolean;
+  lockReason: InteractionLockReason;
   generatingRubric: boolean;
   onGenerateRubricWithAi: () => void;
   rubricDraft: { positiveSignals: string[]; negativeSignals: string[]; followUps: string[] } | null;
@@ -855,6 +915,35 @@ function TraitRubricEditor({
   followUps: string[];
   setForm: React.Dispatch<React.SetStateAction<TraitFormState>>;
 }) {
+  const isLocked = lockReason !== "NONE";
+  const lockHint = lockReason === "SAVE_REQUIRED" ? "Save Changes to enable" : lockReason === "CREATING_TRAIT" ? "Finish creating the trait to enable" : undefined;
+
+  if (lockReason !== "NONE") {
+    return (
+      <section className="space-y-4 border-b border-slate-200/80 pb-6">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-slate-900">Scoring Signals</h3>
+          <button
+            type="button"
+            className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-60"
+            disabled
+            title={lockHint}
+          >
+            Generate with AI
+          </button>
+        </div>
+        <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+          {lockReason === "CREATING_TRAIT" && "Creating new trait... scoring signals will unlock once creation finishes."}
+          {lockReason === "SAVE_REQUIRED" && "Save this trait to enable rubric editing and AI generation."}
+          {lockReason === "NO_SELECTION" && "Select a trait to configure scoring signals."}
+          {(lockReason === "CREATING_TRAIT" || lockReason === "SAVE_REQUIRED") && (
+            <p className="mt-2 text-xs text-slate-600">Actions unlock after the trait is ready.</p>
+          )}
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="space-y-4 border-b border-slate-200/80 pb-6">
       <div className="flex items-center justify-between">
@@ -863,7 +952,8 @@ function TraitRubricEditor({
           <button
             type="button"
             className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-60"
-            disabled={generatingRubric}
+            disabled={generatingRubric || isLocked}
+            title={lockHint}
             onClick={onGenerateRubricWithAi}
           >
             {generatingRubric ? "Generating…" : "Generate with AI"}
@@ -930,6 +1020,7 @@ function TraitRubricEditor({
 
 function TraitQuestionsEditor({
   selectedTrait,
+  lockReason,
   generatingQuestionsDraft,
   onGenerateQuestionsDraftWithAi,
   onSaveQuizDesign,
@@ -938,6 +1029,7 @@ function TraitQuestionsEditor({
   rubricFollowUps
 }: {
   selectedTrait: Trait | null;
+  lockReason: InteractionLockReason;
   generatingQuestionsDraft: boolean;
   onGenerateQuestionsDraftWithAi: () => Promise<{
     quiz: {
@@ -983,6 +1075,9 @@ function TraitQuestionsEditor({
     }))
   });
   const [chatForm, setChatForm] = useState({ chatQuestion1: "", chatQuestion2: "", rubricFollowUps: "" });
+  const isLocked = lockReason !== "NONE";
+  const lockHint = lockReason === "SAVE_REQUIRED" ? "Save Changes to enable" : lockReason === "CREATING_TRAIT" ? "Finish creating the trait to enable" : undefined;
+  const previewQuestionText = quizForm.questionText.trim() || "How would you respond?";
 
   useEffect(() => {
     const optionMetaFromQuestion = canonicalQuizOptions.map((label, index) => {
@@ -1008,10 +1103,6 @@ function TraitQuestionsEditor({
     });
   }, [savedQuizQuestion, savedChatQuestions, rubricFollowUps]);
 
-  if (!selectedTrait) {
-    return <p className="text-sm text-slate-500">Select a trait to manage interview questions.</p>;
-  }
-
   return (
     <section className="space-y-4">
       <div className="flex items-center justify-between">
@@ -1019,14 +1110,18 @@ function TraitQuestionsEditor({
         <div className="flex gap-2">
           <button
             type="button"
-            className={`rounded-md px-2 py-1 text-xs font-medium ${tab === "quiz" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"}`}
+            className={`rounded-md px-2 py-1 text-xs font-medium ${tab === "quiz" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"} disabled:opacity-60`}
+            disabled={isLocked}
+            title={lockHint}
             onClick={() => setTab("quiz")}
           >
             Quiz
           </button>
           <button
             type="button"
-            className={`rounded-md px-2 py-1 text-xs font-medium ${tab === "chat" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"}`}
+            className={`rounded-md px-2 py-1 text-xs font-medium ${tab === "chat" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"} disabled:opacity-60`}
+            disabled={isLocked}
+            title={lockHint}
             onClick={() => setTab("chat")}
           >
             Chat
@@ -1035,35 +1130,222 @@ function TraitQuestionsEditor({
       </div>
       <p className="text-sm text-slate-500">Questions elicit evidence. Scoring uses rubric signals.</p>
 
-      {tab === "quiz" && (
+      {lockReason === "CREATING_TRAIT" && (
+        <div className="space-y-3 rounded-md border border-slate-200/80 bg-slate-50 p-3" role="status" aria-live="polite">
+          <p className="text-sm font-semibold text-slate-800">Preparing interview setup</p>
+          <p className="text-sm text-slate-600">Creating your new trait. Interview questions will appear in a moment.</p>
+          <div className="space-y-2">
+            <div className="h-10 rounded-md bg-slate-200/70" />
+            <div className="h-24 rounded-md bg-slate-200/70" />
+            <div className="h-24 rounded-md bg-slate-200/70" />
+          </div>
+          <p className="text-xs text-slate-600">Actions unlock after the trait is created.</p>
+        </div>
+      )}
+
+      {lockReason === "SAVE_REQUIRED" && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <p className="font-medium">Save this trait to enable question generation and scoring setup.</p>
+          <p className="mt-1 text-xs text-amber-800">Use Save Changes above, then return here to edit quiz/chat questions.</p>
+        </div>
+      )}
+
+      {lockReason === "NO_SELECTION" && (
+        <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+          <p className="font-medium text-slate-800">No trait selected</p>
+          <p className="mt-1 text-xs text-slate-600">Select a trait to configure scoring and interview questions.</p>
+        </div>
+      )}
+
+      {lockReason === "NONE" && tab === "quiz" && (
         <div className="space-y-4 rounded-md border border-slate-200/80 p-3">
-          <div className="text-xs text-slate-500">
-            <p className="font-semibold text-slate-700">Current (saved)</p>
-            <p>{savedQuizQuestion?.prompt || "No quiz question saved yet."}</p>
+          <div className="space-y-3 border-b border-slate-200/80 pb-3">
+            <div className="text-xs text-slate-500">
+              <p className="font-semibold text-slate-700">Current (saved)</p>
+              <p>{savedQuizQuestion?.prompt || "No quiz question saved yet."}</p>
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                className={`${subtleButtonClass} whitespace-nowrap px-3 py-2 text-sm`}
+                disabled={generatingQuestionsDraft || isLocked}
+                title={lockHint}
+                onClick={() =>
+                  void onGenerateQuestionsDraftWithAi().then((draft) => {
+                    setQuizDraft(draft.quiz);
+                  })
+                }
+              >
+                {generatingQuestionsDraft ? "Generating..." : "Generate AI Draft"}
+              </button>
+            </div>
+            {quizDraft && (
+              <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-semibold text-slate-900">Draft values ready</p>
+                  <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-blue-800">Current vs Draft</span>
+                </div>
+                <div className="mt-2 space-y-3 text-xs text-slate-700">
+                  <div className="rounded-md border border-blue-100 bg-white/80 p-2">
+                    <div className="mb-1 flex items-center justify-between">
+                      <p className="font-semibold text-slate-800">Narrative Intro</p>
+                      {quizForm.narrativeIntro.trim() !== quizDraft.narrativeIntro.trim() && (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">Changed</span>
+                      )}
+                    </div>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <div>
+                        <p className="font-semibold text-slate-600">Current</p>
+                        <p>{quizForm.narrativeIntro.trim() || "Empty"}</p>
+                      </div>
+                      <div>
+                        <p className="font-semibold text-slate-600">Draft</p>
+                        <p>{quizDraft.narrativeIntro.trim() || "Empty"}</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rounded-md border border-blue-100 bg-white/80 p-2">
+                    <div className="mb-1 flex items-center justify-between">
+                      <p className="font-semibold text-slate-800">Question Text</p>
+                      {quizForm.questionText.trim() !== quizDraft.questionText.trim() && (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">Changed</span>
+                      )}
+                    </div>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <div>
+                        <p className="font-semibold text-slate-600">Current</p>
+                        <p>{quizForm.questionText.trim() || "Empty"}</p>
+                      </div>
+                      <div>
+                        <p className="font-semibold text-slate-600">Draft</p>
+                        <p>{quizDraft.questionText.trim() || "Empty"}</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="font-semibold text-slate-800">Option Microcopy</p>
+                    {quizDraft.optionMeta.map((draftItem, index) => {
+                      const currentItem = quizForm.optionMeta[index] ?? {
+                        label: draftItem.label,
+                        microCopy: "",
+                        iconToken: "",
+                        traitScore: 0
+                      };
+                      const hasChanged =
+                        currentItem.microCopy.trim() !== draftItem.microCopy.trim() ||
+                        currentItem.iconToken.trim() !== draftItem.iconToken.trim() ||
+                        currentItem.traitScore !== draftItem.traitScore;
+                      return (
+                        <div
+                          key={`quiz-draft-meta-${draftItem.label}-${index}`}
+                          className={`rounded-md border p-2 ${hasChanged ? "border-amber-300 bg-amber-50/60" : "border-blue-100 bg-white/80"}`}
+                        >
+                          <div className="mb-1 flex items-center justify-between">
+                            <p className="font-semibold text-slate-800">{draftItem.label}</p>
+                            {hasChanged && (
+                              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">Changed</span>
+                            )}
+                          </div>
+                          <div className="grid gap-2 md:grid-cols-2">
+                            <div>
+                              <p className="font-semibold text-slate-600">Current</p>
+                              <p>Microcopy: {currentItem.microCopy.trim() || "Empty"}</p>
+                              <p>Icon: {currentItem.iconToken.trim() || "None"}</p>
+                              <p>Score: {currentItem.traitScore}</p>
+                            </div>
+                            <div>
+                              <p className="font-semibold text-slate-600">Draft</p>
+                              <p>Microcopy: {draftItem.microCopy.trim() || "Empty"}</p>
+                              <p>Icon: {draftItem.iconToken.trim() || "None"}</p>
+                              <p>Score: {draftItem.traitScore}</p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    type="button"
+                    className={subtleButtonClass}
+                    disabled={isLocked}
+                    title={lockHint}
+                    onClick={() => {
+                      void onSaveQuizDesign(quizDraft);
+                      setQuizDraft(null);
+                    }}
+                  >
+                    Apply
+                  </button>
+                  <button type="button" className={subtleButtonClass} disabled={isLocked} title={lockHint} onClick={() => setQuizDraft(null)}>
+                    Discard
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
           <div>
             <label className={labelClass}>Narrative Intro (optional)</label>
-            <textarea className={inputClass} value={quizForm.narrativeIntro} onChange={(event) => setQuizForm((prev) => ({ ...prev, narrativeIntro: event.target.value }))} />
+            <textarea className={inputClass} disabled={isLocked} value={quizForm.narrativeIntro} onChange={(event) => setQuizForm((prev) => ({ ...prev, narrativeIntro: event.target.value }))} />
           </div>
           <div>
             <label className={labelClass}>Question Text</label>
-            <textarea className={inputClass} value={quizForm.questionText} onChange={(event) => setQuizForm((prev) => ({ ...prev, questionText: event.target.value }))} />
+            <textarea className={inputClass} disabled={isLocked} value={quizForm.questionText} onChange={(event) => setQuizForm((prev) => ({ ...prev, questionText: event.target.value }))} />
           </div>
           <div>
             <label className={labelClass}>Answer Style</label>
-            <select className={inputClass} value={quizForm.answerStyle} onChange={(event) => setQuizForm((prev) => ({ ...prev, answerStyle: event.target.value as "RADIO" | "CARD_GRID" | "SLIDER" }))}>
-              <option value="CARD_GRID">CARD_GRID</option>
-              <option value="RADIO">RADIO</option>
-              <option value="SLIDER">SLIDER</option>
+            <select className={inputClass} disabled={isLocked} value={quizForm.answerStyle} onChange={(event) => setQuizForm((prev) => ({ ...prev, answerStyle: event.target.value as "RADIO" | "CARD_GRID" | "SLIDER" }))}>
+              <option value="CARD_GRID">{answerStyleLabel.CARD_GRID}</option>
+              <option value="RADIO">{answerStyleLabel.RADIO}</option>
+              <option value="SLIDER">{answerStyleLabel.SLIDER}</option>
             </select>
+          </div>
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Answer Style Preview</p>
+              <span className="text-xs font-medium text-slate-600">{answerStyleLabel[quizForm.answerStyle]}</span>
+            </div>
+            <p className="mt-2 text-sm font-medium text-slate-900">{previewQuestionText}</p>
+            {quizForm.answerStyle === "CARD_GRID" && (
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {quizForm.optionMeta.map((meta) => (
+                  <div key={`quiz-preview-card-${meta.label}`} className="rounded-md border border-slate-200 bg-white p-2">
+                    <p className="text-sm font-semibold text-slate-900">{meta.label}</p>
+                    <p className="mt-1 text-xs text-slate-600">{meta.microCopy.trim() || "Short support microcopy appears here."}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            {quizForm.answerStyle === "RADIO" && (
+              <div className="mt-3 space-y-2">
+                {quizForm.optionMeta.map((meta, index) => (
+                  <label key={`quiz-preview-radio-${meta.label}`} className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-800">
+                    <input type="radio" name="answer-style-preview-radio" disabled checked={index === 0} readOnly />
+                    <span>{meta.label}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+            {quizForm.answerStyle === "SLIDER" && (
+              <div className="mt-3 space-y-2 rounded-md border border-slate-200 bg-white p-3">
+                <input type="range" min={1} max={quizForm.optionMeta.length} value={Math.ceil(quizForm.optionMeta.length / 2)} disabled readOnly className="w-full" />
+                <div className="grid grid-cols-4 gap-2 text-center text-xs text-slate-600">
+                  {quizForm.optionMeta.map((meta) => (
+                    <span key={`quiz-preview-slider-${meta.label}`}>{meta.label}</span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
           <div className="space-y-2">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Option Microcopy (display-only)</p>
             {quizForm.optionMeta.map((meta, index) => (
               <div key={`quiz-meta-${meta.label}-${index}`} className="grid gap-2 md:grid-cols-4">
-                <input className={inputClass} value={meta.label} readOnly />
+                <input className={inputClass} value={meta.label} readOnly disabled={isLocked} />
                 <input
                   className={inputClass}
+                  disabled={isLocked}
                   placeholder="Microcopy"
                   value={meta.microCopy}
                   onChange={(event) =>
@@ -1075,6 +1357,7 @@ function TraitQuestionsEditor({
                 />
                 <input
                   className={inputClass}
+                  disabled={isLocked}
                   placeholder="Icon token"
                   value={meta.iconToken}
                   onChange={(event) =>
@@ -1086,6 +1369,7 @@ function TraitQuestionsEditor({
                 />
                 <input
                   className={inputClass}
+                  disabled={isLocked}
                   type="number"
                   min={0}
                   max={5}
@@ -1100,43 +1384,12 @@ function TraitQuestionsEditor({
               </div>
             ))}
           </div>
-          {quizDraft && (
-            <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm">
-              <p className="font-semibold text-slate-900">Draft values ready</p>
-              <p className="mt-1 text-xs text-slate-700">{quizDraft.questionText}</p>
-              <div className="mt-2 flex gap-2">
-                <button
-                  type="button"
-                  className={subtleButtonClass}
-                  onClick={() => {
-                    void onSaveQuizDesign(quizDraft);
-                    setQuizDraft(null);
-                  }}
-                >
-                  Apply
-                </button>
-                <button type="button" className={subtleButtonClass} onClick={() => setQuizDraft(null)}>
-                  Discard
-                </button>
-              </div>
-            </div>
-          )}
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              className={subtleButtonClass}
-              disabled={generatingQuestionsDraft}
-              onClick={() =>
-                void onGenerateQuestionsDraftWithAi().then((draft) => {
-                  setQuizDraft(draft.quiz);
-                })
-              }
-            >
-              {generatingQuestionsDraft ? "Generating..." : "Generate"}
-            </button>
+          <div className="flex justify-end border-t border-slate-200/80 pt-3">
             <Button
               type="button"
-              disabled={savingQuiz}
+              className="whitespace-nowrap px-4 py-2 text-sm"
+              disabled={savingQuiz || isLocked}
+              title={lockHint}
               onClick={async () => {
                 setSavingQuiz(true);
                 try {
@@ -1152,7 +1405,7 @@ function TraitQuestionsEditor({
         </div>
       )}
 
-      {tab === "chat" && (
+      {lockReason === "NONE" && tab === "chat" && (
         <div className="space-y-4 rounded-md border border-slate-200/80 p-3">
           <div className="text-xs text-slate-500">
             <p className="font-semibold text-slate-700">Current (saved)</p>
@@ -1161,15 +1414,15 @@ function TraitQuestionsEditor({
           </div>
           <div>
             <label className={labelClass}>Chat Question 1</label>
-            <textarea className={inputClass} value={chatForm.chatQuestion1} onChange={(event) => setChatForm((prev) => ({ ...prev, chatQuestion1: event.target.value }))} />
+            <textarea className={inputClass} disabled={isLocked} value={chatForm.chatQuestion1} onChange={(event) => setChatForm((prev) => ({ ...prev, chatQuestion1: event.target.value }))} />
           </div>
           <div>
             <label className={labelClass}>Chat Question 2</label>
-            <textarea className={inputClass} value={chatForm.chatQuestion2} onChange={(event) => setChatForm((prev) => ({ ...prev, chatQuestion2: event.target.value }))} />
+            <textarea className={inputClass} disabled={isLocked} value={chatForm.chatQuestion2} onChange={(event) => setChatForm((prev) => ({ ...prev, chatQuestion2: event.target.value }))} />
           </div>
           <div>
             <label className={labelClass}>Rubric Follow-Ups (0-2 lines)</label>
-            <textarea className={inputClass} value={chatForm.rubricFollowUps} onChange={(event) => setChatForm((prev) => ({ ...prev, rubricFollowUps: event.target.value }))} />
+            <textarea className={inputClass} disabled={isLocked} value={chatForm.rubricFollowUps} onChange={(event) => setChatForm((prev) => ({ ...prev, rubricFollowUps: event.target.value }))} />
           </div>
           <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
             Chat scoring uses rubric signals (3 positive, 3 negative) to derive a 0-5 score.
@@ -1180,17 +1433,19 @@ function TraitQuestionsEditor({
               <p className="mt-1 text-xs text-slate-700">{chatDraft.chatQuestion1}</p>
               <p className="mt-1 text-xs text-slate-700">{chatDraft.chatQuestion2}</p>
               <div className="mt-2 flex gap-2">
-                <button
-                  type="button"
-                  className={subtleButtonClass}
-                  onClick={() => {
-                    void onSaveChatDesign(chatDraft);
-                    setChatDraft(null);
+                  <button
+                    type="button"
+                    className={subtleButtonClass}
+                    disabled={isLocked}
+                    title={lockHint}
+                    onClick={() => {
+                      void onSaveChatDesign(chatDraft);
+                      setChatDraft(null);
                   }}
                 >
                   Apply
                 </button>
-                <button type="button" className={subtleButtonClass} onClick={() => setChatDraft(null)}>
+                <button type="button" className={subtleButtonClass} disabled={isLocked} title={lockHint} onClick={() => setChatDraft(null)}>
                   Discard
                 </button>
               </div>
@@ -1200,18 +1455,20 @@ function TraitQuestionsEditor({
             <button
               type="button"
               className={subtleButtonClass}
-              disabled={generatingQuestionsDraft}
+              disabled={generatingQuestionsDraft || isLocked}
+              title={lockHint}
               onClick={() =>
                 void onGenerateQuestionsDraftWithAi().then((draft) => {
                   setChatDraft(draft.chat);
                 })
               }
             >
-              {generatingQuestionsDraft ? "Generating..." : "Generate"}
+              {generatingQuestionsDraft ? "Generating..." : "Generate AI Draft"}
             </button>
             <Button
               type="button"
-              disabled={savingChat}
+              disabled={savingChat || isLocked}
+              title={lockHint}
               onClick={async () => {
                 setSavingChat(true);
                 try {
@@ -1230,10 +1487,17 @@ function TraitQuestionsEditor({
   );
 }
 
-function TraitScoringInterviewSection({ children }: { children: React.ReactNode }) {
+function TraitScoringInterviewSection({ children, lockReason }: { children: React.ReactNode; lockReason: InteractionLockReason }) {
   return (
     <section className="space-y-6 rounded-md border border-slate-200 bg-white p-5">
       <h2 className="text-xl font-semibold text-slate-900">Scoring &amp; Interview</h2>
+      {lockReason !== "NONE" && (
+        <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+          {lockReason === "CREATING_TRAIT" && "Creating new trait... interview settings are temporarily locked."}
+          {lockReason === "SAVE_REQUIRED" && "Save this trait to enable question generation and scoring setup."}
+          {lockReason === "NO_SELECTION" && "Select a trait to configure scoring and interview questions."}
+        </div>
+      )}
       {children}
     </section>
   );
@@ -1293,9 +1557,6 @@ function ShellLayout({ children }: { children: React.ReactNode }) {
             <Link className={navLinkClass} to="/quiz-experience">
               Quiz Experience
             </Link>
-            <Link className={navLinkClass} to="/widget/branding">
-              Widget Branding
-            </Link>
             <WidgetDropdown />
           </nav>
         </div>
@@ -1344,18 +1605,6 @@ export function TraitsPage() {
   const followUps = useMemo(() => splitListText(form.rubricFollowUps), [form.rubricFollowUps]);
   const traitFormDirty = useMemo(() => JSON.stringify(form) !== JSON.stringify(baselineForm), [form, baselineForm]);
   const draftCompleteness = useMemo(() => computeDraftCompleteness(form, questions.length), [form, questions.length]);
-  const editorStatusLabel = useMemo(() => {
-    if (isCreatingDraft || editorSaveStatus === "saving") {
-      return "Saving...";
-    }
-    if (traitFormDirty) {
-      return "Unsaved changes";
-    }
-    if (editorSaveStatus === "saved") {
-      return "Saved";
-    }
-    return null;
-  }, [editorSaveStatus, isCreatingDraft, traitFormDirty]);
 
   const selectedTrait = traits.find((trait) => trait.id === selectedTraitId) ?? null;
   const isEditing = Boolean(selectedTraitId && selectedTrait);
@@ -1462,10 +1711,22 @@ export function TraitsPage() {
     if (!canLeaveTraitForm()) {
       return;
     }
+    const previousSelectedTraitId = selectedTraitId;
+    const previousForm = form;
+    const previousBaselineForm = baselineForm;
+    const previousExperienceDraft = experienceDraft;
+    const previousRubricDraft = rubricDraft;
+    const previousActivationMissing = activationMissing;
     const requestId = createDraftRequestIdRef.current + 1;
     createDraftRequestIdRef.current = requestId;
     setIsCreatingDraft(true);
-    setEditorSaveStatus("saving");
+    setEditorSaveStatus("idle");
+    setSelectedTraitId(null);
+    setForm({ ...emptyTraitForm });
+    setBaselineForm({ ...emptyTraitForm });
+    setExperienceDraft(null);
+    setRubricDraft(null);
+    setActivationMissing([]);
     setTraitNotice(null);
     setTraitError(null);
     try {
@@ -1486,11 +1747,7 @@ export function TraitsPage() {
       setSelectedTraitId(normalized.id);
       setForm(nextForm);
       setBaselineForm(nextForm);
-      setExperienceDraft(null);
-      setRubricDraft(null);
-      setActivationMissing([]);
       setTraitNotice("Saved");
-      setEditorSaveStatus("saved");
       focusTitleOnSelectRef.current = true;
       await loadTraits();
       await loadQuestions(normalized.id);
@@ -1498,8 +1755,15 @@ export function TraitsPage() {
       if (!isMountedRef.current || createDraftRequestIdRef.current !== requestId) {
         return;
       }
+      if (previousSelectedTraitId) {
+        setSelectedTraitId(previousSelectedTraitId);
+        setForm(previousForm);
+        setBaselineForm(previousBaselineForm);
+        setExperienceDraft(previousExperienceDraft);
+        setRubricDraft(previousRubricDraft);
+        setActivationMissing(previousActivationMissing);
+      }
       setTraitError(error instanceof Error ? error.message : "Could not create draft trait.");
-      setEditorSaveStatus("error");
     } finally {
       if (isMountedRef.current && createDraftRequestIdRef.current === requestId) {
         setIsCreatingDraft(false);
@@ -1771,6 +2035,7 @@ export function TraitsPage() {
 
   const actionableMissing = Array.from(new Set(activationMissing.length > 0 ? activationMissing : draftCompleteness.missing));
   const showActivationNotice = form.status !== "ACTIVE" || actionableMissing.length > 0;
+  const interactionLockReason: InteractionLockReason = isCreatingDraft ? "CREATING_TRAIT" : !selectedTrait ? "NO_SELECTION" : traitFormDirty ? "SAVE_REQUIRED" : "NONE";
 
   return (
     <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
@@ -1846,8 +2111,7 @@ export function TraitsPage() {
                 name={form.name}
                 category={form.category}
                 status={form.status}
-                editorStatusLabel={editorStatusLabel}
-                isSaving={editorSaveStatus === "saving" || isCreatingDraft}
+                isSaving={editorSaveStatus === "saving"}
                 onSave={() => void submitTrait()}
                 onDelete={() => selectedTrait && void deleteTrait(selectedTrait.id)}
                 showDelete={Boolean(selectedTrait)}
@@ -1867,9 +2131,10 @@ export function TraitsPage() {
                 onDiscardExperienceDraft={discardExperienceDraft}
               />
 
-              <TraitScoringInterviewSection>
+              <TraitScoringInterviewSection lockReason={interactionLockReason}>
                 <TraitRubricEditor
                   isEditing={isEditing}
+                  lockReason={interactionLockReason}
                   generatingRubric={generatingRubric}
                   onGenerateRubricWithAi={() => void generateRubricWithAi()}
                   rubricDraft={rubricDraft}
@@ -1882,6 +2147,7 @@ export function TraitsPage() {
                 />
                 <TraitQuestionsEditor
                   selectedTrait={selectedTrait}
+                  lockReason={interactionLockReason}
                   generatingQuestionsDraft={generatingQuestionsDraft}
                   onGenerateQuestionsDraftWithAi={generateQuestionsDraftWithAi}
                   onSaveQuizDesign={saveQuizDesign}
@@ -3256,6 +3522,7 @@ export function BrandVoicePage() {
   const [voiceTestText, setVoiceTestText] = useState("Welcome to Graduate Admissions. Let me walk you through your next best step.");
   const [voiceTestUrl, setVoiceTestUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"configuration" | "simulation">("configuration");
 
   const selectedVoice = voices.find((voice) => voice.id === selectedVoiceId) ?? null;
@@ -3289,6 +3556,12 @@ export function BrandVoicePage() {
   }, []);
 
   useEffect(() => {
+    if (!saveNotice) return;
+    const timeoutId = window.setTimeout(() => setSaveNotice(null), 2200);
+    return () => window.clearTimeout(timeoutId);
+  }, [saveNotice]);
+
+  useEffect(() => {
     if (!selectedVoice) {
       setForm(defaultBrandVoiceForm());
       setGeneratedSamples(null);
@@ -3314,6 +3587,7 @@ export function BrandVoicePage() {
   const createVoice = async (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
+    setSaveNotice(null);
     try {
       const payload = await request<{ data: BrandVoice }>("/api/admin/brand-voices", {
         method: "POST",
@@ -3324,6 +3598,7 @@ export function BrandVoicePage() {
       });
       await loadVoices();
       setSelectedVoiceId(payload.data.id);
+      setSaveNotice("Brand voice created.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create brand voice");
     }
@@ -3335,6 +3610,7 @@ export function BrandVoicePage() {
       return;
     }
     setError(null);
+    setSaveNotice(null);
     try {
       await request<{ data: BrandVoice }>(`/api/admin/brand-voices/${selectedVoiceId}`, {
         method: "PUT",
@@ -3344,6 +3620,7 @@ export function BrandVoicePage() {
         })
       });
       await loadVoices();
+      setSaveNotice("Brand voice saved.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save brand voice");
     }
@@ -3352,6 +3629,7 @@ export function BrandVoicePage() {
   const deleteVoice = async (id: string) => {
     await request<{ ok: boolean }>(`/api/admin/brand-voices/${id}`, { method: "DELETE" });
     await loadVoices();
+    setSaveNotice("Brand voice deleted.");
   };
 
   const generateSamples = async () => {
@@ -3417,6 +3695,7 @@ export function BrandVoicePage() {
     setPreviewOverride({});
     setVoiceTestUrl(null);
     setError(null);
+    setSaveNotice(null);
     setActiveTab("configuration");
   };
 
@@ -3563,13 +3842,23 @@ export function BrandVoicePage() {
                 </button>
               )}
             </div>
+            {saveNotice && <p className="text-sm text-emerald-700">{saveNotice}</p>}
             {error && <p className="text-sm text-red-700">{error}</p>}
           </div>
 
           <div className="space-y-3">
             <div>
-              <label className={labelClass}>Use my own seed text</label>
-              <input className={inputClass} value={seedText} onChange={(event) => setSeedText(event.target.value)} />
+              <label className={labelClass}>Intro Context (optional)</label>
+              <textarea
+                className={inputClass}
+                rows={4}
+                value={seedText}
+                onChange={(event) => setSeedText(event.target.value)}
+                placeholder="Example: You are speaking to first-generation students exploring grad programs."
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                This is used as opening context in the live preview samples. It shapes the preview intro language, but does not change your saved brand voice settings.
+              </p>
             </div>
 
             <BrandVoicePreview title="Live Preview" samples={preview} />
@@ -3653,8 +3942,39 @@ type QuizExperienceConfig = {
   motionIntensity: "LOW" | "MEDIUM" | "HIGH";
   rankingMotionStyle: string;
   revealStyle: string;
+  experiencePreset: QuizExperiencePreset | null;
+  experienceOverrides: QuizExperienceOverrides | null;
   introMediaPrompt: string | null;
   revealMediaPrompt: string | null;
+};
+
+type QuizExperiencePreset = "ADMISSIONS_MARKETING" | "EXECUTIVE_MBA" | "GEN_Z_SOCIAL" | "TRADITIONAL_ACADEMIC" | "EXPERIMENTAL_AI";
+type QuizExperienceOverrideKey = keyof QuizExperienceOverrides;
+type QuizExperienceOverrides = Partial<{
+  gradientSet: string;
+  motionIntensity: "LOW" | "MEDIUM" | "HIGH";
+  rankingMotionStyle: string;
+  revealStyle: string;
+  tonePreset: string;
+}>;
+
+const quizExperiencePresetLabels: Record<QuizExperiencePreset, string> = {
+  ADMISSIONS_MARKETING: "Admissions Marketing",
+  EXECUTIVE_MBA: "Executive MBA",
+  GEN_Z_SOCIAL: "Gen Z Social",
+  TRADITIONAL_ACADEMIC: "Traditional Academic",
+  EXPERIMENTAL_AI: "Experimental AI"
+};
+
+const getQuizExperienceStyleOptions = (form: QuizExperienceConfig) => {
+  const presetValues = Object.values(QUIZ_EXPERIENCE_PRESETS);
+  const unique = (values: string[]) => [...new Set(values.filter((value) => value.trim().length > 0))];
+  return {
+    gradientSet: unique([...presetValues.map((item) => item.gradientSet), form.gradientSet]),
+    rankingMotionStyle: unique([...presetValues.map((item) => item.rankingMotionStyle), form.rankingMotionStyle]),
+    revealStyle: unique([...presetValues.map((item) => item.revealStyle), form.revealStyle]),
+    tonePreset: unique([...presetValues.map((item) => item.tonePreset), form.tonePreset])
+  };
 };
 
 export function QuizExperiencePage() {
@@ -3668,19 +3988,44 @@ export function QuizExperiencePage() {
     motionIntensity: "MEDIUM",
     rankingMotionStyle: "SPRING",
     revealStyle: "IDENTITY",
+    experiencePreset: "ADMISSIONS_MARKETING",
+    experienceOverrides: null,
     introMediaPrompt: "",
     revealMediaPrompt: ""
   });
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const presetDefaults = form.experiencePreset ? QUIZ_EXPERIENCE_PRESETS[form.experiencePreset] : null;
+  const overrides = form.experienceOverrides ?? {};
+  const effective = form.experiencePreset
+    ? resolveQuizExperienceConfig(form.experiencePreset, overrides, null)
+    : {
+        gradientSet: form.gradientSet,
+        motionIntensity: form.motionIntensity,
+        rankingMotionStyle: form.rankingMotionStyle,
+        revealStyle: form.revealStyle,
+        tonePreset: form.tonePreset
+      };
+  const overrideKeys: QuizExperienceOverrideKey[] = ["gradientSet", "motionIntensity", "rankingMotionStyle", "revealStyle", "tonePreset"];
+  const activeOverrideKeys = form.experiencePreset
+    ? overrideKeys.filter((key) => overrides[key] !== undefined && overrides[key] !== presetDefaults?.[key])
+    : [];
+  const isCustomized = activeOverrideKeys.length > 0;
+  const styleOptions = useMemo(() => getQuizExperienceStyleOptions(form), [form]);
+
   const loadConfig = async () => {
     setLoading(true);
     try {
       const payload = await request<{ data: QuizExperienceConfig }>("/api/admin/quiz-experience");
-      setForm(payload.data);
+      setForm((prev) => ({
+        ...prev,
+        ...payload.data,
+        experienceOverrides: payload.data.experienceOverrides ?? null
+      }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load quiz experience config.");
     } finally {
@@ -3698,17 +4043,109 @@ export function QuizExperiencePage() {
     setError(null);
     setNotice(null);
     try {
+      const effectiveForSave = form.experiencePreset
+        ? resolveQuizExperienceConfig(form.experiencePreset, form.experienceOverrides, null)
+        : {
+            gradientSet: form.gradientSet,
+            motionIntensity: form.motionIntensity,
+            rankingMotionStyle: form.rankingMotionStyle,
+            revealStyle: form.revealStyle,
+            tonePreset: form.tonePreset
+          };
       const payload = await request<{ data: QuizExperienceConfig }>("/api/admin/quiz-experience", {
         method: "PUT",
-        body: JSON.stringify(form)
+        body: JSON.stringify({
+          ...form,
+          ...effectiveForSave,
+          experienceOverrides: form.experienceOverrides && Object.keys(form.experienceOverrides).length > 0 ? form.experienceOverrides : null
+        })
       });
-      setForm(payload.data);
+      setForm((prev) => ({
+        ...prev,
+        ...payload.data,
+        experienceOverrides: payload.data.experienceOverrides ?? null
+      }));
       setNotice("Saved");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save quiz experience config.");
     } finally {
       setSaving(false);
     }
+  };
+
+  const applyPreset = (preset: QuizExperiencePreset | null) => {
+    setForm((prev) => {
+      if (!preset) {
+        return {
+          ...prev,
+          experiencePreset: null,
+          experienceOverrides: null
+        };
+      }
+      const nextDefaults = QUIZ_EXPERIENCE_PRESETS[preset];
+      return {
+        ...prev,
+        experiencePreset: preset,
+        experienceOverrides: null,
+        gradientSet: nextDefaults.gradientSet,
+        motionIntensity: nextDefaults.motionIntensity,
+        rankingMotionStyle: nextDefaults.rankingMotionStyle,
+        revealStyle: nextDefaults.revealStyle,
+        tonePreset: nextDefaults.tonePreset
+      };
+    });
+  };
+
+  const setOverrideValue = (key: QuizExperienceOverrideKey, value: string) => {
+    setForm((prev) => {
+      if (!prev.experiencePreset) {
+        return {
+          ...prev,
+          [key]: value
+        } as QuizExperienceConfig;
+      }
+
+      const presetValue = QUIZ_EXPERIENCE_PRESETS[prev.experiencePreset][key];
+      const nextOverrides = { ...(prev.experienceOverrides ?? {}) };
+
+      if (value === presetValue) {
+        delete nextOverrides[key];
+      } else {
+        (nextOverrides as Record<string, string>)[key] = value;
+      }
+
+      const cleaned = Object.keys(nextOverrides).length > 0 ? nextOverrides : null;
+      const resolved = resolveQuizExperienceConfig(prev.experiencePreset, cleaned, null);
+
+      return {
+        ...prev,
+        experienceOverrides: cleaned,
+        gradientSet: resolved.gradientSet,
+        motionIntensity: resolved.motionIntensity,
+        rankingMotionStyle: resolved.rankingMotionStyle,
+        revealStyle: resolved.revealStyle,
+        tonePreset: resolved.tonePreset
+      };
+    });
+  };
+
+  const clearOverride = (key: QuizExperienceOverrideKey) => {
+    if (!form.experiencePreset) return;
+    setOverrideValue(key, QUIZ_EXPERIENCE_PRESETS[form.experiencePreset][key]);
+  };
+
+  const resetToPresetDefaults = () => {
+    if (!form.experiencePreset) return;
+    const defaults = QUIZ_EXPERIENCE_PRESETS[form.experiencePreset];
+    setForm((prev) => ({
+      ...prev,
+      experienceOverrides: null,
+      gradientSet: defaults.gradientSet,
+      motionIntensity: defaults.motionIntensity,
+      rankingMotionStyle: defaults.rankingMotionStyle,
+      revealStyle: defaults.revealStyle,
+      tonePreset: defaults.tonePreset
+    }));
   };
 
   return (
@@ -3731,34 +4168,140 @@ export function QuizExperiencePage() {
               <input className={inputClass} value={form.estimatedTimeLabel} onChange={(event) => setForm((prev) => ({ ...prev, estimatedTimeLabel: event.target.value }))} />
             </div>
             <div>
-              <label className={labelClass}>Tone Preset</label>
-              <input className={inputClass} value={form.tonePreset} onChange={(event) => setForm((prev) => ({ ...prev, tonePreset: event.target.value }))} />
-            </div>
-          </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <label className={labelClass}>Gradient Set</label>
-              <input className={inputClass} value={form.gradientSet} onChange={(event) => setForm((prev) => ({ ...prev, gradientSet: event.target.value }))} />
-            </div>
-            <div>
-              <label className={labelClass}>Motion Intensity</label>
-              <select className={inputClass} value={form.motionIntensity} onChange={(event) => setForm((prev) => ({ ...prev, motionIntensity: event.target.value as "LOW" | "MEDIUM" | "HIGH" }))}>
-                <option value="LOW">LOW</option>
-                <option value="MEDIUM">MEDIUM</option>
-                <option value="HIGH">HIGH</option>
+              <label className={labelClass}>Experience Preset</label>
+              <select
+                className={inputClass}
+                value={form.experiencePreset ?? ""}
+                onChange={(event) => applyPreset((event.target.value || null) as QuizExperiencePreset | null)}
+              >
+                <option value="">Legacy (No Preset)</option>
+                {Object.entries(quizExperiencePresetLabels).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
               </select>
             </div>
           </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <label className={labelClass}>Ranking Motion Style</label>
-              <input className={inputClass} value={form.rankingMotionStyle} onChange={(event) => setForm((prev) => ({ ...prev, rankingMotionStyle: event.target.value }))} />
-            </div>
-            <div>
-              <label className={labelClass}>Reveal Style</label>
-              <input className={inputClass} value={form.revealStyle} onChange={(event) => setForm((prev) => ({ ...prev, revealStyle: event.target.value }))} />
+
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+            <p className="font-medium text-slate-800">
+              Preset: {form.experiencePreset ? quizExperiencePresetLabels[form.experiencePreset] : "Legacy (No Preset)"}{isCustomized ? " (Customized)" : ""}
+            </p>
+            <p className="mt-1 text-slate-600">Presets configure tone, motion, gradient, and reveal style. You can customize below.</p>
+            {isCustomized && (
+              <button type="button" className="mt-2 text-xs font-medium text-slate-700 underline" onClick={resetToPresetDefaults}>
+                Reset to preset defaults
+              </button>
+            )}
+            <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-700">
+              <span className="rounded-full bg-white px-2 py-1">Gradient: {effective.gradientSet}</span>
+              <span className="rounded-full bg-white px-2 py-1">Motion: {effective.motionIntensity}</span>
+              <span className="rounded-full bg-white px-2 py-1">Results Animation: {effective.rankingMotionStyle}</span>
+              <span className="rounded-full bg-white px-2 py-1">Reveal: {effective.revealStyle}</span>
+              <span className="rounded-full bg-white px-2 py-1">Tone: {effective.tonePreset}</span>
             </div>
           </div>
+
+          <div className="rounded-md border border-slate-200 bg-white p-3">
+            <button type="button" className="text-sm font-medium text-slate-800" onClick={() => setAdvancedOpen((prev) => !prev)}>
+              {advancedOpen ? "Hide" : "Customize"} Experience (Advanced)
+            </button>
+
+            {advancedOpen && (
+              <div className="mt-4 space-y-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-800">Visual Style</h3>
+                  <div className="mt-2 grid gap-3 md:grid-cols-2">
+                    <div>
+                      <label className={labelClass}>Gradient Set</label>
+                      <select className={inputClass} value={effective.gradientSet} onChange={(event) => setOverrideValue("gradientSet", event.target.value)}>
+                        {styleOptions.gradientSet.map((value) => (
+                          <option key={value} value={value}>{value}</option>
+                        ))}
+                      </select>
+                      {activeOverrideKeys.includes("gradientSet") && (
+                        <div className="mt-1 flex items-center gap-2 text-xs">
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">Overridden</span>
+                          <button type="button" className="text-slate-700 underline" onClick={() => clearOverride("gradientSet")}>Clear override</button>
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <label className={labelClass}>Motion Intensity</label>
+                      <select className={inputClass} value={effective.motionIntensity} onChange={(event) => setOverrideValue("motionIntensity", event.target.value)}>
+                        <option value="LOW">LOW</option>
+                        <option value="MEDIUM">MEDIUM</option>
+                        <option value="HIGH">HIGH</option>
+                      </select>
+                      {activeOverrideKeys.includes("motionIntensity") && (
+                        <div className="mt-1 flex items-center gap-2 text-xs">
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">Overridden</span>
+                          <button type="button" className="text-slate-700 underline" onClick={() => clearOverride("motionIntensity")}>Clear override</button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className={labelClass}>Results Animation Style</label>
+                      <select className={inputClass} value={effective.rankingMotionStyle} onChange={(event) => setOverrideValue("rankingMotionStyle", event.target.value)}>
+                        {styleOptions.rankingMotionStyle.map((value) => (
+                          <option key={value} value={value}>{value}</option>
+                        ))}
+                      </select>
+                      {activeOverrideKeys.includes("rankingMotionStyle") && (
+                        <div className="mt-1 flex items-center gap-2 text-xs">
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">Overridden</span>
+                          <button type="button" className="text-slate-700 underline" onClick={() => clearOverride("rankingMotionStyle")}>Clear override</button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-800">Result Presentation</h3>
+                  <div className="mt-2">
+                    <label className={labelClass}>Result Reveal Experience</label>
+                    <select className={inputClass} value={effective.revealStyle} onChange={(event) => setOverrideValue("revealStyle", event.target.value)}>
+                      {styleOptions.revealStyle.map((value) => (
+                        <option key={value} value={value}>{value}</option>
+                      ))}
+                    </select>
+                    {activeOverrideKeys.includes("revealStyle") && (
+                      <div className="mt-1 flex items-center gap-2 text-xs">
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">Overridden</span>
+                        <button type="button" className="text-slate-700 underline" onClick={() => clearOverride("revealStyle")}>Clear override</button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-800">Tone</h3>
+                  <div className="mt-2">
+                    <label className={labelClass}>Tone Preset</label>
+                    <select className={inputClass} value={effective.tonePreset} onChange={(event) => setOverrideValue("tonePreset", event.target.value)}>
+                      {styleOptions.tonePreset.map((value) => (
+                        <option key={value} value={value}>{value}</option>
+                      ))}
+                    </select>
+                    {activeOverrideKeys.includes("tonePreset") && (
+                      <div className="mt-1 flex items-center gap-2 text-xs">
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">Overridden</span>
+                        <button type="button" className="text-slate-700 underline" onClick={() => clearOverride("tonePreset")}>Clear override</button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {!form.experiencePreset && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+              Legacy mode is active. Choose an Experience Preset to manage style using preset defaults + advanced overrides.
+            </div>
+          )}
           <div>
             <label className={labelClass}>Intro Media Prompt (optional)</label>
             <textarea className={inputClass} value={form.introMediaPrompt ?? ""} onChange={(event) => setForm((prev) => ({ ...prev, introMediaPrompt: event.target.value }))} />
@@ -3782,9 +4325,9 @@ export function QuizExperiencePage() {
           <h4 className="mt-2 text-xl font-semibold text-slate-900">{form.headline}</h4>
           <p className="mt-2 text-sm text-slate-700">{form.subheadline}</p>
           <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-700">
-            <span className="rounded-full bg-white/80 px-2 py-1">Tone: {form.tonePreset}</span>
-            <span className="rounded-full bg-white/80 px-2 py-1">Motion: {form.motionIntensity}</span>
-            <span className="rounded-full bg-white/80 px-2 py-1">Reveal: {form.revealStyle}</span>
+            <span className="rounded-full bg-white/80 px-2 py-1">Tone: {effective.tonePreset}</span>
+            <span className="rounded-full bg-white/80 px-2 py-1">Motion: {effective.motionIntensity}</span>
+            <span className="rounded-full bg-white/80 px-2 py-1">Reveal: {effective.revealStyle}</span>
           </div>
         </div>
       </Card>

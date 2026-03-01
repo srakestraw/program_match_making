@@ -11,6 +11,7 @@ import { prisma } from "./prisma.js";
 import { filterActivePrograms } from "./program-activity.js";
 import { evaluateTraitQuestionResponse, splitRubricSignals } from "./trait-scoring.js";
 import { buildInterviewSystemPrompt, DEFAULT_INTERVIEW_LANGUAGE } from "./interview-language.js";
+import { createLangfuseTrace, endLangfuseSpan, startLangfuseSpan } from "./langfuse.js";
 import { log } from "./logger.js";
 
 const bucketWeight: Record<ProgramTraitPriorityBucket, number> = {
@@ -85,7 +86,7 @@ const logRotationTelemetry = (input: {
   durationMs?: number;
   answeredTraitCount?: number;
   checkpointRequired?: boolean;
-  action?: "stop" | "continue" | "focus";
+  action?: "stop" | "continue" | "focus" | "deepen";
 }) => {
   log("info", "interview.rotation.diagnostics", {
     event: input.event,
@@ -130,6 +131,27 @@ const parseOptionMeta = (raw: string | null): Array<{ label: string; microCopy?:
   }
 };
 
+const normalizePrompt = (value: string) => value.trim().toLowerCase().replace(/\s+/g, " ");
+
+const genericQuizPrompts = new Set([
+  "how would you rate your current level in this area?",
+  "how would you rate your current level in this area",
+  "rate your current level in this area",
+  "rate your level in this area"
+]);
+
+export const formatInterviewQuestionPrompt = (input: {
+  prompt: string;
+  questionType: "chat" | "quiz";
+  publicLabel: string;
+}) => {
+  if (input.questionType !== "quiz") return input.prompt;
+  if (!genericQuizPrompts.has(normalizePrompt(input.prompt))) return input.prompt;
+  return `How would you rate your current level in ${input.publicLabel}?`;
+};
+
+const startsWithVowelSound = (value: string) => /^[aeiou]/i.test(value.trim());
+
 const confidenceLabel = (value: number): "low" | "medium" | "high" => {
   if (value >= 0.75) return "high";
   if (value >= 0.5) return "medium";
@@ -137,6 +159,97 @@ const confidenceLabel = (value: number): "low" | "medium" | "high" => {
 };
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+const stopWords = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "for",
+  "from",
+  "how",
+  "i",
+  "in",
+  "is",
+  "it",
+  "my",
+  "of",
+  "on",
+  "or",
+  "that",
+  "the",
+  "their",
+  "this",
+  "to",
+  "we",
+  "with",
+  "you",
+  "your"
+]);
+
+const tokenize = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !stopWords.has(token));
+
+const unique = <T>(values: T[]) => values.filter((value, index) => values.indexOf(value) === index);
+
+const extractInterestTokens = (text: string) => {
+  const normalized = text.toLowerCase();
+  const tokens = new Set(tokenize(text));
+  const preferenceMatches = [
+    ...normalized.matchAll(/\b(?:interested in|enjoy|love|like|prefer)\s+([a-z0-9\s-]{3,80})/gi),
+    ...normalized.matchAll(/\b(?:skills?|strengths?)\s+(?:in|around|with)\s+([a-z0-9\s-]{3,80})/gi)
+  ];
+  for (const match of preferenceMatches) {
+    const phrase = match[1] ?? "";
+    for (const token of tokenize(phrase)) {
+      tokens.add(token);
+    }
+  }
+  return tokens;
+};
+
+const inferPreferredTraitIdsFromText = (input: {
+  text: string;
+  traitMeta: ProgramContext["traitMeta"];
+  limit?: number;
+}) => {
+  const interestTokens = extractInterestTokens(input.text);
+  if (interestTokens.size === 0) return [];
+
+  const traitScores = [...input.traitMeta.entries()]
+    .map(([traitId, meta]) => {
+      const traitTokens = new Set(
+        tokenize(
+          [
+            meta.traitName,
+            meta.publicLabel,
+            meta.category ?? "",
+            meta.definition ?? "",
+            ...meta.questions.map((question) => question.prompt)
+          ]
+            .filter(Boolean)
+            .join(" ")
+        )
+      );
+      const overlap = [...interestTokens].filter((token) => traitTokens.has(token)).length;
+      return { traitId, overlap };
+    })
+    .filter((item) => item.overlap > 0)
+    .sort((a, b) => b.overlap - a.overlap)
+    .slice(0, input.limit ?? 4)
+    .map((item) => item.traitId);
+
+  return traitScores;
+};
 
 const buildInitialPrompt = (input: {
   mode: Mode;
@@ -159,7 +272,7 @@ const buildInitialPrompt = (input: {
   const tone = input.brandVoice.primaryTone || "professional";
   const modifiers = input.brandVoice.toneModifiers.slice(0, 2).join(", ");
   const style = input.brandVoice.styleFlags.slice(0, 2).join(", ");
-  const modifierLine = modifiers ? ` with a ${modifiers} style` : "";
+  const modifierLine = modifiers ? ` with ${startsWithVowelSound(modifiers) ? "an" : "a"} ${modifiers} style` : "";
   const styleLine = style ? ` Keep the conversation ${style}.` : "";
 
   return `Welcome. I am your ${tone} admissions interviewer${modifierLine}. I will ask short, supportive questions to understand your program fit.${styleLine}`;
@@ -242,7 +355,11 @@ const loadProgramContext = async (input: { mode: Mode; programFilterIds?: string
           narrativeIntro: question.narrativeIntro ?? null,
           answerStyle: (question.answerStyle as Question["answerStyle"]) ?? null,
           answerOptionsMeta: parseOptionMeta(question.answerOptionsMetaJson),
-          prompt: question.prompt,
+          prompt: formatInterviewQuestionPrompt({
+            prompt: question.prompt,
+            questionType: question.type === TraitQuestionType.QUIZ ? "quiz" : "chat",
+            publicLabel: item.trait.publicLabel ?? item.trait.name
+          }),
           type: question.type === TraitQuestionType.QUIZ ? "quiz" : "chat",
           options: parseOptions(question.optionsJson)
         })),
@@ -463,84 +580,141 @@ export const createInterviewSession = async (input: {
 }) => {
   const startedAt = Date.now();
   const language = (input.language ?? DEFAULT_INTERVIEW_LANGUAGE).trim().toLowerCase();
-  const session = await prisma.candidateSession.create({
-    data: {
+  let span = null;
+  let spanClosed = false;
+
+  try {
+    const session = await prisma.candidateSession.create({
+      data: {
+        mode: input.mode,
+        channel: input.mode === "voice" ? "WEB_VOICE" : input.mode === "chat" ? "WEB_CHAT" : "WEB_QUIZ",
+        status: "active",
+        sessionLanguageTag: language,
+        candidateId: input.candidateId
+      }
+    });
+
+    createLangfuseTrace({
+      traceId: session.id,
+      name: "interview.session",
+      sessionId: session.id,
+      metadata: {
+        mode: input.mode,
+        language,
+        hasProgramFilter: Boolean(input.programFilterIds?.length),
+        hasBrandVoiceId: Boolean(input.brandVoiceId)
+      }
+    });
+    span = startLangfuseSpan({
+      traceId: session.id,
+      name: "interview.session.create",
+      input: {
+        mode: input.mode,
+        language,
+        programFilterCount: input.programFilterIds?.length ?? 0
+      }
+    });
+
+    const [brandVoice, context] = await Promise.all([
+      input.brandVoiceId
+        ? prisma.brandVoice.findUnique({ where: { id: input.brandVoiceId } })
+        : prisma.brandVoice.findFirst({
+            orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }]
+          }),
+      loadProgramContext({ mode: input.mode, programFilterIds: input.programFilterIds })
+    ]);
+
+    const traitStates = await loadTraitStates(session.id, context.traitMeta);
+    const nextQuestionSet = chooseQuestion({
       mode: input.mode,
-      channel: input.mode === "voice" ? "WEB_VOICE" : input.mode === "chat" ? "WEB_CHAT" : "WEB_QUIZ",
-      status: "active",
-      sessionLanguageTag: language,
-      candidateId: input.candidateId
-    }
-  });
+      traitMeta: context.traitMeta,
+      traitStates,
+      programs: context.programs
+    });
+    logRotationTelemetry({
+      event: "session_create",
+      sessionId: session.id,
+      mode: input.mode,
+      durationMs: Date.now() - startedAt,
+      diagnostics: nextQuestionSet.diagnostics
+    });
+    const snapshot = buildSnapshot({
+      traitMeta: context.traitMeta,
+      traitStates,
+      activeTraitId: nextQuestionSet.nextQuestion?.traitId ?? null
+    });
+    const programFit = buildProgramFit({
+      programs: context.programs,
+      traitStates,
+      traitMeta: context.traitMeta
+    });
 
-  const [brandVoice, context] = await Promise.all([
-    input.brandVoiceId
-      ? prisma.brandVoice.findUnique({ where: { id: input.brandVoiceId } })
-      : prisma.brandVoice.findFirst({
-          orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }]
-        }),
-    loadProgramContext({ mode: input.mode, programFilterIds: input.programFilterIds })
-  ]);
+    const initialPrompt = buildInitialPrompt({
+      mode: input.mode,
+      languageTag: language,
+      brandVoice: brandVoice
+        ? {
+            name: brandVoice.name,
+            primaryTone: brandVoice.primaryTone,
+            toneModifiers: brandVoice.toneModifiers,
+            styleFlags: brandVoice.styleFlags
+          }
+        : null
+    });
+    const systemPrompt = buildInterviewSystemPrompt({
+      brandVoicePrompt: brandVoice
+        ? `Use a ${brandVoice.primaryTone} tone with these style flags: ${brandVoice.styleFlags.join(", ") || "clear and supportive"}.`
+        : null,
+      language
+    });
 
-  const traitStates = await loadTraitStates(session.id, context.traitMeta);
-  const nextQuestionSet = chooseQuestion({
-    mode: input.mode,
-    traitMeta: context.traitMeta,
-    traitStates,
-    programs: context.programs
-  });
-  logRotationTelemetry({
-    event: "session_create",
-    sessionId: session.id,
-    mode: input.mode,
-    durationMs: Date.now() - startedAt,
-    diagnostics: nextQuestionSet.diagnostics
-  });
-  const snapshot = buildSnapshot({
-    traitMeta: context.traitMeta,
-    traitStates,
-    activeTraitId: nextQuestionSet.nextQuestion?.traitId ?? null
-  });
-  const programFit = buildProgramFit({
-    programs: context.programs,
-    traitStates,
-    traitMeta: context.traitMeta
-  });
+    const result = {
+      sessionId: session.id,
+      brandVoiceId: brandVoice?.id ?? null,
+      realtimeVoiceName: brandVoice?.ttsVoiceName ?? "alloy",
+      language,
+      languageTag: language,
+      systemPrompt,
+      initialPrompt,
+      scoring_snapshot: snapshot,
+      program_fit: programFit,
+      nextQuestion: nextQuestionSet.nextQuestion,
+      prefetchedQuestions: nextQuestionSet.prefetchedQuestions,
+      answeredTraitCount: 0,
+      checkpoint: null
+    };
 
-  const initialPrompt = buildInitialPrompt({
-    mode: input.mode,
-    languageTag: language,
-    brandVoice: brandVoice
-      ? {
-          name: brandVoice.name,
-          primaryTone: brandVoice.primaryTone,
-          toneModifiers: brandVoice.toneModifiers,
-          styleFlags: brandVoice.styleFlags
+    endLangfuseSpan(span, {
+      output: {
+        sessionId: session.id,
+        nextQuestionId: result.nextQuestion?.id ?? null
+      },
+      metadata: {
+        durationMs: Date.now() - startedAt
+      }
+    });
+    spanClosed = true;
+
+    return result;
+  } catch (error) {
+    endLangfuseSpan(span, {
+      level: "ERROR",
+      statusMessage: error instanceof Error ? error.message : "create interview session failed",
+      metadata: {
+        durationMs: Date.now() - startedAt
+      }
+    });
+    spanClosed = true;
+    throw error;
+  } finally {
+    if (!spanClosed) {
+      endLangfuseSpan(span, {
+        metadata: {
+          durationMs: Date.now() - startedAt
         }
-      : null
-  });
-  const systemPrompt = buildInterviewSystemPrompt({
-    brandVoicePrompt: brandVoice
-      ? `Use a ${brandVoice.primaryTone} tone with these style flags: ${brandVoice.styleFlags.join(", ") || "clear and supportive"}.`
-      : null,
-    language
-  });
-
-  return {
-    sessionId: session.id,
-    brandVoiceId: brandVoice?.id ?? null,
-    realtimeVoiceName: brandVoice?.ttsVoiceName ?? "alloy",
-    language,
-    languageTag: language,
-    systemPrompt,
-    initialPrompt,
-    scoring_snapshot: snapshot,
-    program_fit: programFit,
-    nextQuestion: nextQuestionSet.nextQuestion,
-    prefetchedQuestions: nextQuestionSet.prefetchedQuestions,
-    answeredTraitCount: 0,
-    checkpoint: null
-  };
+      });
+    }
+  }
 };
 
 export const scoreTraitFromTurn = (input: {
@@ -602,185 +776,299 @@ export const handleInterviewTurn = async (input: {
 }) => {
   const startedAt = Date.now();
   const effectiveLanguage = (input.language ?? DEFAULT_INTERVIEW_LANGUAGE).trim().toLowerCase();
-  if (input.language) {
-    await prisma.candidateSession.update({
-      where: { id: input.sessionId },
-      data: { sessionLanguageTag: effectiveLanguage }
-    });
-  }
-  const context = await loadProgramContext({ mode: input.mode, programFilterIds: input.programFilterIds });
-  const previousTraitStates = await loadTraitStates(input.sessionId, context.traitMeta);
-  const previousProgramFit = buildProgramFit({
-    programs: context.programs,
-    traitStates: previousTraitStates,
-    traitMeta: context.traitMeta
-  });
-  const previousScoreMap = Object.fromEntries(previousProgramFit.programs.map((item) => [item.programId, item.fitScore_0_to_100]));
-
-  await prisma.transcriptTurn.create({
-    data: {
-      sessionId: input.sessionId,
-      speaker: "candidate",
-      text: input.text,
-      ts: new Date()
+  const span = startLangfuseSpan({
+    traceId: input.sessionId,
+    name: "interview.turn",
+    input: {
+      mode: input.mode,
+      language: effectiveLanguage,
+      textLength: input.text.length,
+      traitId: input.traitId ?? null,
+      questionId: input.questionId ?? null
     }
   });
+  let spanClosed = false;
 
-  if (input.traitId) {
-    const existing = previousTraitStates.find((item) => item.traitId === input.traitId);
-    const nextState = scoreTraitFromTurn({
-      answer: input.text,
-      traitId: input.traitId,
-      questionId: input.questionId,
-      mode: input.mode,
-      traitMeta: context.traitMeta,
-      existingState: existing
-        ? {
-            score0to5: existing.score0to5 ?? 2.5,
-            confidence0to1: existing.confidence0to1,
-            evidence: existing.evidence,
-            rationale: existing.rationale
-          }
-        : null
+  try {
+    if (input.language) {
+      await prisma.candidateSession.update({
+        where: { id: input.sessionId },
+        data: { sessionLanguageTag: effectiveLanguage }
+      });
+    }
+    const context = await loadProgramContext({ mode: input.mode, programFilterIds: input.programFilterIds });
+    const previousTraitStates = await loadTraitStates(input.sessionId, context.traitMeta);
+    const previousProgramFit = buildProgramFit({
+      programs: context.programs,
+      traitStates: previousTraitStates,
+      traitMeta: context.traitMeta
+    });
+    const previousScoreMap = Object.fromEntries(previousProgramFit.programs.map((item) => [item.programId, item.fitScore_0_to_100]));
+
+    await prisma.transcriptTurn.create({
+      data: {
+        sessionId: input.sessionId,
+        speaker: "candidate",
+        text: input.text,
+        ts: new Date()
+      }
     });
 
-    if (nextState) {
-      await prisma.candidateTraitScore.upsert({
-        where: {
-          sessionId_traitId: {
+    if (input.traitId) {
+      const existing = previousTraitStates.find((item) => item.traitId === input.traitId);
+      const nextState = scoreTraitFromTurn({
+        answer: input.text,
+        traitId: input.traitId,
+        questionId: input.questionId,
+        mode: input.mode,
+        traitMeta: context.traitMeta,
+        existingState: existing
+          ? {
+              score0to5: existing.score0to5 ?? 2.5,
+              confidence0to1: existing.confidence0to1,
+              evidence: existing.evidence,
+              rationale: existing.rationale
+            }
+          : null
+      });
+
+      if (nextState) {
+        await prisma.candidateTraitScore.upsert({
+          where: {
+            sessionId_traitId: {
+              sessionId: input.sessionId,
+              traitId: input.traitId
+            }
+          },
+          update: {
+            score0to5: nextState.score0to5,
+            confidence0to1: nextState.confidence0to1,
+            evidenceJson: JSON.stringify({ evidence: nextState.evidence }),
+            rationale: nextState.rationale
+          },
+          create: {
             sessionId: input.sessionId,
-            traitId: input.traitId
+            traitId: input.traitId,
+            score0to5: nextState.score0to5,
+            confidence0to1: nextState.confidence0to1,
+            evidenceJson: JSON.stringify({ evidence: nextState.evidence }),
+            rationale: nextState.rationale
           }
-        },
-        update: {
-          score0to5: nextState.score0to5,
-          confidence0to1: nextState.confidence0to1,
-          evidenceJson: JSON.stringify({ evidence: nextState.evidence }),
-          rationale: nextState.rationale
-        },
-        create: {
-          sessionId: input.sessionId,
-          traitId: input.traitId,
-          score0to5: nextState.score0to5,
-          confidence0to1: nextState.confidence0to1,
-          evidenceJson: JSON.stringify({ evidence: nextState.evidence }),
-          rationale: nextState.rationale
+        });
+      }
+    }
+
+    const traitStates = await loadTraitStates(input.sessionId, context.traitMeta);
+    const inferredPreferredTraitIds = inferPreferredTraitIdsFromText({
+      text: input.text,
+      traitMeta: context.traitMeta,
+      limit: 4
+    });
+    const prioritizedTraitIds = unique([...(input.preferredTraitIds ?? []), ...inferredPreferredTraitIds]).slice(0, 10);
+    const nextQuestionSet = chooseQuestion({
+      mode: input.mode,
+      traitMeta: context.traitMeta,
+      traitStates,
+      programs: context.programs,
+      recentTraitIds: input.askedTraitIds,
+      askedQuestionIds: input.askedQuestionIds,
+      preferredTraitIds: prioritizedTraitIds.length > 0 ? prioritizedTraitIds : undefined
+    });
+
+    const scoringSnapshot = buildSnapshot({
+      traitMeta: context.traitMeta,
+      traitStates,
+      activeTraitId: nextQuestionSet.nextQuestion?.traitId ?? null
+    });
+    const programFit = buildProgramFit({
+      programs: context.programs,
+      traitStates,
+      previousScores: previousScoreMap,
+      traitMeta: context.traitMeta
+    });
+    const answeredTraitCount = await prisma.transcriptTurn.count({
+      where: { sessionId: input.sessionId, speaker: "candidate" }
+    });
+    const checkpoint = shouldTriggerCheckpoint(answeredTraitCount)
+      ? {
+          required: true,
+          answeredTraitCount,
+          prompt: "Are you satisfied with these matches or keep going to improve confidence?",
+          suggestedTraitIds: programFit.programs[0]?.explainability.gaps.map((item) => item.traitId).slice(0, 2) ?? []
+        }
+      : null;
+    logRotationTelemetry({
+      event: "turn",
+      sessionId: input.sessionId,
+      mode: input.mode,
+      durationMs: Date.now() - startedAt,
+      answeredTraitCount,
+      checkpointRequired: Boolean(checkpoint?.required),
+      diagnostics: nextQuestionSet.diagnostics
+    });
+    if (inferredPreferredTraitIds.length > 0) {
+      log("info", "interview.preferences.inferred", {
+        sessionId: input.sessionId,
+        mode: input.mode,
+        inferredPreferredTraitIds
+      });
+    }
+
+    const result = {
+      languageTag: effectiveLanguage,
+      scoring_snapshot: scoringSnapshot,
+      program_fit: programFit,
+      nextQuestion: nextQuestionSet.nextQuestion,
+      prefetchedQuestions: nextQuestionSet.prefetchedQuestions,
+      answeredTraitCount,
+      checkpoint
+    };
+
+    endLangfuseSpan(span, {
+      output: {
+        answeredTraitCount,
+        checkpointRequired: Boolean(checkpoint?.required),
+        nextQuestionId: result.nextQuestion?.id ?? null
+      },
+      metadata: {
+        durationMs: Date.now() - startedAt,
+        inferredPreferredTraitCount: inferredPreferredTraitIds.length
+      }
+    });
+    spanClosed = true;
+
+    return result;
+  } catch (error) {
+    endLangfuseSpan(span, {
+      level: "ERROR",
+      statusMessage: error instanceof Error ? error.message : "interview turn failed",
+      metadata: {
+        durationMs: Date.now() - startedAt
+      }
+    });
+    spanClosed = true;
+    throw error;
+  } finally {
+    if (!spanClosed) {
+      endLangfuseSpan(span, {
+        metadata: {
+          durationMs: Date.now() - startedAt
         }
       });
     }
   }
-
-  const traitStates = await loadTraitStates(input.sessionId, context.traitMeta);
-  const nextQuestionSet = chooseQuestion({
-    mode: input.mode,
-    traitMeta: context.traitMeta,
-    traitStates,
-    programs: context.programs,
-    recentTraitIds: input.askedTraitIds,
-    askedQuestionIds: input.askedQuestionIds,
-    preferredTraitIds: input.preferredTraitIds
-  });
-
-  const scoringSnapshot = buildSnapshot({
-    traitMeta: context.traitMeta,
-    traitStates,
-    activeTraitId: nextQuestionSet.nextQuestion?.traitId ?? null
-  });
-  const programFit = buildProgramFit({
-    programs: context.programs,
-    traitStates,
-    previousScores: previousScoreMap,
-    traitMeta: context.traitMeta
-  });
-  const answeredTraitCount = await prisma.transcriptTurn.count({
-    where: { sessionId: input.sessionId, speaker: "candidate" }
-  });
-  const checkpoint = shouldTriggerCheckpoint(answeredTraitCount)
-    ? {
-        required: true,
-        answeredTraitCount,
-        prompt: "Are you satisfied with these matches or keep going to improve confidence?",
-        suggestedTraitIds: programFit.programs[0]?.explainability.gaps.map((item) => item.traitId).slice(0, 2) ?? []
-      }
-    : null;
-  logRotationTelemetry({
-    event: "turn",
-    sessionId: input.sessionId,
-    mode: input.mode,
-    durationMs: Date.now() - startedAt,
-    answeredTraitCount,
-    checkpointRequired: Boolean(checkpoint?.required),
-    diagnostics: nextQuestionSet.diagnostics
-  });
-
-  return {
-    languageTag: effectiveLanguage,
-    scoring_snapshot: scoringSnapshot,
-    program_fit: programFit,
-    nextQuestion: nextQuestionSet.nextQuestion,
-    prefetchedQuestions: nextQuestionSet.prefetchedQuestions,
-    answeredTraitCount,
-    checkpoint
-  };
 };
 
 export const handleCheckpointAction = async (input: {
   sessionId: string;
   mode: Mode;
-  action: "stop" | "continue" | "focus";
+  action: "stop" | "continue" | "focus" | "deepen";
   language?: string;
   focusTraitIds?: string[];
+  currentTraitId?: string;
   askedTraitIds?: string[];
   askedQuestionIds?: string[];
   programFilterIds?: string[];
 }) => {
   const startedAt = Date.now();
   const effectiveLanguage = (input.language ?? DEFAULT_INTERVIEW_LANGUAGE).trim().toLowerCase();
-  if (input.language) {
-    await prisma.candidateSession.update({
-      where: { id: input.sessionId },
-      data: { sessionLanguageTag: effectiveLanguage }
-    });
-  }
-  if (input.action === "stop") {
-    await prisma.candidateSession.update({
-      where: { id: input.sessionId },
-      data: { status: "completed", endedAt: new Date() }
-    });
-  }
-
-  const context = await loadProgramContext({ mode: input.mode, programFilterIds: input.programFilterIds });
-  const traitStates = await loadTraitStates(input.sessionId, context.traitMeta);
-  const nextQuestionSet = chooseQuestion({
-    mode: input.mode,
-    traitMeta: context.traitMeta,
-    traitStates,
-    programs: context.programs,
-    recentTraitIds: input.askedTraitIds,
-    askedQuestionIds: input.askedQuestionIds,
-    preferredTraitIds: input.action === "focus" ? input.focusTraitIds : undefined
+  const span = startLangfuseSpan({
+    traceId: input.sessionId,
+    name: "interview.checkpoint",
+    input: {
+      mode: input.mode,
+      action: input.action,
+      language: effectiveLanguage,
+      focusTraitCount: input.focusTraitIds?.length ?? 0
+    }
   });
-  logRotationTelemetry({
-    event: "checkpoint",
-    sessionId: input.sessionId,
-    mode: input.mode,
-    action: input.action,
-    durationMs: Date.now() - startedAt,
-    diagnostics: nextQuestionSet.diagnostics
-  });
+  let spanClosed = false;
 
-  return {
-    languageTag: effectiveLanguage,
-    nextQuestion: input.action === "stop" ? null : nextQuestionSet.nextQuestion,
-    scoring_snapshot: buildSnapshot({
+  try {
+    if (input.language) {
+      await prisma.candidateSession.update({
+        where: { id: input.sessionId },
+        data: { sessionLanguageTag: effectiveLanguage }
+      });
+    }
+    if (input.action === "stop") {
+      await prisma.candidateSession.update({
+        where: { id: input.sessionId },
+        data: { status: "completed", endedAt: new Date() }
+      });
+    }
+
+    const context = await loadProgramContext({ mode: input.mode, programFilterIds: input.programFilterIds });
+    const traitStates = await loadTraitStates(input.sessionId, context.traitMeta);
+    const fallbackCurrentTraitId = input.askedTraitIds?.[input.askedTraitIds.length - 1];
+    const deepenTraitId = input.currentTraitId ?? fallbackCurrentTraitId;
+    const nextQuestionSet = chooseQuestion({
+      mode: input.mode,
       traitMeta: context.traitMeta,
       traitStates,
-      activeTraitId: nextQuestionSet.nextQuestion?.traitId ?? null
-    }),
-    program_fit: buildProgramFit({
       programs: context.programs,
-      traitStates,
-      traitMeta: context.traitMeta
-    })
-  };
+      recentTraitIds: input.askedTraitIds,
+      askedQuestionIds: input.askedQuestionIds,
+      preferredTraitIds:
+        input.action === "focus"
+          ? input.focusTraitIds
+          : input.action === "deepen" && deepenTraitId
+            ? [deepenTraitId]
+            : undefined
+    });
+    logRotationTelemetry({
+      event: "checkpoint",
+      sessionId: input.sessionId,
+      mode: input.mode,
+      action: input.action,
+      durationMs: Date.now() - startedAt,
+      diagnostics: nextQuestionSet.diagnostics
+    });
+
+    const result = {
+      languageTag: effectiveLanguage,
+      nextQuestion: input.action === "stop" ? null : nextQuestionSet.nextQuestion,
+      scoring_snapshot: buildSnapshot({
+        traitMeta: context.traitMeta,
+        traitStates,
+        activeTraitId: nextQuestionSet.nextQuestion?.traitId ?? null
+      }),
+      program_fit: buildProgramFit({
+        programs: context.programs,
+        traitStates,
+        traitMeta: context.traitMeta
+      })
+    };
+
+    endLangfuseSpan(span, {
+      output: {
+        action: input.action,
+        nextQuestionId: result.nextQuestion?.id ?? null
+      },
+      metadata: {
+        durationMs: Date.now() - startedAt
+      }
+    });
+    spanClosed = true;
+
+    return result;
+  } catch (error) {
+    endLangfuseSpan(span, {
+      level: "ERROR",
+      statusMessage: error instanceof Error ? error.message : "checkpoint action failed",
+      metadata: {
+        durationMs: Date.now() - startedAt
+      }
+    });
+    spanClosed = true;
+    throw error;
+  } finally {
+    if (!spanClosed) {
+      endLangfuseSpan(span, {
+        metadata: {
+          durationMs: Date.now() - startedAt
+        }
+      });
+    }
+  }
 };

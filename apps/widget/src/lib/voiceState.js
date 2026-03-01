@@ -35,7 +35,7 @@ export const toVoiceBlobState = (phase) => {
         return "thinking";
     return "idle";
 };
-export const isConnectedPhase = (phase) => !["init", "permissions", "connecting", "error"].includes(phase);
+export const isConnectedPhase = (phase) => ["kickoff", "speaking", "listening", "thinking"].includes(phase);
 export const getVoicePhaseLabel = (phase) => {
     if (phase === "kickoff")
         return "Kickoff";

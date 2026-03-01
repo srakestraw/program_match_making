@@ -25,7 +25,7 @@ describe("admin persistence integration", () => {
 
     const traitOne = await prisma.trait.create({
       data: {
-        name: `Integration Trait 1 ${suffix}`,
+        name: `Admin Trait 1 ${suffix}`,
         category: "MOTIVATION",
         rubricScaleMin: 0,
         rubricScaleMax: 5
@@ -34,7 +34,7 @@ describe("admin persistence integration", () => {
 
     const traitTwo = await prisma.trait.create({
       data: {
-        name: `Integration Trait 2 ${suffix}`,
+        name: `Admin Trait 2 ${suffix}`,
         category: "INTERPERSONAL",
         rubricScaleMin: 0,
         rubricScaleMax: 5
@@ -43,7 +43,7 @@ describe("admin persistence integration", () => {
 
     const program = await prisma.program.create({
       data: {
-        name: `Integration Program ${suffix}`,
+        name: `Admin Program ${suffix}`,
         degreeLevel: "Graduate",
         isActive: true
       }

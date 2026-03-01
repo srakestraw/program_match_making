@@ -5,6 +5,8 @@ type TraitScorePanelProps = {
   traits: ScoringSnapshot["traits"];
   activeTraitId?: string | null;
   done?: boolean;
+  onActiveTraitAction?: (action: "continue" | "deepen") => void;
+  actionPending?: boolean;
 };
 
 const confidenceClass: Record<"low" | "medium" | "high", string> = {
@@ -35,7 +37,13 @@ const SegmentedScore = ({ score }: { score: number | null }) => {
   );
 };
 
-export const TraitScorePanel = ({ traits, activeTraitId, done = false }: TraitScorePanelProps) => {
+export const TraitScorePanel = ({
+  traits,
+  activeTraitId,
+  done = false,
+  onActiveTraitAction,
+  actionPending = false
+}: TraitScorePanelProps) => {
   const [expandedTraitIds, setExpandedTraitIds] = useState<Record<string, boolean>>({});
   const ordered = useMemo(() => traits, [traits]);
 
@@ -63,6 +71,26 @@ export const TraitScorePanel = ({ traits, activeTraitId, done = false }: TraitSc
                   {trait.status === "active" ? "in-progress" : trait.status}
                 </span>
               </div>
+              {isActive && onActiveTraitAction && !done && (
+                <div className="mb-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={() => onActiveTraitAction("continue")}
+                    disabled={actionPending}
+                  >
+                    Continue
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md border border-blue-300 bg-blue-100 px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={() => onActiveTraitAction("deepen")}
+                    disabled={actionPending}
+                  >
+                    Go deeper
+                  </button>
+                </div>
+              )}
               <div className="mb-1 flex items-center justify-between gap-2">
                 <SegmentedScore score={trait.score_1_to_5} />
                 {trait.confidence && (

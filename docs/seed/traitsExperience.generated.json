@@ -1,0 +1,189 @@
+{
+  "meta": {
+    "generatedAt": "2026-03-01T03:45:37.732Z",
+    "promptsUsed": [
+      "trait:Analytical & Quantitative Reasoning",
+      "trait:Statistical Modeling",
+      "trait:Data Analytics & Visualization",
+      "trait:Applied AI & Automation",
+      "trait:Accounting & Financial Reporting",
+      "trait:Financial Decision-Making",
+      "trait:Risk Assessment & Management",
+      "trait:Regulatory & Ethical Judgment",
+      "trait:Healthcare Systems Literacy",
+      "trait:Legal Reasoning",
+      "trait:Leadership & Team Direction",
+      "trait:Strategic Business Acumen",
+      "trait:Stakeholder Communication",
+      "trait:Technology Systems Thinking",
+      "trait:Cybersecurity & Privacy Governance",
+      "trait:Global & Cross-Cultural Agility",
+      "trait:Operations & Supply Chain Orientation",
+      "trait:Market & Customer Insight",
+      "trait:Innovation & Entrepreneurial Drive",
+      "trait:Real Estate Investment Analysis"
+    ]
+  },
+  "traitsExperienceSeed": [
+    {
+      "traitName": "Analytical & Quantitative Reasoning",
+      "displayName": "Analytical & Quantitative Reasoning",
+      "shortDescription": "Show how you bring analytical & quantitative reasoning to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Statistical Modeling",
+      "displayName": "Statistical Modeling",
+      "shortDescription": "Show how you bring statistical modeling to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Data Analytics & Visualization",
+      "displayName": "Data Analytics & Visualization",
+      "shortDescription": "Show how you bring data analytics & visualization to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Applied AI & Automation",
+      "displayName": "Applied AI & Automation",
+      "shortDescription": "Show how you bring applied ai & automation to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Accounting & Financial Reporting",
+      "displayName": "Accounting & Financial Reporting",
+      "shortDescription": "Show how you bring accounting & financial reporting to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Financial Decision-Making",
+      "displayName": "Financial Decision-Making",
+      "shortDescription": "Show how you bring financial decision-making to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Risk Assessment & Management",
+      "displayName": "Risk Assessment & Management",
+      "shortDescription": "Show how you bring risk assessment & management to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Regulatory & Ethical Judgment",
+      "displayName": "Regulatory & Ethical Judgment",
+      "shortDescription": "Show how you bring regulatory & ethical judgment to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Healthcare Systems Literacy",
+      "displayName": "Healthcare Systems Literacy",
+      "shortDescription": "Show how you bring healthcare systems literacy to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Legal Reasoning",
+      "displayName": "Legal Reasoning",
+      "shortDescription": "Show how you bring legal reasoning to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Leadership & Team Direction",
+      "displayName": "Leadership & Team Direction",
+      "shortDescription": "Show how you bring leadership & team direction to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Strategic Business Acumen",
+      "displayName": "Strategic Business Acumen",
+      "shortDescription": "Show how you bring strategic business acumen to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Stakeholder Communication",
+      "displayName": "Stakeholder Communication",
+      "shortDescription": "Show how you bring stakeholder communication to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Technology Systems Thinking",
+      "displayName": "Technology Systems Thinking",
+      "shortDescription": "Show how you bring technology systems thinking to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Cybersecurity & Privacy Governance",
+      "displayName": "Cybersecurity & Privacy Governance",
+      "shortDescription": "Show how you bring cybersecurity & privacy governance to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Global & Cross-Cultural Agility",
+      "displayName": "Global & Cross-Cultural Agility",
+      "shortDescription": "Show how you bring global & cross-cultural agility to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Operations & Supply Chain Orientation",
+      "displayName": "Operations & Supply Chain Orientation",
+      "shortDescription": "Show how you bring operations & supply chain orientation to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Market & Customer Insight",
+      "displayName": "Market & Customer Insight",
+      "shortDescription": "Show how you bring market & customer insight to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Innovation & Entrepreneurial Drive",
+      "displayName": "Innovation & Entrepreneurial Drive",
+      "shortDescription": "Show how you bring innovation & entrepreneurial drive to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    },
+    {
+      "traitName": "Real Estate Investment Analysis",
+      "displayName": "Real Estate Investment Analysis",
+      "shortDescription": "Show how you bring real estate investment analysis to real decisions.",
+      "archetypeTag": "ANALYST",
+      "displayIcon": "spark",
+      "visualMood": "ASPIRATIONAL"
+    }
+  ]
+}

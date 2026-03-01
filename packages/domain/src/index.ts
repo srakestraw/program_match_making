@@ -37,6 +37,13 @@ export const brandVoiceSampleTypes = ["headline", "cta", "email_intro", "descrip
 export const traitQuestionTypes = ["CHAT", "QUIZ"] as const;
 export const traitStatuses = ["DRAFT", "IN_REVIEW", "ACTIVE", "DEPRECATED"] as const;
 export const programStatuses = ["DRAFT", "ACTIVE", "INACTIVE"] as const;
+export const quizExperiencePresets = [
+  "ADMISSIONS_MARKETING",
+  "EXECUTIVE_MBA",
+  "GEN_Z_SOCIAL",
+  "TRADITIONAL_ACADEMIC",
+  "EXPERIMENTAL_AI"
+] as const;
 
 export type TraitCategory = (typeof traitCategories)[number];
 export type ProgramTraitPriorityBucket = (typeof programTraitPriorityBuckets)[number];
@@ -45,6 +52,92 @@ export type TraitStatus = (typeof traitStatuses)[number];
 export type ProgramStatus = (typeof programStatuses)[number];
 export type BrandVoiceTone = (typeof brandVoiceTones)[number];
 export type BrandVoiceSampleType = (typeof brandVoiceSampleTypes)[number];
+export type QuizExperiencePreset = (typeof quizExperiencePresets)[number];
+export type QuizMotionIntensity = "LOW" | "MEDIUM" | "HIGH";
+
+export type QuizExperienceResolvedFields = {
+  gradientSet: string;
+  motionIntensity: QuizMotionIntensity;
+  rankingMotionStyle: string;
+  revealStyle: string;
+  tonePreset: string;
+};
+
+export type QuizExperienceOverrides = Partial<QuizExperienceResolvedFields>;
+
+export const QUIZ_EXPERIENCE_PRESETS: Record<QuizExperiencePreset, QuizExperienceResolvedFields> = {
+  ADMISSIONS_MARKETING: {
+    gradientSet: "SUNRISE",
+    motionIntensity: "MEDIUM",
+    rankingMotionStyle: "SPRING",
+    revealStyle: "IDENTITY",
+    tonePreset: "GEN_Z_FRIENDLY"
+  },
+  EXECUTIVE_MBA: {
+    gradientSet: "SUNRISE",
+    motionIntensity: "LOW",
+    rankingMotionStyle: "SPRING",
+    revealStyle: "RANKED_LIST",
+    tonePreset: "PROFESSIONAL"
+  },
+  GEN_Z_SOCIAL: {
+    gradientSet: "SUNRISE",
+    motionIntensity: "HIGH",
+    rankingMotionStyle: "SPRING",
+    revealStyle: "IDENTITY",
+    tonePreset: "GEN_Z_FRIENDLY"
+  },
+  TRADITIONAL_ACADEMIC: {
+    gradientSet: "SUNRISE",
+    motionIntensity: "LOW",
+    rankingMotionStyle: "SPRING",
+    revealStyle: "RANKED_LIST",
+    tonePreset: "NEUTRAL"
+  },
+  EXPERIMENTAL_AI: {
+    gradientSet: "SUNRISE",
+    motionIntensity: "HIGH",
+    rankingMotionStyle: "SPRING",
+    revealStyle: "IDENTITY",
+    tonePreset: "PLAYFUL"
+  }
+};
+
+export const resolveQuizExperienceConfig = (
+  preset: QuizExperiencePreset | null | undefined,
+  overrides: QuizExperienceOverrides | null | undefined,
+  explicitFields?: Partial<QuizExperienceResolvedFields> | null
+): QuizExperienceResolvedFields => {
+  const base = preset ? QUIZ_EXPERIENCE_PRESETS[preset] : undefined;
+
+  return {
+    gradientSet:
+      explicitFields?.gradientSet ??
+      overrides?.gradientSet ??
+      base?.gradientSet ??
+      QUIZ_EXPERIENCE_PRESETS.ADMISSIONS_MARKETING.gradientSet,
+    motionIntensity:
+      explicitFields?.motionIntensity ??
+      overrides?.motionIntensity ??
+      base?.motionIntensity ??
+      QUIZ_EXPERIENCE_PRESETS.ADMISSIONS_MARKETING.motionIntensity,
+    rankingMotionStyle:
+      explicitFields?.rankingMotionStyle ??
+      overrides?.rankingMotionStyle ??
+      base?.rankingMotionStyle ??
+      QUIZ_EXPERIENCE_PRESETS.ADMISSIONS_MARKETING.rankingMotionStyle,
+    revealStyle:
+      explicitFields?.revealStyle ??
+      overrides?.revealStyle ??
+      base?.revealStyle ??
+      QUIZ_EXPERIENCE_PRESETS.ADMISSIONS_MARKETING.revealStyle,
+    tonePreset:
+      explicitFields?.tonePreset ??
+      overrides?.tonePreset ??
+      base?.tonePreset ??
+      QUIZ_EXPERIENCE_PRESETS.ADMISSIONS_MARKETING.tonePreset
+  };
+};
 
 export type ToneProfile = {
   formality: number;

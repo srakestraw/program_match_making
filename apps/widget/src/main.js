@@ -1,5 +1,5 @@
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { createBrowserRouter, Navigate, RouterProvider, useNavigate, useSearchParams } from "react-router-dom";
 import { QueryClient, QueryClientProvider, useMutation } from "@tanstack/react-query";
@@ -15,6 +15,8 @@ import { createLanguageUtterance } from "./lib/browserTts";
 import { EXTRA_LANGUAGE_OPTIONS, PRIMARY_LANGUAGE_OPTIONS, languageLabelFromTag } from "./constants/languages";
 import { LanguagePills } from "./components/LanguagePills";
 import { LanguagePickerModal } from "./components/LanguagePickerModal";
+import { IllustrationsDemo } from "./components/illustrations/IllustrationsDemo";
+import { InterviewTypeIllustration } from "./components/illustrations/InterviewTypeIllustration";
 import "./styles.css";
 const queryClient = new QueryClient();
 const api = createApiClient({ baseUrl: import.meta.env.VITE_API_URL ?? "http://localhost:4000" });
@@ -30,6 +32,7 @@ const parseModeParam = (value) => {
 };
 const transcriptId = (prefix) => `${prefix}-${crypto.randomUUID()}`;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const interestOnboardingPrompt = "Before we begin trait matching, what are you most interested in studying and what skills do you most enjoy using?";
 const defaultWidgetThemeTokens = {
     fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif",
     headingFontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif",
@@ -86,7 +89,7 @@ const useOnlineStatus = () => {
     }, []);
     return isOnline;
 };
-const LiveInsightsSidebar = ({ snapshot, programFit, activeTraitId, done = false }) => (_jsxs("aside", { className: "space-y-3", children: [_jsx(TraitScorePanel, { traits: snapshot?.traits ?? [], activeTraitId: activeTraitId ?? null, done: done }), _jsx(ProgramFloatField, { programs: programFit?.programs ?? [], selectedProgramId: programFit?.selectedProgramId ?? null, done: done })] }));
+const LiveInsightsSidebar = ({ snapshot, programFit, activeTraitId, done = false, onActiveTraitAction, activeTraitActionPending }) => (_jsxs("aside", { className: "space-y-3", children: [_jsx(TraitScorePanel, { traits: snapshot?.traits ?? [], activeTraitId: activeTraitId ?? null, done: done, onActiveTraitAction: onActiveTraitAction, actionPending: activeTraitActionPending }), _jsx(ProgramFloatField, { programs: programFit?.programs ?? [], selectedProgramId: programFit?.selectedProgramId ?? null, done: done })] }));
 const WidgetSetup = () => {
     const [searchParams] = useSearchParams();
     const queryMode = parseModeParam(searchParams.get("mode"));
@@ -95,6 +98,14 @@ const WidgetSetup = () => {
     const programFilterIds = queryProgramId ? [queryProgramId] : [];
     const [selectedMode, setSelectedMode] = useState(queryMode);
     const [started, setStarted] = useState(false);
+    const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+    const [selectorRailRect, setSelectorRailRect] = useState(null);
+    const modeGridRef = useRef(null);
+    const modeButtonRefs = useRef({
+        voice: null,
+        chat: null,
+        quiz: null
+    });
     const clear = useWidgetStore((state) => state.clear);
     const setMode = useWidgetStore((state) => state.setMode);
     const setProgramId = useWidgetStore((state) => state.setProgramId);
@@ -103,6 +114,58 @@ const WidgetSetup = () => {
         if (queryMode)
             setSelectedMode(queryMode);
     }, [queryMode]);
+    useEffect(() => {
+        if (typeof window === "undefined")
+            return;
+        const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+        const syncPreference = () => setPrefersReducedMotion(media.matches);
+        syncPreference();
+        media.addEventListener("change", syncPreference);
+        return () => media.removeEventListener("change", syncPreference);
+    }, []);
+    const positionSelectorRail = useCallback(() => {
+        if (lockMode || !selectedMode) {
+            setSelectorRailRect(null);
+            return;
+        }
+        const gridEl = modeGridRef.current;
+        const buttonEl = modeButtonRefs.current[selectedMode];
+        if (!gridEl || !buttonEl)
+            return;
+        const gridRect = gridEl.getBoundingClientRect();
+        const buttonRect = buttonEl.getBoundingClientRect();
+        setSelectorRailRect({
+            x: buttonRect.left - gridRect.left - 1,
+            y: buttonRect.top - gridRect.top - 1,
+            width: buttonRect.width + 2,
+            height: buttonRect.height + 2
+        });
+    }, [lockMode, selectedMode]);
+    useLayoutEffect(() => {
+        positionSelectorRail();
+    }, [positionSelectorRail]);
+    useEffect(() => {
+        if (lockMode)
+            return;
+        const gridEl = modeGridRef.current;
+        if (!gridEl)
+            return;
+        const onResize = () => positionSelectorRail();
+        window.addEventListener("resize", onResize);
+        let observer = null;
+        if (typeof ResizeObserver !== "undefined") {
+            observer = new ResizeObserver(onResize);
+            observer.observe(gridEl);
+            Object.values(modeButtonRefs.current).forEach((button) => {
+                if (button)
+                    observer?.observe(button);
+            });
+        }
+        return () => {
+            window.removeEventListener("resize", onResize);
+            observer?.disconnect();
+        };
+    }, [lockMode, positionSelectorRail]);
     const canStart = Boolean(selectedMode);
     if (started && selectedMode) {
         if (selectedMode === "voice") {
@@ -113,13 +176,22 @@ const WidgetSetup = () => {
         }
         return _jsx(QuizFlow, { mode: selectedMode, programFilterIds: programFilterIds, onRestart: () => setStarted(false) });
     }
-    return (_jsx("main", { className: "mx-auto flex min-h-screen max-w-3xl items-center px-4 py-10", children: _jsx(Card, { children: _jsxs("section", { className: "space-y-4", children: [_jsx("h1", { className: "text-3xl font-bold", children: "Program Match Interview" }), _jsx("p", { className: "text-sm text-slate-600", children: "Choose interview type to begin. Program ranking starts after your first responses." }), !lockMode && (_jsxs("div", { className: "space-y-2", children: [_jsx("p", { className: "text-sm font-semibold text-slate-800", children: "Interview type" }), _jsx("div", { className: "grid gap-2 sm:grid-cols-3", children: modeOptions.map((mode) => (_jsxs("button", { type: "button", className: `rounded-md border p-3 text-left ${selectedMode === mode.id ? "border-slate-900 bg-slate-100" : "border-slate-200"}`, onClick: () => setSelectedMode(mode.id), children: [_jsx("p", { className: "text-sm font-semibold text-slate-900", children: mode.label }), _jsx("p", { className: "text-xs text-slate-600", children: mode.description })] }, mode.id))) })] })), lockMode && selectedMode && (_jsxs("p", { className: "rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-700", children: ["Mode locked to: ", selectedMode.toUpperCase()] })), programFilterIds.length > 0 && (_jsx("p", { className: "rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-700", children: "Program filter from URL is active (1 program)." })), _jsx(Button, { disabled: !canStart, onClick: () => {
+    return (_jsx("main", { className: "mx-auto flex min-h-screen max-w-3xl items-center px-4 py-10", children: _jsx(Card, { children: _jsxs("section", { className: "space-y-4", children: [_jsx("h1", { className: "text-3xl font-bold", children: "Program Match Interview" }), _jsx("p", { className: "text-sm text-slate-600", children: "Choose interview type to begin. Program ranking starts after your first responses." }), !lockMode && (_jsxs("div", { className: "space-y-2", children: [_jsx("p", { className: "text-sm font-semibold text-slate-800", children: "Interview type" }), _jsxs("div", { ref: modeGridRef, className: "relative grid gap-2 sm:grid-cols-3", children: [selectorRailRect && (_jsx("div", { "aria-hidden": "true", className: `selector-rail ${prefersReducedMotion ? "selector-rail-reduced-motion" : "selector-rail-animated"}`, style: {
+                                            width: selectorRailRect.width,
+                                            height: selectorRailRect.height,
+                                            transform: `translate(${selectorRailRect.x}px, ${selectorRailRect.y}px)`
+                                        } })), modeOptions.map((mode) => {
+                                        const isSelected = selectedMode === mode.id;
+                                        return (_jsx("button", { type: "button", "aria-pressed": isSelected, ref: (element) => {
+                                                modeButtonRefs.current[mode.id] = element;
+                                            }, className: `relative z-10 rounded-md border p-3 text-left transition ${isSelected ? "mode-option-selected border-slate-900 bg-slate-100 ring-1 ring-slate-900/10" : "border-slate-200 bg-white hover:border-slate-300"} ${prefersReducedMotion ? "motion-reduce:transition-none" : "duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]"}`, onClick: () => setSelectedMode(mode.id), children: _jsxs("div", { className: "flex items-start gap-3", children: [_jsx("div", { className: "mode-option-ill-wrap", "aria-hidden": "true", children: _jsx(InterviewTypeIllustration, { type: mode.id, size: 44 }) }), _jsxs("div", { className: "min-w-0 flex-1 space-y-1", children: [_jsxs("div", { className: "flex items-start justify-between gap-2", children: [_jsx("p", { className: "text-sm font-semibold text-slate-900", children: mode.label }), isSelected && (_jsx("span", { className: "rounded-full bg-slate-900 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white", children: "Selected" }))] }), _jsx("p", { className: "text-xs text-slate-600", children: mode.description })] })] }) }, mode.id));
+                                    })] })] })), lockMode && selectedMode && (_jsxs("p", { className: "rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-700", children: ["Mode locked to: ", selectedMode.toUpperCase()] })), programFilterIds.length > 0 && (_jsx("p", { className: "rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-700", children: "Program filter from URL is active (1 program)." })), _jsx(Button, { disabled: !canStart, onClick: () => {
                             clear();
                             setMode(selectedMode);
                             setProgramFilterIds(programFilterIds);
                             setProgramId(programFilterIds[0] ?? null);
                             setStarted(true);
-                        }, children: "Start" })] }) }) }));
+                        }, children: "Start" }), import.meta.env.DEV && _jsx(IllustrationsDemo, {})] }) }) }));
 };
 const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
     const navigate = useNavigate();
@@ -127,6 +199,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
     const [transportState, setTransportState] = useState("idle");
     const [deviceLabel, setDeviceLabel] = useState("Unknown microphone");
     const [currentQuestion, setCurrentQuestion] = useState(null);
+    const [collectingPreferences, setCollectingPreferences] = useState(false);
     const [askedTraitIds, setAskedTraitIds] = useState([]);
     const [askedQuestionIds, setAskedQuestionIds] = useState([]);
     const [checkpointOpen, setCheckpointOpen] = useState(false);
@@ -142,6 +215,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
     const kickoffStartedRef = useRef(false);
     const realtimeSpeechFallbackTimerRef = useRef(null);
     const realtimeAssistantStartedRef = useRef(false);
+    const intentionalDisconnectRef = useRef(false);
     const isOnline = useOnlineStatus();
     const { transcript, scoringSnapshot, programFit, checkpoint, voicePhase, voiceInputMode, sessionLanguageTag, sessionLanguageLabel, detectedLanguageSuggestion, setSessionId, addTranscriptTurn, setMode, setProgramFilterIds, setScoringSnapshot, setProgramFit, setAnsweredTraitCount, setCheckpoint, setVoicePhase, setVoiceInputMode, setSessionLanguage, setDetectedLanguage, dismissDetectedLanguage, clear } = useWidgetStore();
     const debugVoice = (message, details) => {
@@ -161,6 +235,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
         realtimeSessionRef.current?.setPushToTalk(active);
         debugVoice("mic", { enabled: active, inputMode: voiceInputMode, phase: voicePhase });
     };
+    const isLiveInterviewPhase = (phase) => ["kickoff", "speaking", "listening", "thinking"].includes(phase);
     useEffect(() => {
         setMode(mode);
         setProgramFilterIds(programFilterIds);
@@ -233,6 +308,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
             action,
             language: sessionLanguageTag,
             focusTraitIds: action === "focus" ? checkpoint?.suggestedTraitIds : undefined,
+            currentTraitId: currentQuestion?.traitId,
             askedTraitIds,
             askedQuestionIds,
             programFilterIds: programFilterIds.length > 0 ? programFilterIds : undefined
@@ -285,7 +361,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
             return;
         setCurrentQuestion(question);
         setAskedQuestionIds((prev) => (prev.includes(question.id) ? prev : [...prev, question.id]));
-        setAskedTraitIds((prev) => (prev[prev.length - 1] === question.traitId ? prev : [...prev, question.traitId]));
+        setAskedTraitIds((prev) => [...prev, question.traitId]);
         const text = prefix ? `${prefix} ${question.prompt}` : question.prompt;
         addTranscriptTurn({ id: transcriptId("assistant"), speaker: "assistant", text, ts: new Date().toISOString() });
         if (sessionIdRef.current) {
@@ -307,7 +383,18 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
         setCheckpoint(interview.checkpoint ?? null);
         setAnsweredTraitCount(interview.answeredTraitCount ?? 0);
         if (interview.nextQuestion) {
-            await pushAssistantQuestion(interview.nextQuestion, interview.initialPrompt);
+            const onboardingText = interview.initialPrompt ? `${interview.initialPrompt} ${interestOnboardingPrompt}` : interestOnboardingPrompt;
+            setCurrentQuestion(null);
+            setCollectingPreferences(true);
+            addTranscriptTurn({ id: transcriptId("assistant"), speaker: "assistant", text: onboardingText, ts: new Date().toISOString() });
+            if (sessionIdRef.current) {
+                void appendTranscriptMutation.mutateAsync({
+                    id: sessionIdRef.current,
+                    turns: [{ ts: new Date().toISOString(), speaker: "assistant", text: onboardingText }]
+                });
+            }
+            transitionPhase("kickoff_ready");
+            speakPrompt(onboardingText);
             return;
         }
         if (interview.initialPrompt) {
@@ -366,6 +453,9 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
             setProgramFit(result.program_fit);
             setAnsweredTraitCount(result.answeredTraitCount);
             setCheckpoint(result.checkpoint);
+            if (collectingPreferences) {
+                setCollectingPreferences(false);
+            }
             if (result.checkpoint?.required) {
                 setCheckpointOpen(true);
                 setVoicePhase("paused");
@@ -411,13 +501,17 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
                 throw new Error("Session id missing");
             setSessionId(id);
             sessionIdRef.current = id;
+            intentionalDisconnectRef.current = false;
             debugVoice("session.ready", { sessionId: id });
             const realtimeSession = new RealtimeSession({
                 onStateChange: (state) => {
                     setTransportState(state);
                     debugVoice("transport.state", { state });
-                    if (state === "disconnected" && isConnectedPhase(useWidgetStore.getState().voicePhase)) {
-                        setError("Connection dropped. Retry connection.");
+                    if (state === "connected") {
+                        intentionalDisconnectRef.current = false;
+                    }
+                    if (state === "disconnected" && isLiveInterviewPhase(useWidgetStore.getState().voicePhase) && !intentionalDisconnectRef.current) {
+                        setError("Connection dropped. Please restart the interview when ready.");
                         setVoicePhase("error");
                     }
                 },
@@ -491,6 +585,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
                 realtimeSpeechFallbackTimerRef.current = null;
             }
             window.speechSynthesis?.cancel();
+            intentionalDisconnectRef.current = true;
             await realtimeSessionRef.current?.disconnect();
             if (sessionIdRef.current)
                 await api.completeSession(sessionIdRef.current);
@@ -504,6 +599,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
         }
     };
     const resetFlow = async () => {
+        intentionalDisconnectRef.current = true;
         await realtimeSessionRef.current?.disconnect();
         mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
         if (realtimeSpeechFallbackTimerRef.current !== null) {
@@ -516,6 +612,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
         setError(null);
         setCheckpointOpen(false);
         setCurrentQuestion(null);
+        setCollectingPreferences(false);
         setAskedQuestionIds([]);
         setAskedTraitIds([]);
         kickoffStartedRef.current = false;
@@ -544,10 +641,10 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
                                                 if (voicePhase !== "paused")
                                                     setVoicePhase("listening");
                                                 realtimeSessionRef.current?.setPushToTalk(true);
-                                            }, onTouchEnd: () => realtimeSessionRef.current?.setPushToTalk(false), disabled: voicePhase === "paused", children: "Hold to talk" })), _jsx(Button, { className: "bg-red-700", onClick: endSession, children: "End" })] })), _jsxs("div", { className: "max-h-72 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3", children: [transcript.length === 0 && _jsx("p", { className: "text-sm text-slate-500", children: "Transcript appears as the conversation runs." }), transcript.map((turn) => (_jsxs("div", { className: "rounded bg-slate-50 p-2 text-sm", children: [_jsxs("span", { className: "font-semibold capitalize", children: [turn.speaker, ":"] }), " ", turn.text] }, `${turn.id}-${turn.ts}`)))] }), checkpointOpen && checkpoint && (_jsxs("div", { className: "rounded-md border border-blue-200 bg-blue-50 p-3 text-sm", children: [_jsx("p", { className: "font-semibold text-slate-900", children: checkpoint.prompt }), _jsxs("div", { className: "mt-2 flex flex-wrap gap-2", children: [_jsx(Button, { className: "bg-slate-700", onClick: () => void handleCheckpointAction("stop"), children: "Stop and review" }), _jsx(Button, { onClick: () => void handleCheckpointAction("continue"), children: "Keep going" }), _jsx(Button, { className: "bg-slate-500", onClick: () => void handleCheckpointAction("focus"), disabled: checkpoint.suggestedTraitIds.length === 0, children: "Focus trait area" })] })] })), voicePhase === "ended" && (_jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: () => navigate("/widget/results"), children: "Review results" }), _jsx(Button, { className: "bg-slate-500", onClick: resetFlow, children: "Start over" })] })), !isOnline && _jsx("p", { className: "text-sm text-red-700", children: "You are offline. Reconnect to continue." }), error && _jsx("p", { className: "text-sm text-red-700", children: error }), debugVoiceEnabled && (_jsxs("div", { className: "rounded-md border border-slate-300 bg-slate-50 p-2 text-xs text-slate-700", children: [_jsxs("p", { children: ["Debug voice: engine=", _jsx("span", { className: "font-semibold", children: speechEngine })] }), _jsxs("p", { children: ["Minted voice=", _jsx("span", { className: "font-semibold", children: lastMintedVoice ?? "(none)" })] }), _jsxs("p", { children: ["Language=", _jsx("span", { className: "font-semibold", children: sessionLanguageTag })] })] }))] }), _jsx(LanguagePickerModal, { open: languagePickerOpen, options: EXTRA_LANGUAGE_OPTIONS, onClose: () => setLanguagePickerOpen(false), onSelect: (tag, label) => {
+                                            }, onTouchEnd: () => realtimeSessionRef.current?.setPushToTalk(false), disabled: voicePhase === "paused", children: "Hold to talk" })), _jsx(Button, { className: "bg-red-700", onClick: endSession, children: "End" })] })), _jsxs("div", { className: "max-h-72 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3", children: [transcript.length === 0 && _jsx("p", { className: "text-sm text-slate-500", children: "Transcript appears as the conversation runs." }), transcript.map((turn) => (_jsxs("div", { className: "rounded bg-slate-50 p-2 text-sm", children: [_jsxs("span", { className: "font-semibold capitalize", children: [turn.speaker, ":"] }), " ", turn.text] }, `${turn.id}-${turn.ts}`)))] }), checkpointOpen && checkpoint && (_jsxs("div", { className: "rounded-md border border-blue-200 bg-blue-50 p-3 text-sm", children: [_jsx("p", { className: "font-semibold text-slate-900", children: checkpoint.prompt }), _jsxs("div", { className: "mt-2 flex flex-wrap gap-2", children: [_jsx(Button, { className: "bg-slate-700", onClick: () => void handleCheckpointAction("stop"), children: "Stop and review" }), _jsx(Button, { onClick: () => void handleCheckpointAction("continue"), children: "Keep going" }), _jsx(Button, { className: "bg-blue-700", onClick: () => void handleCheckpointAction("deepen"), disabled: !currentQuestion?.traitId, children: "Go deeper on current trait" }), _jsx(Button, { className: "bg-slate-500", onClick: () => void handleCheckpointAction("focus"), disabled: checkpoint.suggestedTraitIds.length === 0, children: "Focus trait area" })] })] })), voicePhase === "ended" && (_jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: () => navigate("/widget/results"), children: "Review results" }), _jsx(Button, { className: "bg-slate-500", onClick: resetFlow, children: "Start over" })] })), !isOnline && _jsx("p", { className: "text-sm text-red-700", children: "You are offline. Reconnect to continue." }), error && _jsx("p", { className: "text-sm text-red-700", children: error }), debugVoiceEnabled && (_jsxs("div", { className: "rounded-md border border-slate-300 bg-slate-50 p-2 text-xs text-slate-700", children: [_jsxs("p", { children: ["Debug voice: engine=", _jsx("span", { className: "font-semibold", children: speechEngine })] }), _jsxs("p", { children: ["Minted voice=", _jsx("span", { className: "font-semibold", children: lastMintedVoice ?? "(none)" })] }), _jsxs("p", { children: ["Language=", _jsx("span", { className: "font-semibold", children: sessionLanguageTag })] })] }))] }), _jsx(LanguagePickerModal, { open: languagePickerOpen, options: EXTRA_LANGUAGE_OPTIONS, onClose: () => setLanguagePickerOpen(false), onSelect: (tag, label) => {
                                 setSessionLanguage(tag, label);
                                 setLanguagePickerOpen(false);
-                            } })] }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, activeTraitId: currentQuestion?.traitId ?? null, done: voicePhase === "ended" })] }) }));
+                            } })] }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, activeTraitId: currentQuestion?.traitId ?? null, done: voicePhase === "ended", onActiveTraitAction: (action) => void handleCheckpointAction(action), activeTraitActionPending: checkpointMutation.isPending })] }) }));
 };
 const ChatFlow = ({ mode, programFilterIds, onRestart }) => {
     const navigate = useNavigate();
@@ -555,6 +652,7 @@ const ChatFlow = ({ mode, programFilterIds, onRestart }) => {
     const [started, setStarted] = useState(false);
     const [error, setError] = useState(null);
     const [currentQuestion, setCurrentQuestion] = useState(null);
+    const [collectingPreferences, setCollectingPreferences] = useState(false);
     const [askedTraitIds, setAskedTraitIds] = useState([]);
     const [askedQuestionIds, setAskedQuestionIds] = useState([]);
     const isOnline = useOnlineStatus();
@@ -593,9 +691,11 @@ const ChatFlow = ({ mode, programFilterIds, onRestart }) => {
             setScoringSnapshot(session.scoring_snapshot ?? null);
             setProgramFit(session.program_fit ?? null);
             setStarted(true);
-            setCurrentQuestion(session.nextQuestion ?? null);
+            setCurrentQuestion(null);
             if (session.nextQuestion) {
-                addTranscriptTurn({ id: transcriptId("assistant"), speaker: "assistant", text: session.nextQuestion.prompt, ts: new Date().toISOString() });
+                const onboardingText = session.initialPrompt ? `${session.initialPrompt} ${interestOnboardingPrompt}` : interestOnboardingPrompt;
+                setCollectingPreferences(true);
+                addTranscriptTurn({ id: transcriptId("assistant"), speaker: "assistant", text: onboardingText, ts: new Date().toISOString() });
             }
         }
         catch (sessionError) {
@@ -604,16 +704,21 @@ const ChatFlow = ({ mode, programFilterIds, onRestart }) => {
     };
     const submitAnswer = async () => {
         const answer = input.trim();
-        if (!answer || !currentQuestion)
+        if (!answer || (!currentQuestion && !collectingPreferences))
             return;
         setInput("");
         addTranscriptTurn({ id: transcriptId("candidate"), speaker: "candidate", text: answer, ts: new Date().toISOString() });
-        setAskedTraitIds((prev) => [...prev, currentQuestion.traitId]);
-        setAskedQuestionIds((prev) => [...prev, currentQuestion.id]);
+        if (currentQuestion) {
+            setAskedTraitIds((prev) => [...prev, currentQuestion.traitId]);
+            setAskedQuestionIds((prev) => [...prev, currentQuestion.id]);
+        }
         try {
             const result = await turnMutation.mutateAsync(answer);
             setScoringSnapshot(result.scoring_snapshot);
             setProgramFit(result.program_fit);
+            if (collectingPreferences) {
+                setCollectingPreferences(false);
+            }
             if (result.nextQuestion) {
                 setCurrentQuestion(result.nextQuestion);
                 addTranscriptTurn({
@@ -644,6 +749,8 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }) => {
     const [started, setStarted] = useState(false);
     const [error, setError] = useState(null);
     const [currentQuestion, setCurrentQuestion] = useState(null);
+    const [collectingPreferences, setCollectingPreferences] = useState(false);
+    const [preferenceInput, setPreferenceInput] = useState("");
     const [quizExperience, setQuizExperience] = useState(null);
     const [askedTraitIds, setAskedTraitIds] = useState([]);
     const [askedQuestionIds, setAskedQuestionIds] = useState([]);
@@ -709,10 +816,38 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }) => {
             setScoringSnapshot(session.scoring_snapshot ?? null);
             setProgramFit(session.program_fit ?? null);
             setStarted(true);
-            setCurrentQuestion(session.nextQuestion ?? null);
+            setCurrentQuestion(null);
+            if (session.nextQuestion) {
+                const onboardingText = session.initialPrompt ? `${session.initialPrompt} ${interestOnboardingPrompt}` : interestOnboardingPrompt;
+                setCollectingPreferences(true);
+                addTranscriptTurn({ id: transcriptId("assistant"), speaker: "assistant", text: onboardingText, ts: new Date().toISOString() });
+            }
         }
         catch (startError) {
             setError(startError instanceof Error ? startError.message : "Could not start quiz.");
+        }
+    };
+    const submitPreferenceProfile = async () => {
+        const answer = preferenceInput.trim();
+        if (!answer || !collectingPreferences)
+            return;
+        setPreferenceInput("");
+        addTranscriptTurn({ id: transcriptId("candidate"), speaker: "candidate", text: answer, ts: new Date().toISOString() });
+        try {
+            const result = await turnMutation.mutateAsync(answer);
+            setScoringSnapshot(result.scoring_snapshot);
+            setProgramFit(result.program_fit);
+            setCollectingPreferences(false);
+            if (result.nextQuestion) {
+                setCurrentQuestion(result.nextQuestion);
+            }
+            else {
+                await api.completeSession(sessionId);
+                navigate("/widget/results");
+            }
+        }
+        catch (selectError) {
+            setError(selectError instanceof Error ? selectError.message : "Could not submit your preferences.");
         }
     };
     const selectAnswer = async (answer) => {
@@ -744,7 +879,7 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }) => {
         .filter((item) => typeof item?.label === "string")
         .map((item) => [String(item.label), item]));
     const traitDisplayName = currentQuestion?.publicLabel ?? currentQuestion?.traitName;
-    return (_jsx("main", { className: "mx-auto min-h-screen max-w-7xl px-4 py-8", children: _jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]", children: [_jsx(Card, { children: _jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "Quiz" }), !started && (_jsxs("div", { className: "space-y-4 rounded-xl bg-gradient-to-br from-amber-100 via-orange-50 to-rose-100 p-4", children: [_jsx("p", { className: "text-xs font-semibold uppercase tracking-wide text-slate-600", children: quizExperience?.estimatedTimeLabel ?? "3-5 min" }), _jsx("h3", { className: "text-2xl font-bold text-slate-900", children: quizExperience?.headline ?? "Discover your best-fit graduate path" }), _jsx("p", { className: "text-sm text-slate-700", children: quizExperience?.subheadline ?? "A quick, personality-first quiz to see where you thrive." }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: startQuiz, disabled: !isOnline || createInterviewMutation.isPending, children: "Start" }), _jsx(Button, { className: "bg-slate-500", onClick: onRestart, children: "Back" })] })] })), started && currentQuestion && (_jsxs(_Fragment, { children: [_jsxs("div", { className: "flex items-center justify-between", children: [_jsx("p", { className: "text-xs uppercase tracking-wide text-slate-500", children: traitDisplayName }), progressLabel && _jsxs("p", { className: "text-xs font-semibold text-slate-600", children: ["Progress: ", progressLabel] })] }), currentQuestion.narrativeIntro && _jsx("p", { className: "text-sm text-slate-600", children: currentQuestion.narrativeIntro }), _jsx("h3", { className: "text-lg font-semibold text-slate-900", children: currentQuestion.prompt }), _jsx("div", { className: "grid gap-2", children: currentQuestion.options.map((option) => (_jsx("button", { type: "button", className: "rounded-xl border border-slate-300 bg-white px-4 py-3 text-left text-sm shadow-sm transition hover:-translate-y-0.5 hover:border-slate-900", onClick: () => void selectAnswer(option), disabled: !isOnline || turnMutation.isPending, children: _jsxs("div", { className: "flex items-start justify-between gap-3", children: [_jsxs("div", { children: [_jsx("p", { className: "font-semibold text-slate-900", children: option }), optionMetaByLabel.get(option)?.microCopy && (_jsx("p", { className: "mt-1 text-xs text-slate-600", children: optionMetaByLabel.get(option)?.microCopy }))] }), _jsx("span", { className: "rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-600", children: (optionMetaByLabel.get(option)?.iconToken ?? "spark").slice(0, 10) })] }) }, `${currentQuestion.id}-${option}`))) })] })), error && _jsx("p", { className: "text-sm text-red-700", children: error })] }) }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, activeTraitId: currentQuestion?.traitId ?? null })] }) }));
+    return (_jsx("main", { className: "mx-auto min-h-screen max-w-7xl px-4 py-8", children: _jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]", children: [_jsx(Card, { children: _jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "Quiz" }), !started && (_jsxs("div", { className: "space-y-4 rounded-xl bg-gradient-to-br from-amber-100 via-orange-50 to-rose-100 p-4", children: [_jsx("p", { className: "text-xs font-semibold uppercase tracking-wide text-slate-600", children: quizExperience?.estimatedTimeLabel ?? "3-5 min" }), _jsx("h3", { className: "text-2xl font-bold text-slate-900", children: quizExperience?.headline ?? "Discover your best-fit graduate path" }), _jsx("p", { className: "text-sm text-slate-700", children: quizExperience?.subheadline ?? "A quick, personality-first quiz to see where you thrive." }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: startQuiz, disabled: !isOnline || createInterviewMutation.isPending, children: "Start" }), _jsx(Button, { className: "bg-slate-500", onClick: onRestart, children: "Back" })] })] })), started && collectingPreferences && (_jsxs("div", { className: "space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4", children: [_jsx("p", { className: "text-sm font-semibold text-slate-900", children: "Tell us your interests and favorite skills" }), _jsx("p", { className: "text-sm text-slate-700", children: "Share what you are most interested in studying and which skills you enjoy using. We will tailor the quiz flow from this." }), _jsx("textarea", { className: "w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm", rows: 4, value: preferenceInput, onChange: (event) => setPreferenceInput(event.target.value), placeholder: "Example: I enjoy data storytelling, dashboards, and solving business problems with SQL and Python." }), _jsx("div", { className: "flex gap-2", children: _jsx(Button, { onClick: () => void submitPreferenceProfile(), disabled: !isOnline || turnMutation.isPending || preferenceInput.trim().length === 0, children: "Continue" }) })] })), started && currentQuestion && (_jsxs(_Fragment, { children: [_jsxs("div", { className: "quiz-question-swap space-y-4", children: [_jsxs("div", { className: "flex items-center justify-between", children: [_jsx("p", { className: "text-xs uppercase tracking-wide text-slate-500", children: traitDisplayName }), progressLabel && _jsxs("p", { className: "text-xs font-semibold text-slate-600", children: ["Progress: ", progressLabel] })] }), currentQuestion.narrativeIntro && _jsx("p", { className: "text-sm text-slate-600", children: currentQuestion.narrativeIntro }), _jsx("h3", { className: "text-lg font-semibold text-slate-900", children: currentQuestion.prompt })] }, currentQuestion.id), _jsx("div", { className: "grid gap-2", children: currentQuestion.options.map((option) => (_jsx("button", { type: "button", className: "rounded-xl border border-slate-300 bg-white px-4 py-3 text-left text-sm shadow-sm transition hover:-translate-y-0.5 hover:border-slate-900", onClick: () => void selectAnswer(option), disabled: !isOnline || turnMutation.isPending, children: _jsxs("div", { className: "flex items-start justify-between gap-3", children: [_jsxs("div", { children: [_jsx("p", { className: "font-semibold text-slate-900", children: option }), optionMetaByLabel.get(option)?.microCopy && (_jsx("p", { className: "mt-1 text-xs text-slate-600", children: optionMetaByLabel.get(option)?.microCopy }))] }), _jsx("span", { className: "rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-600", children: (optionMetaByLabel.get(option)?.iconToken ?? "spark").slice(0, 10) })] }) }, `${currentQuestion.id}-${option}`))) })] })), error && _jsx("p", { className: "text-sm text-red-700", children: error })] }) }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, activeTraitId: currentQuestion?.traitId ?? null })] }) }));
 };
 const ResultsPage = () => {
     const navigate = useNavigate();

@@ -29,6 +29,171 @@ export const traitsSeed = [
   { name: "Real Estate Investment Analysis", category: "EXPERIENCE", definition: "Assesses commercial property value, return, and development feasibility." }
 ];
 
+export type TraitExperienceSeed = {
+  publicLabel: string;
+  oneLineHook: string;
+  archetypeTag: "ANALYST" | "BUILDER" | "STRATEGIST" | "OPERATOR" | "VISIONARY" | "LEADER" | "COMMUNICATOR";
+  displayIcon: string;
+  visualMood: "NEUTRAL" | "ASPIRATIONAL" | "PLAYFUL" | "BOLD" | "SERIOUS";
+};
+
+const traitExperienceSeedByName: Record<string, TraitExperienceSeed> = {
+  "Analytical & Quantitative Reasoning": {
+    publicLabel: "Decision Logic Builder",
+    oneLineHook: "You break complex problems into clear, evidence-backed choices.",
+    archetypeTag: "ANALYST",
+    displayIcon: "chart-line",
+    visualMood: "SERIOUS"
+  },
+  "Statistical Modeling": {
+    publicLabel: "Model Insight Architect",
+    oneLineHook: "You turn uncertainty into predictions people can act on.",
+    archetypeTag: "ANALYST",
+    displayIcon: "sigma",
+    visualMood: "SERIOUS"
+  },
+  "Data Analytics & Visualization": {
+    publicLabel: "Data Pattern Decoder",
+    oneLineHook: "You turn raw information into clarity and confident decisions.",
+    archetypeTag: "ANALYST",
+    displayIcon: "chart-bar",
+    visualMood: "BOLD"
+  },
+  "Applied AI & Automation": {
+    publicLabel: "AI Workflow Builder",
+    oneLineHook: "You use AI and automation to remove friction and scale smart decisions.",
+    archetypeTag: "BUILDER",
+    displayIcon: "spark",
+    visualMood: "BOLD"
+  },
+  "Accounting & Financial Reporting": {
+    publicLabel: "Financial Truth Keeper",
+    oneLineHook: "You keep financial stories accurate, structured, and decision-ready.",
+    archetypeTag: "OPERATOR",
+    displayIcon: "ledger",
+    visualMood: "SERIOUS"
+  },
+  "Financial Decision-Making": {
+    publicLabel: "Capital Strategy Thinker",
+    oneLineHook: "You weigh risk, return, and tradeoffs with disciplined judgment.",
+    archetypeTag: "STRATEGIST",
+    displayIcon: "coins",
+    visualMood: "SERIOUS"
+  },
+  "Risk Assessment & Management": {
+    publicLabel: "Risk Signal Navigator",
+    oneLineHook: "You spot downside early and design practical safeguards.",
+    archetypeTag: "OPERATOR",
+    displayIcon: "shield",
+    visualMood: "SERIOUS"
+  },
+  "Regulatory & Ethical Judgment": {
+    publicLabel: "Ethical Decision Guard",
+    oneLineHook: "You balance ambition with compliance, integrity, and public trust.",
+    archetypeTag: "LEADER",
+    displayIcon: "balance-scale",
+    visualMood: "SERIOUS"
+  },
+  "Healthcare Systems Literacy": {
+    publicLabel: "Healthcare Systems Navigator",
+    oneLineHook: "You understand how policy, operations, and care delivery connect.",
+    archetypeTag: "STRATEGIST",
+    displayIcon: "health-cross",
+    visualMood: "NEUTRAL"
+  },
+  "Legal Reasoning": {
+    publicLabel: "Case Logic Strategist",
+    oneLineHook: "You build structured arguments from facts, rules, and implications.",
+    archetypeTag: "STRATEGIST",
+    displayIcon: "gavel",
+    visualMood: "SERIOUS"
+  },
+  "Leadership & Team Direction": {
+    publicLabel: "Team Momentum Leader",
+    oneLineHook: "You align people around priorities and move execution forward.",
+    archetypeTag: "LEADER",
+    displayIcon: "compass",
+    visualMood: "ASPIRATIONAL"
+  },
+  "Strategic Business Acumen": {
+    publicLabel: "Strategy Outcome Driver",
+    oneLineHook: "You connect daily choices to long-term competitive advantage.",
+    archetypeTag: "STRATEGIST",
+    displayIcon: "target",
+    visualMood: "BOLD"
+  },
+  "Stakeholder Communication": {
+    publicLabel: "Cross-Functional Communicator",
+    oneLineHook: "You translate complexity so diverse stakeholders can decide with confidence.",
+    archetypeTag: "COMMUNICATOR",
+    displayIcon: "message",
+    visualMood: "ASPIRATIONAL"
+  },
+  "Technology Systems Thinking": {
+    publicLabel: "Systems Architecture Thinker",
+    oneLineHook: "You see how platforms, processes, and tradeoffs work as one system.",
+    archetypeTag: "BUILDER",
+    displayIcon: "network",
+    visualMood: "NEUTRAL"
+  },
+  "Cybersecurity & Privacy Governance": {
+    publicLabel: "Trust Security Steward",
+    oneLineHook: "You protect data, reduce exposure, and embed governance by design.",
+    archetypeTag: "OPERATOR",
+    displayIcon: "lock-shield",
+    visualMood: "SERIOUS"
+  },
+  "Global & Cross-Cultural Agility": {
+    publicLabel: "Global Context Adapter",
+    oneLineHook: "You collaborate across cultures and turn differences into execution strength.",
+    archetypeTag: "COMMUNICATOR",
+    displayIcon: "globe",
+    visualMood: "ASPIRATIONAL"
+  },
+  "Operations & Supply Chain Orientation": {
+    publicLabel: "Flow Optimization Operator",
+    oneLineHook: "You improve reliability, speed, and cost across end-to-end operations.",
+    archetypeTag: "OPERATOR",
+    displayIcon: "route",
+    visualMood: "NEUTRAL"
+  },
+  "Market & Customer Insight": {
+    publicLabel: "Customer Signal Reader",
+    oneLineHook: "You turn market behavior into strategy that drives growth.",
+    archetypeTag: "COMMUNICATOR",
+    displayIcon: "users",
+    visualMood: "PLAYFUL"
+  },
+  "Innovation & Entrepreneurial Drive": {
+    publicLabel: "Venture Momentum Builder",
+    oneLineHook: "You test bold ideas quickly and turn learning into traction.",
+    archetypeTag: "VISIONARY",
+    displayIcon: "rocket",
+    visualMood: "BOLD"
+  },
+  "Real Estate Investment Analysis": {
+    publicLabel: "Real Estate Evaluator",
+    oneLineHook: "You assess property opportunities with disciplined return and risk analysis.",
+    archetypeTag: "ANALYST",
+    displayIcon: "building",
+    visualMood: "SERIOUS"
+  }
+};
+
+export const getSeedTraitExperience = (traitName: string): TraitExperienceSeed => {
+  const configured = traitExperienceSeedByName[traitName];
+  if (!configured) {
+    return {
+      publicLabel: traitName,
+      oneLineHook: `Show how you bring ${traitName.toLowerCase()} to real decisions.`,
+      archetypeTag: "ANALYST",
+      displayIcon: "spark",
+      visualMood: "ASPIRATIONAL"
+    };
+  }
+  return configured;
+};
+
 export const programsSeed = [
   { name: "Interdisciplinary Studies: Accounting and Data Science Concentration, Master of", description: "Interdisciplinary graduate training combining accounting depth with data-science methods.", degreeLevel: "Master's", department: "J. Mack Robinson College of Business" },
   { name: "Master of Interdisciplinary Studies (Actuarial Science, Artificial Intelligence and Information Systems Concentration)", description: "Cross-disciplinary preparation in actuarial science, AI, and information systems.", degreeLevel: "Master's", department: "J. Mack Robinson College of Business" },
@@ -165,18 +330,34 @@ export const programTraitPlan: ProgramTraitPlanRow[] = [
 
 /** QUIZ options per doc: exactly ["Beginner","Developing","Proficient","Advanced"] */
 export const QUIZ_OPTIONS_JSON = '["Beginner","Developing","Proficient","Advanced"]';
+export const QUIZ_ANSWER_OPTIONS_META_JSON = JSON.stringify([
+  { label: "Beginner", microCopy: "I am just starting to explore this space.", iconToken: "starter" },
+  { label: "Developing", microCopy: "I have done projects and I am building confidence.", iconToken: "builder" },
+  { label: "Proficient", microCopy: "I use this comfortably in real work.", iconToken: "steady" },
+  { label: "Advanced", microCopy: "I lead, optimize, and mentor others here.", iconToken: "mentor" }
+]);
 
 export type TraitQuestionSeedRow = {
   traitName: string;
   type: "CHAT" | "QUIZ";
   prompt: string;
+  narrativeIntro?: string;
   optionsJson?: string;
+  answerOptionsMetaJson?: string;
 };
 
 /** Build traitQuestionsSeed: 2 CHAT + 1 QUIZ per trait with required optionsJson for QUIZ. */
 export function buildTraitQuestionsSeed(): TraitQuestionSeedRow[] {
   const rows: TraitQuestionSeedRow[] = [];
   for (const t of traitsSeed) {
+    const narrativeIntroByCategory: Record<string, string> = {
+      ACADEMIC: "Let us map how this skill currently shows up in your work and projects.",
+      INTERPERSONAL: "Think about how you naturally show up with other people.",
+      MOTIVATION: "This one is about your momentum and what energizes your growth.",
+      EXPERIENCE: "Now let us ground this in how you operate in real-world contexts.",
+      LEADERSHIP: "Consider how you influence outcomes when others are involved.",
+      PROBLEM_SOLVING: "Picture a complex challenge and how you typically approach it."
+    };
     rows.push(
       {
         traitName: t.name,
@@ -191,8 +372,10 @@ export function buildTraitQuestionsSeed(): TraitQuestionSeedRow[] {
       {
         traitName: t.name,
         type: "QUIZ",
-        prompt: `How would you rate your current level in this area?`,
-        optionsJson: QUIZ_OPTIONS_JSON
+        narrativeIntro: narrativeIntroByCategory[t.category] ?? "Let us quickly calibrate how this area feels for you right now.",
+        prompt: `When ${t.name.toLowerCase()} comes up, what feels most like you today?`,
+        optionsJson: QUIZ_OPTIONS_JSON,
+        answerOptionsMetaJson: QUIZ_ANSWER_OPTIONS_META_JSON
       }
     );
   }

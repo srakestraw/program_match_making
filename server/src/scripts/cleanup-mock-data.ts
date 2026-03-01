@@ -30,7 +30,6 @@ async function run() {
       OR: [
         { name: { in: seededTraitNames } },
         { name: { startsWith: "Failure Trait " } },
-        { name: { startsWith: "Integration Trait " } },
         { name: { startsWith: "Inbound SMS Trait " } }
       ]
     }
@@ -40,8 +39,7 @@ async function run() {
     where: {
       OR: [
         { name: { in: seededProgramNames } },
-        { name: { startsWith: "Failure Program " } },
-        { name: { startsWith: "Integration Program " } }
+        { name: { startsWith: "Failure Program " } }
       ]
     }
   });

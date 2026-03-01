@@ -1,4 +1,4 @@
-import { PreferredChannel, Prisma, ProgramTraitPriorityBucket, TraitQuestionType } from "@prisma/client";
+import { PreferredChannel, Prisma, ProgramTraitPriorityBucket, QuizExperiencePreset, TraitQuestionType } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
@@ -6,6 +6,7 @@ import { upsertCandidate } from "../lib/candidates.js";
 import { sendError, sendValidationError } from "../lib/http.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import { defaultWidgetThemeTokens, normalizeWidgetThemeTokens } from "../lib/widgetTheme.js";
+import { resolveQuizExperienceConfig, type QuizExperienceOverrides, quizExperiencePresets } from "@pmm/domain";
 
 const bucketRank: Record<ProgramTraitPriorityBucket, number> = {
   CRITICAL: 0,
@@ -60,6 +61,76 @@ const parseOptionMeta = (raw: string | null) => {
   } catch {
     return [];
   }
+};
+
+const quizExperienceOverridesSchema = z
+  .object({
+    gradientSet: z.string().trim().min(1).max(80).optional(),
+    motionIntensity: z.enum(["LOW", "MEDIUM", "HIGH"]).optional(),
+    rankingMotionStyle: z.string().trim().min(1).max(80).optional(),
+    revealStyle: z.string().trim().min(1).max(80).optional(),
+    tonePreset: z.string().trim().min(1).max(80).optional()
+  })
+  .strict();
+
+const normalizeQuizExperienceOverrides = (raw: unknown): QuizExperienceOverrides | null => {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const parsed = quizExperienceOverridesSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  const entries = Object.entries(parsed.data).filter(([, value]) => value !== undefined);
+  if (entries.length === 0) return null;
+  return Object.fromEntries(entries) as QuizExperienceOverrides;
+};
+
+const formatQuizExperienceConfig = (config: {
+  id: string;
+  headline: string;
+  subheadline: string;
+  estimatedTimeLabel: string;
+  tonePreset: string;
+  gradientSet: string;
+  motionIntensity: string;
+  rankingMotionStyle: string;
+  revealStyle: string;
+  experiencePreset: QuizExperiencePreset | null;
+  experienceOverrides: Prisma.JsonValue | null;
+  introMediaPrompt: string | null;
+  revealMediaPrompt: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}) => {
+  const experienceOverrides = normalizeQuizExperienceOverrides(config.experienceOverrides);
+  const resolved = resolveQuizExperienceConfig(
+    config.experiencePreset,
+    experienceOverrides,
+    {
+      gradientSet: config.gradientSet,
+      motionIntensity: config.motionIntensity as "LOW" | "MEDIUM" | "HIGH",
+      rankingMotionStyle: config.rankingMotionStyle,
+      revealStyle: config.revealStyle,
+      tonePreset: config.tonePreset
+    }
+  );
+
+  return {
+    id: config.id,
+    headline: config.headline,
+    subheadline: config.subheadline,
+    estimatedTimeLabel: config.estimatedTimeLabel,
+    tonePreset: resolved.tonePreset,
+    gradientSet: resolved.gradientSet,
+    motionIntensity: resolved.motionIntensity,
+    rankingMotionStyle: resolved.rankingMotionStyle,
+    revealStyle: resolved.revealStyle,
+    experiencePreset: config.experiencePreset,
+    experienceOverrides,
+    introMediaPrompt: config.introMediaPrompt,
+    revealMediaPrompt: config.revealMediaPrompt,
+    createdAt: config.createdAt.toISOString(),
+    updatedAt: config.updatedAt.toISOString()
+  };
 };
 
 const isMissingWidgetThemeTableError = (error: unknown) =>
@@ -308,8 +379,8 @@ publicRouter.get("/quiz-experience", async (_req, res) => {
   try {
     const config =
       (await prisma.quizExperienceConfig.findUnique({ where: { id: "default" } })) ??
-      (await prisma.quizExperienceConfig.create({ data: { id: "default" } }));
-    res.json({ data: config });
+      (await prisma.quizExperienceConfig.create({ data: { id: "default", experiencePreset: quizExperiencePresets[0] } }));
+    res.json({ data: formatQuizExperienceConfig(config) });
   } catch (error) {
     sendError(res, 400, error instanceof Error ? error.message : "Could not fetch quiz experience");
   }

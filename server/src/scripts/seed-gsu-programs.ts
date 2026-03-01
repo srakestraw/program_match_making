@@ -1,6 +1,7 @@
 /**
  * Seed traits, programs, and program–trait assignments from seed-payloads.
  * Traits get full rubric and 2 CHAT + 1 QUIZ questions so they are complete; status is set to ACTIVE.
+ * Student-facing label fields are populated from AI-generated seed output when available.
  * Run: pnpm --filter @pmm/server seed:gsu-programs
  */
 import {
@@ -10,12 +11,16 @@ import {
   TraitQuestionType,
   TraitStatus
 } from "@prisma/client";
+import { createHash } from "node:crypto";
 import dotenv from "dotenv";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { computeTraitCompleteness } from "../domain/traits/completeness.js";
+import { generateTraitExperienceDraft } from "../lib/traitContentGeneration.js";
 import {
   buildTraitQuestionsSeed,
   defaultRubricForTrait,
+  getSeedTraitExperience,
   programTraitPlan,
   programsSeed,
   traitsSeed
@@ -25,6 +30,9 @@ dotenv.config({ path: path.resolve(process.cwd(), "../.env") });
 dotenv.config();
 
 const prisma = new PrismaClient();
+const repoRoot = path.resolve(process.cwd(), "..");
+const generatedSeedPath = path.join(repoRoot, "docs", "seed", "seed.generated.json");
+const aiCachePath = path.join(repoRoot, "docs", "seed", "ai-cache.generated.json");
 
 const categoryMap: Record<string, TraitCategory> = {
   ACADEMIC: TraitCategory.ACADEMIC,
@@ -42,36 +50,164 @@ const bucketMap: Record<string, ProgramTraitPriorityBucket> = {
   NICE_TO_HAVE: ProgramTraitPriorityBucket.NICE_TO_HAVE
 };
 
+type TraitExperienceSeed = {
+  publicLabel: string;
+  oneLineHook: string;
+  archetypeTag: "ANALYST" | "BUILDER" | "STRATEGIST" | "OPERATOR" | "VISIONARY" | "LEADER" | "COMMUNICATOR";
+  displayIcon: string;
+  visualMood: "NEUTRAL" | "ASPIRATIONAL" | "PLAYFUL" | "BOLD" | "SERIOUS";
+};
+
+const isArchetype = (value: unknown): value is TraitExperienceSeed["archetypeTag"] =>
+  typeof value === "string" && ["ANALYST", "BUILDER", "STRATEGIST", "OPERATOR", "VISIONARY", "LEADER", "COMMUNICATOR"].includes(value);
+
+const isVisualMood = (value: unknown): value is TraitExperienceSeed["visualMood"] =>
+  typeof value === "string" && ["NEUTRAL", "ASPIRATIONAL", "PLAYFUL", "BOLD", "SERIOUS"].includes(value);
+
+const asNonEmpty = (value: unknown, fallback: string) => (typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback);
+const normalize = (value: string) => value.trim().toLowerCase();
+const isGenericPublicLabel = (value: string | null | undefined, traitName: string) => {
+  if (!value) return true;
+  const normalized = normalize(value);
+  if (normalized === normalize(traitName)) return true;
+  return normalized.includes("&") || normalized.includes("reasoning") || normalized.includes("orientation");
+};
+const isGenericOneLineHook = (value: string | null | undefined) => {
+  if (!value) return true;
+  const normalized = normalize(value);
+  return normalized.startsWith("show how you bring");
+};
+
+async function loadGeneratedTraitExperienceMap(): Promise<Map<string, Partial<TraitExperienceSeed>>> {
+  try {
+    const raw = await fs.readFile(generatedSeedPath, "utf8");
+    const parsed = JSON.parse(raw) as { traitsSeed?: Array<Record<string, unknown>> };
+    const map = new Map<string, Partial<TraitExperienceSeed>>();
+    for (const trait of parsed.traitsSeed ?? []) {
+      if (typeof trait.name !== "string" || !trait.name.trim()) continue;
+      map.set(trait.name, {
+        publicLabel: typeof trait.publicLabel === "string" ? trait.publicLabel : undefined,
+        oneLineHook: typeof trait.oneLineHook === "string" ? trait.oneLineHook : undefined,
+        archetypeTag: isArchetype(trait.archetypeTag) ? trait.archetypeTag : undefined,
+        displayIcon: typeof trait.displayIcon === "string" ? trait.displayIcon : undefined,
+        visualMood: isVisualMood(trait.visualMood) ? trait.visualMood : undefined
+      });
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+async function loadAiCacheTraitExperienceMap(): Promise<Map<string, Partial<TraitExperienceSeed>>> {
+  try {
+    const raw = await fs.readFile(aiCachePath, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+    const map = new Map<string, Partial<TraitExperienceSeed>>();
+    for (const [key, value] of Object.entries(parsed)) {
+      map.set(key, {
+        publicLabel: typeof value.publicLabel === "string" ? value.publicLabel : undefined,
+        oneLineHook: typeof value.oneLineHook === "string" ? value.oneLineHook : undefined,
+        archetypeTag: isArchetype(value.archetypeTag) ? value.archetypeTag : undefined,
+        displayIcon: typeof value.displayIcon === "string" ? value.displayIcon : undefined,
+        visualMood: isVisualMood(value.visualMood) ? value.visualMood : undefined
+      });
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+const makeAiCacheKey = (trait: { name: string; category: string; definition: string }) =>
+  createHash("sha256").update(JSON.stringify(trait)).digest("hex");
+
+async function resolveTraitExperienceSeed(
+  trait: { name: string; category: string; definition: string },
+  generated: Partial<TraitExperienceSeed> | undefined
+): Promise<TraitExperienceSeed> {
+  const fallback = getSeedTraitExperience(trait.name);
+  if (generated) {
+    return {
+      publicLabel: isGenericPublicLabel(asNonEmpty(generated.publicLabel, fallback.publicLabel), trait.name)
+        ? fallback.publicLabel
+        : asNonEmpty(generated.publicLabel, fallback.publicLabel),
+      oneLineHook: isGenericOneLineHook(asNonEmpty(generated.oneLineHook, fallback.oneLineHook))
+        ? fallback.oneLineHook
+        : asNonEmpty(generated.oneLineHook, fallback.oneLineHook),
+      archetypeTag: isArchetype(generated.archetypeTag) ? generated.archetypeTag : fallback.archetypeTag,
+      displayIcon: asNonEmpty(generated.displayIcon, fallback.displayIcon),
+      visualMood: isVisualMood(generated.visualMood) ? generated.visualMood : fallback.visualMood
+    };
+  }
+
+  if (!process.env.OPENAI_API_KEY) {
+    return fallback;
+  }
+
+  try {
+    return await generateTraitExperienceDraft({
+      action: "generate",
+      name: trait.name,
+      definition: trait.definition,
+      category: trait.category
+    });
+  } catch (error) {
+    console.warn(
+      `Falling back to default student-facing label for "${trait.name}" (${error instanceof Error ? error.message : "AI generation error"}).`
+    );
+    return fallback;
+  }
+}
+
 async function run() {
   const traitIds = new Map<string, string>();
   const programIds = new Map<string, string>();
+  const generatedTraitExperienceMap = await loadGeneratedTraitExperienceMap();
+  const aiCacheTraitExperienceMap = await loadAiCacheTraitExperienceMap();
 
   for (const t of traitsSeed) {
     const category = categoryMap[t.category];
     if (!category) throw new Error(`Unknown trait category: ${t.category}`);
     const { rubricPositiveSignals, rubricNegativeSignals, rubricFollowUps } = defaultRubricForTrait(t.definition);
-    const trait = await prisma.trait.upsert({
-      where: { name: t.name },
-      create: {
-        name: t.name,
-        category,
-        definition: t.definition,
-        rubricScaleMin: 0,
-        rubricScaleMax: 5,
-        rubricPositiveSignals,
-        rubricNegativeSignals,
-        rubricFollowUps
-      },
-      update: {
-        category,
-        definition: t.definition,
-        rubricScaleMin: 0,
-        rubricScaleMax: 5,
-        rubricPositiveSignals,
-        rubricNegativeSignals,
-        rubricFollowUps
-      }
-    });
+    const generatedExperience = generatedTraitExperienceMap.get(t.name) ?? aiCacheTraitExperienceMap.get(makeAiCacheKey(t));
+    const experience = await resolveTraitExperienceSeed(t, generatedExperience);
+    const existing = await prisma.trait.findUnique({ where: { name: t.name } });
+    const trait = existing
+      ? await prisma.trait.update({
+          where: { id: existing.id },
+          data: {
+            category,
+            definition: t.definition,
+            publicLabel: isGenericPublicLabel(existing.publicLabel, t.name) ? experience.publicLabel : existing.publicLabel,
+            oneLineHook: isGenericOneLineHook(existing.oneLineHook) ? experience.oneLineHook : existing.oneLineHook,
+            archetypeTag: existing.archetypeTag || experience.archetypeTag,
+            displayIcon: existing.displayIcon || experience.displayIcon,
+            visualMood: existing.visualMood || experience.visualMood,
+            rubricScaleMin: 0,
+            rubricScaleMax: 5,
+            rubricPositiveSignals,
+            rubricNegativeSignals,
+            rubricFollowUps
+          }
+        })
+      : await prisma.trait.create({
+          data: {
+            name: t.name,
+            category,
+            definition: t.definition,
+            publicLabel: experience.publicLabel,
+            oneLineHook: experience.oneLineHook,
+            archetypeTag: experience.archetypeTag,
+            displayIcon: experience.displayIcon,
+            visualMood: experience.visualMood,
+            rubricScaleMin: 0,
+            rubricScaleMax: 5,
+            rubricPositiveSignals,
+            rubricNegativeSignals,
+            rubricFollowUps
+          }
+        });
     traitIds.set(t.name, trait.id);
   }
   console.log(`Seeded ${traitIds.size} traits.`);
@@ -89,7 +225,9 @@ async function run() {
         traitId,
         type: q.type === "CHAT" ? TraitQuestionType.CHAT : TraitQuestionType.QUIZ,
         prompt: q.prompt,
-        optionsJson: q.optionsJson ?? null
+        narrativeIntro: q.narrativeIntro ?? null,
+        optionsJson: q.optionsJson ?? null,
+        answerOptionsMetaJson: q.answerOptionsMetaJson ?? null
       }
     });
   }

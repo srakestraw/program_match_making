@@ -4,6 +4,7 @@ import {
   ConversationScenarioStage,
   ConversationTurnRole,
   Prisma,
+  QuizExperiencePreset,
   ProgramTraitPriorityBucket,
   TraitAnswerStyle,
   TraitCategory,
@@ -37,6 +38,7 @@ import {
   generateTraitExperienceDraft
 } from "../lib/traitContentGeneration.js";
 import { computeTraitCompleteness } from "../domain/traits/completeness.js";
+import { resolveQuizExperienceConfig, type QuizExperienceOverrides, quizExperiencePresets } from "@pmm/domain";
 import {
   normalizeWidgetThemeTokens,
   scrapeWidgetThemeFromUrl,
@@ -165,6 +167,16 @@ const createSimulationSchema = z
   });
 
 const getQuizExperienceId = () => "default";
+const quizExperiencePresetSchema = z.enum(quizExperiencePresets);
+const quizExperienceOverridesSchema = z
+  .object({
+    gradientSet: z.string().trim().min(1).max(80).optional(),
+    motionIntensity: z.enum(["LOW", "MEDIUM", "HIGH"]).optional(),
+    rankingMotionStyle: z.string().trim().min(1).max(80).optional(),
+    revealStyle: z.string().trim().min(1).max(80).optional(),
+    tonePreset: z.string().trim().min(1).max(80).optional()
+  })
+  .strict();
 const upsertQuizExperienceSchema = z.object({
   headline: z.string().trim().min(1).max(180),
   subheadline: z.string().trim().min(1).max(240),
@@ -174,6 +186,8 @@ const upsertQuizExperienceSchema = z.object({
   motionIntensity: z.enum(["LOW", "MEDIUM", "HIGH"]),
   rankingMotionStyle: z.string().trim().min(1).max(80),
   revealStyle: z.string().trim().min(1).max(80),
+  experiencePreset: quizExperiencePresetSchema.nullable().optional(),
+  experienceOverrides: quizExperienceOverridesSchema.nullable().optional(),
   introMediaPrompt: z.string().trim().max(1200).nullable().optional(),
   revealMediaPrompt: z.string().trim().max(1200).nullable().optional()
 });
@@ -218,6 +232,72 @@ const toNull = (value?: string | null) => {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+};
+
+const normalizeQuizExperienceOverrides = (
+  raw: unknown
+): QuizExperienceOverrides | null => {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const parsed = quizExperienceOverridesSchema.safeParse(raw);
+  if (!parsed.success) {
+    return null;
+  }
+  const entries = Object.entries(parsed.data).filter(([, value]) => value !== undefined);
+  if (entries.length === 0) {
+    return null;
+  }
+  return Object.fromEntries(entries) as QuizExperienceOverrides;
+};
+
+const formatQuizExperienceConfig = (config: {
+  id: string;
+  headline: string;
+  subheadline: string;
+  estimatedTimeLabel: string;
+  tonePreset: string;
+  gradientSet: string;
+  motionIntensity: string;
+  rankingMotionStyle: string;
+  revealStyle: string;
+  experiencePreset: QuizExperiencePreset | null;
+  experienceOverrides: Prisma.JsonValue | null;
+  introMediaPrompt: string | null;
+  revealMediaPrompt: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}) => {
+  const experienceOverrides = normalizeQuizExperienceOverrides(config.experienceOverrides);
+  const resolved = resolveQuizExperienceConfig(
+    config.experiencePreset,
+    experienceOverrides,
+    {
+      gradientSet: config.gradientSet,
+      motionIntensity: config.motionIntensity as "LOW" | "MEDIUM" | "HIGH",
+      rankingMotionStyle: config.rankingMotionStyle,
+      revealStyle: config.revealStyle,
+      tonePreset: config.tonePreset
+    }
+  );
+
+  return {
+    id: config.id,
+    headline: config.headline,
+    subheadline: config.subheadline,
+    estimatedTimeLabel: config.estimatedTimeLabel,
+    tonePreset: resolved.tonePreset,
+    gradientSet: resolved.gradientSet,
+    motionIntensity: resolved.motionIntensity,
+    rankingMotionStyle: resolved.rankingMotionStyle,
+    revealStyle: resolved.revealStyle,
+    experiencePreset: config.experiencePreset,
+    experienceOverrides,
+    introMediaPrompt: config.introMediaPrompt,
+    revealMediaPrompt: config.revealMediaPrompt,
+    createdAt: config.createdAt.toISOString(),
+    updatedAt: config.updatedAt.toISOString()
+  };
 };
 
 const toQuestionType = (value: "chat" | "quiz") => (value === "chat" ? TraitQuestionType.CHAT : TraitQuestionType.QUIZ);
@@ -1068,8 +1148,8 @@ adminRouter.get("/quiz-experience", async (_req, res) => {
     const id = getQuizExperienceId();
     const config =
       (await prisma.quizExperienceConfig.findUnique({ where: { id } })) ??
-      (await prisma.quizExperienceConfig.create({ data: { id } }));
-    res.json({ data: config });
+      (await prisma.quizExperienceConfig.create({ data: { id, experiencePreset: quizExperiencePresets[0] } }));
+    res.json({ data: formatQuizExperienceConfig(config) });
   } catch (error) {
     res.status(400).json({ error: parseError(error) });
   }
@@ -1079,21 +1159,26 @@ adminRouter.put("/quiz-experience", async (req, res) => {
   try {
     const body = upsertQuizExperienceSchema.parse(req.body);
     const id = getQuizExperienceId();
+    const overrides = normalizeQuizExperienceOverrides(body.experienceOverrides ?? null);
     const config = await prisma.quizExperienceConfig.upsert({
       where: { id },
       create: {
         id,
         ...body,
+        experiencePreset: body.experiencePreset ?? null,
+        experienceOverrides: overrides,
         introMediaPrompt: toNull(body.introMediaPrompt),
         revealMediaPrompt: toNull(body.revealMediaPrompt)
       },
       update: {
         ...body,
+        experiencePreset: body.experiencePreset ?? null,
+        experienceOverrides: overrides,
         introMediaPrompt: toNull(body.introMediaPrompt),
         revealMediaPrompt: toNull(body.revealMediaPrompt)
       }
     });
-    res.json({ data: config });
+    res.json({ data: formatQuizExperienceConfig(config) });
   } catch (error) {
     res.status(400).json({ error: parseError(error) });
   }

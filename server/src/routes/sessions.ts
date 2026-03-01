@@ -91,9 +91,10 @@ const interviewTurnSchema = z.object({
 
 const interviewCheckpointSchema = z.object({
   mode: z.enum(["voice", "chat", "quiz"]),
-  action: z.enum(["stop", "continue", "focus"]),
+  action: z.enum(["stop", "continue", "focus", "deepen"]),
   language: z.string().trim().min(2).max(8).optional(),
   focusTraitIds: z.array(z.string().min(1)).max(10).optional(),
+  currentTraitId: z.string().min(1).optional(),
   askedTraitIds: z.array(z.string().min(1)).max(100).optional(),
   askedQuestionIds: z.array(z.string().min(1)).max(200).optional(),
   programFilterIds: z.array(z.string().min(1)).max(24).optional()
@@ -967,6 +968,7 @@ sessionsRouter.post("/:id/checkpoint", scoreRateLimit, async (req, res) => {
       action: body.action,
       language: body.language,
       focusTraitIds: body.focusTraitIds,
+      currentTraitId: body.currentTraitId,
       askedTraitIds: body.askedTraitIds,
       askedQuestionIds: body.askedQuestionIds,
       programFilterIds: body.programFilterIds

@@ -72,6 +72,16 @@ The prototype uses a single RDS PostgreSQL instance for dev and production. Cred
 
 To create a new RDS instance via AWS CLI (security group, subnet group, and instance), see the setup that was used. Ensure `DATABASE_URL` in `.env` and `server/.env` matches your instance.
 
+## Production domain (single)
+
+We use **one** custom production domain: **`https://program.gravytylabs.com`** for the **candidate widget** only. Admin and Advisor apps are not on custom domains (they run on localhost in dev or on whatever host you deploy them to; no `admin.gravytylabs.com` or `advisor.gravytylabs.com`).
+
+**Cleanup:** If you previously had three subdomains (admin, candidate/widget, advisor), keep only the widget mapping in Route 53 and Amplify:
+
+- **Route 53:** Keep a single CNAME: `program.gravytylabs.com` → your Amplify/CloudFront target (e.g. `d29mq7u1v3ysam.cloudfront.net`). Remove any CNAME or A records for `admin.gravytylabs.com` and `advisor.gravytylabs.com` if they exist.
+- **Amplify:** Only the widget app uses a custom domain; ensure only one domain association (e.g. `gravytylabs.com` with subdomain `program` → branch `main`). Remove any other domain associations or Amplify apps for admin/advisor if you had them.
+- **Server CORS:** Set `WIDGET_ALLOWED_ORIGINS` in production to include `https://program.gravytylabs.com` and the origin of any page that embeds the widget (see `.env.example`).
+
 ## Deploy widget to Amplify + custom domain (CLI)
 
 Deploy the widget app to AWS Amplify and add custom domain `program.gravytylabs.com` (CNAME in Route 53). Prerequisites: **AWS CLI** configured, **pnpm**, **curl**, **jq**. DNS for `gravytylabs.com` must be in Route 53.
@@ -89,11 +99,12 @@ The script will:
 
 Optional env vars:
 
+- `VITE_API_URL` – **required for production.** Your server’s public URL (e.g. `https://api.gravytylabs.com`). The widget is built with this as the API base; if unset it defaults to `http://localhost:4000`, so the deployed widget will load but token/session/voice calls will fail.
 - `APP_ID` – use existing Amplify app id (skips create).
 - `HOSTED_ZONE_ID` – use existing Route 53 hosted zone id (skips lookup).
-- `APP_NAME`, `BRANCH_NAME`, `DOMAIN_ROOT`, `SUBDOMAIN_PREFIX` – override defaults (e.g. `SUBDOMAIN_PREFIX=app` for `app.gravytylabs.com`).
+- `APP_NAME`, `BRANCH_NAME`, `DOMAIN_ROOT`, `SUBDOMAIN_PREFIX` – override defaults. We only use one subdomain: `program` (do not add admin/advisor subdomains).
 
-After running, wait for the Amplify job to complete and for DNS/SSL propagation; then `https://program.gravytylabs.com` will serve the widget.
+After running, wait for the Amplify job to complete and for DNS/SSL propagation; then `https://program.gravytylabs.com` will serve the widget. To have the Admin app’s embed page show this URL in snippets, build admin with `VITE_WIDGET_URL=https://program.gravytylabs.com`.
 
 ### Troubleshooting: “Site can’t be reached”
 
@@ -102,7 +113,7 @@ After running, wait for the Amplify job to complete and for DNS/SSL propagation;
    dig program.gravytylabs.com +short
    # or: nslookup program.gravytylabs.com
    ```
-   You should see a CNAME (e.g. `xxx.cloudfront.net` or Amplify’s target). If it’s empty or wrong, fix the CNAME in Route 53 (or re-run the deploy script so it re-upserts the record).
+   You should see a CNAME (e.g. `xxx.cloudfront.net` or Amplify’s target). If it’s empty or wrong, fix the CNAME in **Route53** (or re-run the deploy script so it re-upserts the record). DNS for gravytylabs.com is in Route53; `program.gravytylabs.com` should point to the Amplify/CloudFront target (e.g. `d29mq7u1v3ysam.cloudfront.net`).
 
 2. **Check Amplify job** – In [Amplify Console](https://console.aws.amazon.com/amplify/) → your app → **main** branch, ensure the last job **Succeeded**. If it failed, fix the build and redeploy (re-run `./scripts/deploy-amplify.sh`).
 
@@ -111,6 +122,8 @@ After running, wait for the Amplify job to complete and for DNS/SSL propagation;
    https://main.<APP_ID>.amplifyapp.com
    ```
    If this works but `https://program.gravytylabs.com` does not, the issue is DNS or domain association, not the deployment.
+
+5. **Widget loads but “doesn’t work” (no voice, session, or errors in console)** – The widget was built without a production API URL, so it calls `http://localhost:4000`. Redeploy with your server’s public URL: `VITE_API_URL=https://your-server.com ./scripts/deploy-amplify.sh`. Also set `WIDGET_ALLOWED_ORIGINS` on the server to include `https://main.<APP_ID>.amplifyapp.com` and `https://program.gravytylabs.com`.
 
 4. **Check domain association** – Custom domain must be **Available** and subdomain **Verified**:
    ```bash
@@ -125,12 +138,14 @@ After running, wait for the Amplify job to complete and for DNS/SSL propagation;
 - Widget app: `pnpm --filter @pmm/widget dev`
 - Advisor app: `pnpm --filter @pmm/advisor dev`
 
-## App URLs
+## App URLs (local dev)
 - Portal: `http://localhost:3000`
 - Admin: `http://localhost:5173`
 - Widget: `http://localhost:5174/widget`
 - Advisor: `http://localhost:5175`
 - Server health: `http://localhost:4000/health`
+
+**Production:** Only the candidate widget has a custom URL: **https://program.gravytylabs.com**. Admin and Advisor do not use custom domains.
 
 ## Voice NOW Flow
 1. Candidate opens `/widget`.

@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   generateTraitSignals,
   generateTraitQuestions,
+  generateTraitExperienceDraft,
   type GenerateTraitSignalsInput,
-  type GenerateTraitQuestionsInput
+  type GenerateTraitQuestionsInput,
+  type GenerateTraitExperienceDraftInput
 } from "../src/lib/traitContentGeneration.js";
 
 const fetchOpenAiWithRetryMock = vi.fn();
@@ -253,6 +255,84 @@ describe("traitContentGeneration", () => {
 
       expect(result.quizOptions).toHaveLength(4);
       expect(result.quizOptions).toEqual(["A", "B", "C", "D"]);
+    });
+  });
+
+  describe("generateTraitExperienceDraft", () => {
+    it("parses response when JSON is returned in output_text", async () => {
+      fetchOpenAiWithRetryMock.mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            output_text: JSON.stringify({
+              publicLabel: "Strategic Builder",
+              oneLineHook: "Turn ideas into plans and results.",
+              archetypeTag: "BUILDER",
+              displayIcon: "compass",
+              visualMood: "ASPIRATIONAL"
+            })
+          }),
+          { status: 200 }
+        )
+      );
+
+      const input: GenerateTraitExperienceDraftInput = {
+        action: "generate",
+        name: "Strategic Execution",
+        definition: "Drives plans from concept to delivery.",
+        category: "LEADERSHIP"
+      };
+
+      const result = await generateTraitExperienceDraft(input);
+
+      expect(result).toEqual({
+        publicLabel: "Strategic Builder",
+        oneLineHook: "Turn ideas into plans and results.",
+        archetypeTag: "BUILDER",
+        displayIcon: "compass",
+        visualMood: "ASPIRATIONAL"
+      });
+    });
+
+    it("parses response when JSON is returned in output message content", async () => {
+      fetchOpenAiWithRetryMock.mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            output: [
+              {
+                type: "message",
+                content: [
+                  {
+                    type: "output_text",
+                    text: JSON.stringify({
+                      publicLabel: "Systems Thinker",
+                      oneLineHook: "Connect patterns and make decisions with confidence.",
+                      archetypeTag: "ANALYST",
+                      displayIcon: "graph",
+                      visualMood: "BOLD"
+                    })
+                  }
+                ]
+              }
+            ]
+          }),
+          { status: 200 }
+        )
+      );
+
+      const result = await generateTraitExperienceDraft({
+        action: "simplify",
+        name: "Analytical Thinking",
+        definition: null,
+        category: "PROBLEM_SOLVING"
+      });
+
+      expect(result).toEqual({
+        publicLabel: "Systems Thinker",
+        oneLineHook: "Connect patterns and make decisions with confidence.",
+        archetypeTag: "ANALYST",
+        displayIcon: "graph",
+        visualMood: "BOLD"
+      });
     });
   });
 });

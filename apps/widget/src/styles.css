@@ -85,6 +85,346 @@ body {
   box-shadow: var(--pm-card-shadow) !important;
 }
 
+.selector-rail {
+  pointer-events: none;
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: var(--pm-radius-md);
+  border: 1px solid color-mix(in srgb, var(--pm-primary) 24%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--pm-primary) 10%, var(--pm-surface)) 0%,
+    color-mix(in srgb, var(--pm-primary) 4%, var(--pm-surface)) 100%
+  );
+  box-shadow:
+    0 3px 10px color-mix(in srgb, var(--pm-primary) 10%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--pm-primary) 12%, transparent);
+  opacity: 0.82;
+  transform-origin: center;
+  z-index: 0;
+}
+
+.selector-rail-animated {
+  transition:
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    width 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 150ms ease;
+}
+
+.mode-option-selected {
+  animation: modeOptionSettle 140ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.quiz-question-swap {
+  animation: quizQuestionSwap 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  transform-origin: left center;
+}
+
+.pm-theme-root .mode-option-selected {
+  background-color: transparent !important;
+}
+
+@layer components {
+  .mode-option-ill-wrap {
+    display: grid;
+    flex: 0 0 auto;
+    place-items: center;
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--pm-surface) 86%, var(--pm-primary) 14%);
+    border: 1px solid color-mix(in srgb, var(--pm-border) 85%, transparent);
+  }
+
+  .interview-type-ill {
+    --iti-fg: var(--fg, var(--pm-text));
+    --iti-muted-fg: var(--muted-fg, var(--pm-muted));
+    --iti-border: var(--border, var(--pm-border));
+    --iti-surface: var(--surface, var(--pm-surface));
+    --iti-accent: var(--accent, var(--pm-primary));
+    --iti-accent-2: var(--accent-2, color-mix(in srgb, var(--pm-primary) 66%, white));
+    overflow: visible;
+  }
+
+  .interview-type-ill * {
+    vector-effect: non-scaling-stroke;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .interview-type-ill--voice .iti-ring {
+    fill: none;
+    stroke: var(--iti-accent);
+    stroke-width: 2;
+    opacity: 0.16;
+    animation: itiVoiceRingPulse 3200ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    transform-origin: 24px 24px;
+  }
+
+  .interview-type-ill--voice .iti-orb {
+    fill: color-mix(in srgb, var(--iti-accent) 6%, var(--iti-surface));
+    stroke: color-mix(in srgb, var(--iti-border) 82%, var(--iti-accent) 18%);
+    stroke-width: 2;
+  }
+
+  .interview-type-ill--voice .iti-bar {
+    fill: var(--iti-accent);
+    opacity: 0.8;
+    transform-origin: center 24px;
+    transform-box: fill-box;
+    animation: itiVoiceBar 3200ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+
+  .interview-type-ill--voice .iti-bar-2 {
+    animation-delay: 160ms;
+  }
+
+  .interview-type-ill--voice .iti-bar-3 {
+    animation-delay: 320ms;
+  }
+
+  .interview-type-ill--chat .iti-chat-back {
+    stroke: color-mix(in srgb, var(--iti-border) 75%, var(--iti-accent));
+    stroke-width: 2;
+    fill: color-mix(in srgb, var(--iti-surface) 92%, var(--iti-accent) 8%);
+    opacity: 0.92;
+    animation: itiChatBack 3200ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    transform-origin: 22px 20px;
+  }
+
+  .interview-type-ill--chat .iti-chat-front {
+    stroke: color-mix(in srgb, var(--iti-border) 72%, var(--iti-accent));
+    stroke-width: 2;
+    fill: color-mix(in srgb, var(--iti-surface) 89%, var(--iti-accent) 11%);
+    animation: itiChatFront 3200ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    transform-origin: 26px 26px;
+    animation-delay: 160ms;
+  }
+
+  .interview-type-ill--chat .iti-dot {
+    fill: var(--iti-accent);
+    opacity: 0.22;
+    animation: itiTypingDot 3200ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+
+  .interview-type-ill--chat .iti-dot-2 {
+    animation-delay: 180ms;
+  }
+
+  .interview-type-ill--chat .iti-dot-3 {
+    animation-delay: 320ms;
+  }
+
+  .interview-type-ill--quiz .iti-card-front {
+    stroke-width: 2;
+    fill: color-mix(in srgb, var(--iti-surface) 95%, var(--iti-accent) 5%);
+    stroke: color-mix(in srgb, var(--iti-border) 76%, var(--iti-accent) 24%);
+  }
+
+  .interview-type-ill--quiz .iti-header {
+    fill: color-mix(in srgb, var(--iti-muted-fg) 42%, transparent);
+  }
+
+  .interview-type-ill--quiz .iti-badge {
+    fill: color-mix(in srgb, var(--iti-accent) 15%, var(--iti-surface));
+    stroke: color-mix(in srgb, var(--iti-accent) 70%, var(--iti-border));
+    stroke-width: 2;
+    animation: itiQuizBadge 3200ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    transform-origin: 31px 14px;
+  }
+
+  .interview-type-ill--quiz .iti-badge-mark {
+    fill: none;
+    stroke: var(--iti-accent);
+    stroke-width: 1.8;
+    opacity: 0.82;
+  }
+
+  .interview-type-ill--quiz .iti-badge-mark-dot {
+    fill: var(--iti-accent);
+    opacity: 0.82;
+  }
+
+  .interview-type-ill--quiz .iti-option {
+    fill: color-mix(in srgb, var(--iti-border) 78%, transparent);
+    stroke: color-mix(in srgb, var(--iti-border) 60%, transparent);
+    stroke-width: 1.4;
+  }
+
+  .interview-type-ill--quiz .iti-option-active {
+    fill: color-mix(in srgb, var(--iti-accent) 16%, var(--iti-surface));
+    stroke: var(--iti-accent);
+    stroke-width: 1.8;
+    opacity: 0.92;
+    animation: itiQuizChoice 3200ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+
+  .interview-type-ill--quiz .iti-progress-track {
+    fill: color-mix(in srgb, var(--iti-border) 72%, transparent);
+  }
+
+  .interview-type-ill--quiz .iti-progress-fill {
+    fill: var(--iti-accent-2);
+    transform-origin: 16px 36px;
+    transform-box: fill-box;
+    animation: itiQuizProgress 3200ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    animation-delay: 160ms;
+  }
+}
+
+@keyframes modeOptionSettle {
+  0% {
+    transform: scale(0.995);
+  }
+  55% {
+    transform: scale(1.005);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes quizQuestionSwap {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes itiVoiceRingPulse {
+  0%,
+  100% {
+    opacity: 0.15;
+    transform: scale(0.985);
+  }
+  50% {
+    opacity: 0.32;
+    transform: scale(1.01);
+  }
+}
+
+@keyframes itiVoiceBar {
+  0%,
+  100% {
+    transform: scaleY(0.7);
+    opacity: 0.58;
+  }
+  40% {
+    transform: scaleY(1);
+    opacity: 0.86;
+  }
+  72% {
+    transform: scaleY(0.76);
+    opacity: 0.68;
+  }
+}
+
+@keyframes itiChatBack {
+  0%,
+  100% {
+    transform: scale(0.99) translateY(0.5px);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes itiChatFront {
+  0%,
+  100% {
+    transform: scale(0.985);
+  }
+  45% {
+    transform: scale(1);
+  }
+}
+
+@keyframes itiTypingDot {
+  0%,
+  100% {
+    opacity: 0.24;
+  }
+  28% {
+    opacity: 0.7;
+  }
+  42% {
+    opacity: 0.24;
+  }
+}
+
+@keyframes itiQuizBadge {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  42% {
+    transform: scale(1.05);
+  }
+}
+
+@keyframes itiQuizChoice {
+  0%,
+  22% {
+    transform: translateY(0);
+  }
+  36%,
+  56% {
+    transform: translateY(5px);
+  }
+  70%,
+  88% {
+    transform: translateY(10px);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+@keyframes itiQuizProgress {
+  0%,
+  100% {
+    transform: scaleX(0.28);
+  }
+  35% {
+    transform: scaleX(0.7);
+  }
+  62% {
+    transform: scaleX(0.78);
+  }
+  84% {
+    transform: scaleX(0.4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .selector-rail-animated,
+  .selector-rail-reduced-motion {
+    transition: none;
+  }
+
+  .mode-option-selected {
+    animation: none;
+  }
+
+  .quiz-question-swap {
+    animation: none;
+  }
+
+  /* Keep illustration graphics visible but static when reduced motion is preferred. */
+  .interview-type-ill * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
 .voice-blob-wrap {
   display: grid;
   place-items: center;

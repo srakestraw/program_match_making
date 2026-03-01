@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { sendError } from "../lib/http.js";
 import { incrementMetric } from "../lib/metrics.js";
@@ -6,6 +7,7 @@ import { fetchOpenAiWithRetry } from "../lib/openai.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import { prisma } from "../lib/prisma.js";
 import { buildInterviewSystemPrompt, DEFAULT_INTERVIEW_LANGUAGE } from "../lib/interview-language.js";
+import { createLangfuseTrace, endLangfuseSpan, startLangfuseSpan } from "../lib/langfuse.js";
 
 const tokenBodySchema = z
   .object({
@@ -26,10 +28,28 @@ const tokenRateLimit = createRateLimiter({
 });
 
 realtimeRouter.post("/token", tokenRateLimit, async (req, res) => {
+  const startedAt = Date.now();
+  const traceId = `realtime-token-${randomUUID()}`;
+  createLangfuseTrace({
+    traceId,
+    name: "realtime.token",
+    metadata: { route: "/api/realtime/token" }
+  });
+  const span = startLangfuseSpan({
+    traceId,
+    name: "realtime.token.mint"
+  });
+  let spanClosed = false;
   const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
     incrementMetric("realtime.token.failed");
+    endLangfuseSpan(span, {
+      level: "ERROR",
+      statusMessage: "OPENAI_API_KEY is not configured",
+      metadata: { durationMs: Date.now() - startedAt }
+    });
+    spanClosed = true;
     sendError(res, 500, "OPENAI_API_KEY is not configured", undefined, "OPENAI_KEY_MISSING");
     return;
   }
@@ -74,6 +94,12 @@ realtimeRouter.post("/token", tokenRateLimit, async (req, res) => {
     if (!response.ok) {
       const errorMessage = typeof payload?.error?.message === "string" ? payload.error.message : "Failed to mint realtime token";
       incrementMetric("realtime.token.failed");
+      endLangfuseSpan(span, {
+        level: response.status >= 500 ? "ERROR" : "WARNING",
+        statusMessage: errorMessage,
+        metadata: { durationMs: Date.now() - startedAt, statusCode: response.status }
+      });
+      spanClosed = true;
       sendError(res, response.status >= 500 ? 502 : response.status, errorMessage, undefined, "OPENAI_TOKEN_FAILED");
       return;
     }
@@ -90,16 +116,52 @@ realtimeRouter.post("/token", tokenRateLimit, async (req, res) => {
           brandVoiceName: brandVoice?.primaryTone ?? null
         }
       });
+      endLangfuseSpan(span, {
+        metadata: {
+          durationMs: Date.now() - startedAt,
+          selectedVoice,
+          language,
+          hasBrandVoice: Boolean(brandVoice?.id)
+        }
+      });
+      spanClosed = true;
       return;
     }
     res.json(payload);
+    endLangfuseSpan(span, {
+      metadata: {
+        durationMs: Date.now() - startedAt,
+        selectedVoice,
+        language,
+        hasBrandVoice: Boolean(brandVoice?.id)
+      }
+    });
+    spanClosed = true;
   } catch (error) {
     if (error instanceof z.ZodError) {
       incrementMetric("realtime.token.failed");
+      endLangfuseSpan(span, {
+        level: "WARNING",
+        statusMessage: "Invalid token request payload",
+        metadata: { durationMs: Date.now() - startedAt }
+      });
+      spanClosed = true;
       sendError(res, 400, "Invalid token request payload", error.issues, "REQUEST_ERROR");
       return;
     }
     incrementMetric("realtime.token.failed");
+    endLangfuseSpan(span, {
+      level: "ERROR",
+      statusMessage: error instanceof Error ? error.message : "Failed to mint realtime token",
+      metadata: { durationMs: Date.now() - startedAt }
+    });
+    spanClosed = true;
     sendError(res, 502, "Failed to mint realtime token", undefined, "OPENAI_TOKEN_FAILED");
+  } finally {
+    if (!spanClosed) {
+      endLangfuseSpan(span, {
+        metadata: { durationMs: Date.now() - startedAt }
+      });
+    }
   }
 });
