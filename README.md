@@ -30,6 +30,7 @@ V1 monorepo for Program Match Making with four apps and one Express server:
    cp .env.example .env
    ```
 3. Set `OPENAI_API_KEY` and `DATABASE_URL` in `.env`.
+   - `OPENAI_API_KEY`: Used for session scoring, brand voice samples, TTS, and trait content generation (Admin “Generate with AI” and `pnpm --filter @pmm/server backfill-trait-content`).
    - `DATABASE_URL`: RDS PostgreSQL connection string (see `.env.example` for format)
    - Optional hardening env vars:
    - `WIDGET_ALLOWED_ORIGINS` (comma-separated origins)
@@ -49,6 +50,8 @@ V1 monorepo for Program Match Making with four apps and one Express server:
    - session-level trait persistence table `CandidateTraitScore` for adaptive multi-program ranking
    - BrandVoice fields (`primaryTone`, `ttsVoiceName`, `toneModifiers`, `toneProfile`, `styleFlags`, `avoidFlags`, `canonicalExamples`)
    - Simulation Lab persistence (`ConversationScenario`, `ConversationSimulation`, `ConversationTurn`, `VoiceSample`) and enums
+   - Program activation status: `Program.isActive` (new rows default `false`; migration backfills existing rows to `true`)
+   - Widget branding persistence: `WidgetTheme` with draft/active status, source metadata, and token JSON
 5. Start all apps and server:
    ```bash
    pnpm dev
@@ -163,11 +166,16 @@ After running, wait for the Amplify job to complete and for DNS/SSL propagation;
 - `GET/POST /api/admin/traits/:id/questions`
 - `PUT/DELETE /api/admin/questions/:questionId`
 - `GET/POST /api/admin/programs`
-- `GET/PUT/DELETE /api/admin/programs/:id`
+- `GET/PATCH/PUT/DELETE /api/admin/programs/:id`
+- `PATCH /api/admin/programs/:id/status`
 - `GET/PUT /api/admin/programs/:id/traits`
 - `GET/POST /api/admin/brand-voices`
 - `PUT/DELETE /api/admin/brand-voices/:id`
 - `POST /api/admin/brand-voices/:id/generate-samples`
+- `GET /api/admin/widget-theme`
+- `POST /api/admin/widget-theme`
+- `POST /api/admin/widget-theme/scrape`
+- `POST /api/admin/widget-theme/activate`
 - `GET /api/admin/simulation-scenarios`
 - `POST /api/admin/brand-voices/:id/simulations`
 - `POST /api/admin/simulations/:id/turns`
@@ -176,6 +184,7 @@ After running, wait for the Amplify job to complete and for DNS/SSL propagation;
 - `GET /api/public/programs`
 - `GET /api/public/programs/:id`
 - `GET /api/public/programs/:id/questions?type=chat|quiz`
+- `GET /api/public/widget-theme?theme=active|draft`
 - `POST /api/public/leads`
 - `GET /api/advisor/programs`
 - `GET /api/advisor/leads`
@@ -273,7 +282,7 @@ After running, wait for the Amplify job to complete and for DNS/SSL propagation;
 - `TranscriptTurn { id, sessionId, ts, speaker, text }`
 - `Trait { id, name, category, definition, rubricScaleMin, rubricScaleMax, rubricPositiveSignals, rubricNegativeSignals, rubricFollowUps, createdAt, updatedAt }`
 - `TraitQuestion { id, traitId, type, prompt, optionsJson, createdAt, updatedAt }`
-- `Program { id, name, description, degreeLevel, department, createdAt, updatedAt }`
+- `Program { id, name, description, degreeLevel, department, isActive, createdAt, updatedAt }`
 - `ProgramTrait { id, programId, traitId, bucket, sortOrder, notes }`
 - `BrandVoice` — [Full doc](docs/brand-voice-data-model.md): `id`, `name`, `primaryTone`, `ttsVoiceName`, `toneModifiers[]`, `toneProfile` (json), `styleFlags[]`, `avoidFlags[]`, `canonicalExamples` (json), `createdAt`, `updatedAt`
 - `ConversationScenario { id, title, stage, persona?, seedPrompt, isPreset, createdAt, updatedAt }`

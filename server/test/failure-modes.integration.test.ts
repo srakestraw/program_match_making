@@ -56,7 +56,7 @@ describe.sequential("failure mode integration", () => {
     });
 
     const program = await prisma.program.create({
-      data: { name: `Failure Program ${suffix}` }
+      data: { name: `Failure Program ${suffix}`, isActive: true }
     });
 
     await prisma.programTrait.create({

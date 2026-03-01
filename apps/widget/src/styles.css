@@ -2,10 +2,87 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --pm-font: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+  --pm-heading-font: var(--pm-font);
+  --pm-primary: #0f172a;
+  --pm-primary-hover: #1e293b;
+  --pm-bg: #f8fafc;
+  --pm-surface: #ffffff;
+  --pm-text: #0f172a;
+  --pm-muted: #475569;
+  --pm-border: rgba(15, 23, 42, 0.14);
+  --pm-radius-sm: 6px;
+  --pm-radius-md: 10px;
+  --pm-radius-lg: 14px;
+  --pm-card-shadow: 0 8px 26px rgba(15, 23, 42, 0.08);
+}
+
 body {
   margin: 0;
-  font-family: ui-sans-serif, system-ui, sans-serif;
-  background: linear-gradient(180deg, #f1f5f9 0%, #ffffff 100%);
+  font-family: var(--pm-font);
+  background: linear-gradient(180deg, var(--pm-bg) 0%, var(--pm-surface) 100%);
+  color: var(--pm-text);
+}
+
+.pm-theme-root h1,
+.pm-theme-root h2,
+.pm-theme-root h3,
+.pm-theme-root h4,
+.pm-theme-root h5 {
+  font-family: var(--pm-heading-font);
+}
+
+.pm-theme-root .bg-slate-900 {
+  background-color: var(--pm-primary) !important;
+}
+
+.pm-theme-root .bg-slate-700,
+.pm-theme-root .bg-slate-600,
+.pm-theme-root .bg-slate-500 {
+  background-color: var(--pm-primary-hover) !important;
+}
+
+.pm-theme-root .bg-slate-100,
+.pm-theme-root .bg-slate-50,
+.pm-theme-root .bg-white {
+  background-color: var(--pm-surface) !important;
+}
+
+.pm-theme-root .text-slate-900 {
+  color: var(--pm-text) !important;
+}
+
+.pm-theme-root .text-slate-800,
+.pm-theme-root .text-slate-700,
+.pm-theme-root .text-slate-600,
+.pm-theme-root .text-slate-500 {
+  color: var(--pm-muted) !important;
+}
+
+.pm-theme-root .border-slate-300,
+.pm-theme-root .border-slate-200 {
+  border-color: var(--pm-border) !important;
+}
+
+.pm-theme-root .rounded-md {
+  border-radius: var(--pm-radius-md) !important;
+}
+
+.pm-theme-root .rounded-lg {
+  border-radius: var(--pm-radius-lg) !important;
+}
+
+.pm-theme-root .rounded {
+  border-radius: var(--pm-radius-sm) !important;
+}
+
+.pm-theme-root button:not(:disabled):hover {
+  filter: saturate(1.02);
+}
+
+.pm-theme-root [class*="shadow"] {
+  box-shadow: var(--pm-card-shadow) !important;
 }
 
 .voice-blob-wrap {
@@ -18,8 +95,8 @@ body {
   width: 88px;
   height: 88px;
   border-radius: 999px;
-  background: radial-gradient(circle at 30% 30%, #93c5fd, #1d4ed8);
-  box-shadow: 0 10px 30px rgba(30, 64, 175, 0.25);
+  background: radial-gradient(circle at 30% 30%, color-mix(in srgb, var(--pm-primary) 40%, #ffffff), var(--pm-primary));
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--pm-primary) 28%, transparent);
 }
 
 .voice-blob-idle {

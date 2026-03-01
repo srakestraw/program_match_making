@@ -18,7 +18,7 @@ type TraitProgramsPanelProps = {
 };
 
 /**
- * Secondary reference panel: "Programs using this trait".
+ * Secondary reference panel: "Used In Programs".
  * Used as a sticky right column on desktop and inside TraitProgramsAccordion on mobile.
  */
 export function TraitProgramsPanel({
@@ -34,20 +34,18 @@ export function TraitProgramsPanel({
 
   const content = (
     <>
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Programs using this trait
-        </h2>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-slate-700">Used In Programs</h2>
         <button
           type="button"
-          className="text-xs font-medium text-slate-600 underline hover:text-slate-900"
+          className="text-xs font-medium text-slate-500 underline hover:text-slate-700"
           onClick={onManage}
           aria-label="Manage associated programs"
         >
           Manage
         </button>
       </div>
-      <p className="mb-2 text-xs text-slate-500">
+      <p className="mb-3 text-xs text-slate-500">
         {count === 1 ? "1 program" : `${count} programs`}
       </p>
       {loading && <p className="text-sm text-slate-500">Loading…</p>}
@@ -65,7 +63,7 @@ export function TraitProgramsPanel({
               {onProgramClick ? (
                 <button
                   type="button"
-                  className="min-w-0 flex-1 truncate text-left text-sm text-slate-700 underline hover:text-slate-900"
+                  className="min-w-0 flex-1 truncate text-left text-sm text-slate-600 underline hover:text-slate-800"
                   onClick={() => onProgramClick(item.programId)}
                 >
                   {item.programName}
@@ -90,7 +88,7 @@ export function TraitProgramsPanel({
   }
 
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50/60 p-4">
+    <div className="rounded-md border border-slate-200/80 bg-slate-50/40 p-3.5">
       {content}
     </div>
   );
@@ -104,7 +102,7 @@ type TraitProgramsAccordionProps = TraitProgramsPanelProps & {
 };
 
 /**
- * Collapsible "Programs using this trait (N)" section for mobile/small screens.
+ * Collapsible "Used In Programs (N)" section for mobile/small screens.
  */
 export function TraitProgramsAccordion({
   programs,
@@ -125,7 +123,7 @@ export function TraitProgramsAccordion({
   };
 
   const count = programs.length;
-  const label = `Programs using this trait (${count})`;
+  const label = `Used In Programs (${count})`;
 
   return (
     <section className="rounded-md border border-slate-200 bg-slate-50/50">

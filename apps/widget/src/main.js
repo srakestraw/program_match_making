@@ -1,7 +1,7 @@
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, Navigate, Route, Routes, useNavigate, useSearchParams } from "react-router-dom";
+import { createBrowserRouter, Navigate, RouterProvider, useNavigate, useSearchParams } from "react-router-dom";
 import { QueryClient, QueryClientProvider, useMutation } from "@tanstack/react-query";
 import { Button, Card } from "@pmm/ui";
 import { createApiClient } from "@pmm/api-client";
@@ -12,7 +12,7 @@ import { VoiceBlob } from "./components/VoiceBlob";
 import { useWidgetStore } from "./store";
 import { getVoicePhaseLabel, isConnectedPhase, reduceVoicePhase, shouldKickoff, toVoiceBlobState } from "./lib/voiceState";
 import { createLanguageUtterance } from "./lib/browserTts";
-import { EXTRA_LANGUAGE_OPTIONS, PRIMARY_LANGUAGE_OPTIONS } from "./constants/languages";
+import { EXTRA_LANGUAGE_OPTIONS, PRIMARY_LANGUAGE_OPTIONS, languageLabelFromTag } from "./constants/languages";
 import { LanguagePills } from "./components/LanguagePills";
 import { LanguagePickerModal } from "./components/LanguagePickerModal";
 import "./styles.css";
@@ -30,6 +30,48 @@ const parseModeParam = (value) => {
 };
 const transcriptId = (prefix) => `${prefix}-${crypto.randomUUID()}`;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const defaultWidgetThemeTokens = {
+    fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif",
+    headingFontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif",
+    colors: {
+        primary: "#0f172a",
+        primaryHover: "#1e293b",
+        background: "#f8fafc",
+        surface: "#ffffff",
+        text: "#0f172a",
+        mutedText: "#475569",
+        border: "rgba(15, 23, 42, 0.14)"
+    },
+    radii: {
+        sm: 6,
+        md: 10,
+        lg: 14
+    },
+    shadows: {
+        card: "0 8px 26px rgba(15, 23, 42, 0.08)"
+    },
+    logoUrl: undefined
+};
+const widgetThemeVariantFromUrl = () => {
+    if (typeof window === "undefined")
+        return "active";
+    return new URLSearchParams(window.location.search).get("theme") === "draft" ? "draft" : "active";
+};
+const themeCssVars = (tokens) => ({
+    "--pm-font": tokens.fontFamily || defaultWidgetThemeTokens.fontFamily,
+    "--pm-heading-font": tokens.headingFontFamily || tokens.fontFamily || defaultWidgetThemeTokens.headingFontFamily,
+    "--pm-primary": tokens.colors.primary || defaultWidgetThemeTokens.colors.primary,
+    "--pm-primary-hover": tokens.colors.primaryHover || defaultWidgetThemeTokens.colors.primaryHover,
+    "--pm-bg": tokens.colors.background || defaultWidgetThemeTokens.colors.background,
+    "--pm-surface": tokens.colors.surface || defaultWidgetThemeTokens.colors.surface,
+    "--pm-text": tokens.colors.text || defaultWidgetThemeTokens.colors.text,
+    "--pm-muted": tokens.colors.mutedText || defaultWidgetThemeTokens.colors.mutedText,
+    "--pm-border": tokens.colors.border || defaultWidgetThemeTokens.colors.border,
+    "--pm-radius-sm": `${tokens.radii.sm ?? defaultWidgetThemeTokens.radii.sm}px`,
+    "--pm-radius-md": `${tokens.radii.md ?? defaultWidgetThemeTokens.radii.md}px`,
+    "--pm-radius-lg": `${tokens.radii.lg ?? defaultWidgetThemeTokens.radii.lg}px`,
+    "--pm-card-shadow": tokens.shadows?.card || defaultWidgetThemeTokens.shadows?.card || "none"
+});
 const useOnlineStatus = () => {
     const [isOnline, setIsOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
     useEffect(() => {
@@ -90,12 +132,16 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
     const [checkpointOpen, setCheckpointOpen] = useState(false);
     const [connectStalled, setConnectStalled] = useState(false);
     const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
+    const [speechEngine, setSpeechEngine] = useState("none");
+    const [lastMintedVoice, setLastMintedVoice] = useState(null);
+    const [debugVoiceEnabled, setDebugVoiceEnabled] = useState(false);
     const realtimeSessionRef = useRef(null);
     const mediaStreamRef = useRef(null);
     const sessionIdRef = useRef(null);
     const lastCandidateTurnIdRef = useRef(null);
     const kickoffStartedRef = useRef(false);
-    const speechSynthesisRef = useRef(null);
+    const realtimeSpeechFallbackTimerRef = useRef(null);
+    const realtimeAssistantStartedRef = useRef(false);
     const isOnline = useOnlineStatus();
     const { transcript, scoringSnapshot, programFit, checkpoint, voicePhase, voiceInputMode, sessionLanguageTag, sessionLanguageLabel, detectedLanguageSuggestion, setSessionId, addTranscriptTurn, setMode, setProgramFilterIds, setScoringSnapshot, setProgramFit, setAnsweredTraitCount, setCheckpoint, setVoicePhase, setVoiceInputMode, setSessionLanguage, setDetectedLanguage, dismissDetectedLanguage, clear } = useWidgetStore();
     const debugVoice = (message, details) => {
@@ -142,11 +188,19 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
         return () => window.clearTimeout(timeout);
     }, [voicePhase]);
     useEffect(() => {
+        if (typeof window === "undefined")
+            return;
+        setDebugVoiceEnabled(window.localStorage.getItem("DEBUG_VOICE") === "1");
+    }, []);
+    useEffect(() => {
         if (!realtimeSessionRef.current)
             return;
         if (!isConnectedPhase(voicePhase))
             return;
-        realtimeSessionRef.current.updateInstructions(`You are a warm admissions interviewer. Respond in ${sessionLanguageLabel} only. Do not switch languages unless the user explicitly asks.`);
+        realtimeSessionRef.current.updateSession({
+            instructions: `You are a warm admissions interviewer. Respond in ${sessionLanguageLabel} only. Do not switch languages unless the user explicitly asks.`,
+            inputAudioLanguage: sessionLanguageTag
+        });
     }, [sessionLanguageTag, sessionLanguageLabel, voicePhase]);
     const tokenMutation = useMutation({
         mutationFn: (input) => api.getRealtimeToken(input)
@@ -177,6 +231,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
         mutationFn: (action) => api.submitInterviewCheckpoint(sessionIdRef.current, {
             mode,
             action,
+            language: sessionLanguageTag,
             focusTraitIds: action === "focus" ? checkpoint?.suggestedTraitIds : undefined,
             askedTraitIds,
             askedQuestionIds,
@@ -184,25 +239,46 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
         })
     });
     const speakPrompt = (text) => {
-        if (typeof window === "undefined" || !window.speechSynthesis) {
-            transitionPhase("assistant_done");
+        const speakWithBrowserTts = () => {
+            if (typeof window === "undefined" || !window.speechSynthesis) {
+                transitionPhase("assistant_done");
+                return;
+            }
+            window.speechSynthesis.cancel();
+            const utterance = createLanguageUtterance(text, sessionLanguageTag, window.speechSynthesis.getVoices?.() ?? []);
+            utterance.onstart = () => {
+                debugVoice("tts.start.browser", { chars: text.length });
+                setSpeechEngine("browser-fallback");
+                setVoicePhase("speaking");
+            };
+            utterance.onend = () => {
+                debugVoice("tts.end.browser");
+                transitionPhase("assistant_done");
+            };
+            utterance.onerror = () => {
+                transitionPhase("assistant_done");
+            };
+            window.speechSynthesis.speak(utterance);
+        };
+        const realtime = realtimeSessionRef.current;
+        if (realtime && realtime.connectionState === "connected") {
+            realtimeAssistantStartedRef.current = false;
+            setSpeechEngine("realtime-brand-voice");
+            setVoicePhase("speaking");
+            debugVoice("tts.start.realtime", { chars: text.length });
+            realtime.promptAssistant(`Respond in ${sessionLanguageLabel}. Say exactly this text and nothing else: "${text}"`);
+            if (realtimeSpeechFallbackTimerRef.current !== null) {
+                window.clearTimeout(realtimeSpeechFallbackTimerRef.current);
+            }
+            realtimeSpeechFallbackTimerRef.current = window.setTimeout(() => {
+                if (!realtimeAssistantStartedRef.current) {
+                    debugVoice("tts.fallback.browser", { reason: "no_realtime_audio_start" });
+                    speakWithBrowserTts();
+                }
+            }, 3500);
             return;
         }
-        window.speechSynthesis.cancel();
-        const utterance = createLanguageUtterance(text, sessionLanguageTag, window.speechSynthesis.getVoices?.() ?? []);
-        speechSynthesisRef.current = utterance;
-        utterance.onstart = () => {
-            debugVoice("tts.start", { chars: text.length });
-            setVoicePhase("speaking");
-        };
-        utterance.onend = () => {
-            debugVoice("tts.end");
-            transitionPhase("assistant_done");
-        };
-        utterance.onerror = () => {
-            transitionPhase("assistant_done");
-        };
-        window.speechSynthesis.speak(utterance);
+        speakWithBrowserTts();
     };
     const pushAssistantQuestion = async (question, prefix) => {
         if (!question)
@@ -243,6 +319,14 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
         transitionPhase("assistant_done");
     };
     const onTranscriptTurn = async (turn) => {
+        if (turn.speaker === "assistant") {
+            realtimeAssistantStartedRef.current = true;
+            if (realtimeSpeechFallbackTimerRef.current !== null) {
+                window.clearTimeout(realtimeSpeechFallbackTimerRef.current);
+                realtimeSpeechFallbackTimerRef.current = null;
+            }
+            return;
+        }
         if (turn.speaker !== "candidate") {
             return;
         }
@@ -253,8 +337,21 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
         lastCandidateTurnIdRef.current = turn.id;
         addTranscriptTurn(turn);
         debugVoice("transcript.candidate", { chars: turn.text.length });
-        if (/\b(hola|gracias|por favor|buenos|buenas|adios)\b/i.test(turn.text)) {
-            setDetectedLanguage("es", "Spanish");
+        const lowerTurn = turn.text.toLowerCase();
+        if (/\b(hola|gracias|por favor|buenos|buenas|adios)\b/i.test(turn.text) || /\bspanish|español\b/i.test(turn.text)) {
+            setDetectedLanguage("es", languageLabelFromTag("es"));
+        }
+        else if (/\bfrench|français\b/i.test(turn.text)) {
+            setDetectedLanguage("fr", languageLabelFromTag("fr"));
+        }
+        else if (/\bchinese|mandarin\b/i.test(turn.text)) {
+            setDetectedLanguage("zh", languageLabelFromTag("zh"));
+        }
+        else if (/\barabic\b/i.test(turn.text)) {
+            setDetectedLanguage("ar", languageLabelFromTag("ar"));
+        }
+        if (/can we do this in\s+([a-z]+)/i.test(lowerTurn) || /switch to\s+([a-z]+)/i.test(lowerTurn)) {
+            debugVoice("language.explicit-request", { text: turn.text.slice(0, 120) });
         }
         if (sessionIdRef.current) {
             void appendTranscriptMutation.mutateAsync({
@@ -300,10 +397,15 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
             setDeviceLabel(track.label || "Microphone ready");
             transitionPhase("permissions_granted");
             const interview = await createInterviewMutation.mutateAsync();
+            const responseLanguageTag = interview.languageTag ?? interview.language ?? sessionLanguageTag;
+            setSessionLanguage(responseLanguageTag, languageLabelFromTag(responseLanguageTag));
+            const debugEnabled = typeof window !== "undefined" && window.localStorage.getItem("DEBUG_VOICE") === "1";
             const token = await tokenMutation.mutateAsync({
                 brandVoiceId: interview.brandVoiceId ?? undefined,
-                language: interview.language ?? sessionLanguageTag
+                language: responseLanguageTag,
+                debug: debugEnabled
             });
+            setLastMintedVoice(token.debug?.selectedVoice ?? null);
             const id = interview.sessionId;
             if (!id)
                 throw new Error("Session id missing");
@@ -319,13 +421,38 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
                         setVoicePhase("error");
                     }
                 },
+                onDetectedLanguage: (tag) => {
+                    const normalized = tag.toLowerCase();
+                    const current = useWidgetStore.getState().sessionLanguageTag.toLowerCase();
+                    if (normalized !== current) {
+                        setDetectedLanguage(tag, languageLabelFromTag(tag));
+                    }
+                },
+                onAssistantAudioStart: () => {
+                    realtimeAssistantStartedRef.current = true;
+                    if (realtimeSpeechFallbackTimerRef.current !== null) {
+                        window.clearTimeout(realtimeSpeechFallbackTimerRef.current);
+                        realtimeSpeechFallbackTimerRef.current = null;
+                    }
+                },
+                onAssistantDone: () => {
+                    debugVoice("tts.end.realtime");
+                    if (realtimeSpeechFallbackTimerRef.current !== null) {
+                        window.clearTimeout(realtimeSpeechFallbackTimerRef.current);
+                        realtimeSpeechFallbackTimerRef.current = null;
+                    }
+                    transitionPhase("assistant_done");
+                },
                 onTranscriptTurn
             });
             realtimeSession.setAudioTrack(track);
             realtimeSessionRef.current = realtimeSession;
             await realtimeSession.connect(token.client_secret.value);
-            realtimeSession.updateInstructions(interview.systemPrompt ??
-                `You are a warm admissions interviewer. Respond in ${sessionLanguageLabel} only. Do not switch languages unless the user explicitly asks.`);
+            realtimeSession.updateSession({
+                instructions: interview.systemPrompt ??
+                    `You are a warm admissions interviewer. Respond in ${languageLabelFromTag(responseLanguageTag)} only. Do not switch languages unless the user explicitly asks.`,
+                inputAudioLanguage: responseLanguageTag
+            });
             transitionPhase("transport_connected");
             await kickoffIfNeeded(interview);
         }
@@ -359,6 +486,10 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
     };
     const endSession = async () => {
         try {
+            if (realtimeSpeechFallbackTimerRef.current !== null) {
+                window.clearTimeout(realtimeSpeechFallbackTimerRef.current);
+                realtimeSpeechFallbackTimerRef.current = null;
+            }
             window.speechSynthesis?.cancel();
             await realtimeSessionRef.current?.disconnect();
             if (sessionIdRef.current)
@@ -375,6 +506,10 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
     const resetFlow = async () => {
         await realtimeSessionRef.current?.disconnect();
         mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+        if (realtimeSpeechFallbackTimerRef.current !== null) {
+            window.clearTimeout(realtimeSpeechFallbackTimerRef.current);
+            realtimeSpeechFallbackTimerRef.current = null;
+        }
         window.speechSynthesis?.cancel();
         clear();
         setTransportState("idle");
@@ -409,7 +544,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }) => {
                                                 if (voicePhase !== "paused")
                                                     setVoicePhase("listening");
                                                 realtimeSessionRef.current?.setPushToTalk(true);
-                                            }, onTouchEnd: () => realtimeSessionRef.current?.setPushToTalk(false), disabled: voicePhase === "paused", children: "Hold to talk" })), _jsx(Button, { className: "bg-red-700", onClick: endSession, children: "End" })] })), _jsxs("div", { className: "max-h-72 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3", children: [transcript.length === 0 && _jsx("p", { className: "text-sm text-slate-500", children: "Transcript appears as the conversation runs." }), transcript.map((turn) => (_jsxs("div", { className: "rounded bg-slate-50 p-2 text-sm", children: [_jsxs("span", { className: "font-semibold capitalize", children: [turn.speaker, ":"] }), " ", turn.text] }, `${turn.id}-${turn.ts}`)))] }), checkpointOpen && checkpoint && (_jsxs("div", { className: "rounded-md border border-blue-200 bg-blue-50 p-3 text-sm", children: [_jsx("p", { className: "font-semibold text-slate-900", children: checkpoint.prompt }), _jsxs("div", { className: "mt-2 flex flex-wrap gap-2", children: [_jsx(Button, { className: "bg-slate-700", onClick: () => void handleCheckpointAction("stop"), children: "Stop and review" }), _jsx(Button, { onClick: () => void handleCheckpointAction("continue"), children: "Keep going" }), _jsx(Button, { className: "bg-slate-500", onClick: () => void handleCheckpointAction("focus"), disabled: checkpoint.suggestedTraitIds.length === 0, children: "Focus trait area" })] })] })), voicePhase === "ended" && (_jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: () => navigate("/widget/results"), children: "Review results" }), _jsx(Button, { className: "bg-slate-500", onClick: resetFlow, children: "Start over" })] })), !isOnline && _jsx("p", { className: "text-sm text-red-700", children: "You are offline. Reconnect to continue." }), error && _jsx("p", { className: "text-sm text-red-700", children: error })] }), _jsx(LanguagePickerModal, { open: languagePickerOpen, options: EXTRA_LANGUAGE_OPTIONS, onClose: () => setLanguagePickerOpen(false), onSelect: (tag, label) => {
+                                            }, onTouchEnd: () => realtimeSessionRef.current?.setPushToTalk(false), disabled: voicePhase === "paused", children: "Hold to talk" })), _jsx(Button, { className: "bg-red-700", onClick: endSession, children: "End" })] })), _jsxs("div", { className: "max-h-72 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-3", children: [transcript.length === 0 && _jsx("p", { className: "text-sm text-slate-500", children: "Transcript appears as the conversation runs." }), transcript.map((turn) => (_jsxs("div", { className: "rounded bg-slate-50 p-2 text-sm", children: [_jsxs("span", { className: "font-semibold capitalize", children: [turn.speaker, ":"] }), " ", turn.text] }, `${turn.id}-${turn.ts}`)))] }), checkpointOpen && checkpoint && (_jsxs("div", { className: "rounded-md border border-blue-200 bg-blue-50 p-3 text-sm", children: [_jsx("p", { className: "font-semibold text-slate-900", children: checkpoint.prompt }), _jsxs("div", { className: "mt-2 flex flex-wrap gap-2", children: [_jsx(Button, { className: "bg-slate-700", onClick: () => void handleCheckpointAction("stop"), children: "Stop and review" }), _jsx(Button, { onClick: () => void handleCheckpointAction("continue"), children: "Keep going" }), _jsx(Button, { className: "bg-slate-500", onClick: () => void handleCheckpointAction("focus"), disabled: checkpoint.suggestedTraitIds.length === 0, children: "Focus trait area" })] })] })), voicePhase === "ended" && (_jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: () => navigate("/widget/results"), children: "Review results" }), _jsx(Button, { className: "bg-slate-500", onClick: resetFlow, children: "Start over" })] })), !isOnline && _jsx("p", { className: "text-sm text-red-700", children: "You are offline. Reconnect to continue." }), error && _jsx("p", { className: "text-sm text-red-700", children: error }), debugVoiceEnabled && (_jsxs("div", { className: "rounded-md border border-slate-300 bg-slate-50 p-2 text-xs text-slate-700", children: [_jsxs("p", { children: ["Debug voice: engine=", _jsx("span", { className: "font-semibold", children: speechEngine })] }), _jsxs("p", { children: ["Minted voice=", _jsx("span", { className: "font-semibold", children: lastMintedVoice ?? "(none)" })] }), _jsxs("p", { children: ["Language=", _jsx("span", { className: "font-semibold", children: sessionLanguageTag })] })] }))] }), _jsx(LanguagePickerModal, { open: languagePickerOpen, options: EXTRA_LANGUAGE_OPTIONS, onClose: () => setLanguagePickerOpen(false), onSelect: (tag, label) => {
                                 setSessionLanguage(tag, label);
                                 setLanguagePickerOpen(false);
                             } })] }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, activeTraitId: currentQuestion?.traitId ?? null, done: voicePhase === "ended" })] }) }));
@@ -509,6 +644,7 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }) => {
     const [started, setStarted] = useState(false);
     const [error, setError] = useState(null);
     const [currentQuestion, setCurrentQuestion] = useState(null);
+    const [quizExperience, setQuizExperience] = useState(null);
     const [askedTraitIds, setAskedTraitIds] = useState([]);
     const [askedQuestionIds, setAskedQuestionIds] = useState([]);
     const isOnline = useOnlineStatus();
@@ -537,6 +673,32 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }) => {
         setMode(mode);
         setProgramFilterIds(programFilterIds);
     }, [clear, mode, programFilterIds, setMode, setProgramFilterIds]);
+    useEffect(() => {
+        let cancelled = false;
+        void api
+            .getQuizExperienceConfig()
+            .then((payload) => {
+            if (cancelled)
+                return;
+            setQuizExperience({
+                headline: payload.data.headline,
+                subheadline: payload.data.subheadline,
+                estimatedTimeLabel: payload.data.estimatedTimeLabel
+            });
+        })
+            .catch(() => {
+            if (cancelled)
+                return;
+            setQuizExperience({
+                headline: "Discover your best-fit graduate path",
+                subheadline: "A quick, personality-first quiz to see where you thrive.",
+                estimatedTimeLabel: "3-5 min"
+            });
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
     const startQuiz = async () => {
         try {
             const session = await createInterviewMutation.mutateAsync();
@@ -575,7 +737,14 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }) => {
             setError(selectError instanceof Error ? selectError.message : "Could not submit quiz answer.");
         }
     };
-    return (_jsx("main", { className: "mx-auto min-h-screen max-w-7xl px-4 py-8", children: _jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]", children: [_jsx(Card, { children: _jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "Quiz" }), !started && (_jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: startQuiz, disabled: !isOnline || createInterviewMutation.isPending, children: "Start quiz" }), _jsx(Button, { className: "bg-slate-500", onClick: onRestart, children: "Back" })] })), started && currentQuestion && (_jsxs(_Fragment, { children: [_jsx("h3", { className: "text-lg font-semibold text-slate-900", children: currentQuestion.prompt }), _jsx("div", { className: "grid gap-2", children: currentQuestion.options.map((option) => (_jsx("button", { type: "button", className: "rounded-md border border-slate-300 bg-white px-4 py-2 text-left text-sm hover:border-slate-900", onClick: () => void selectAnswer(option), disabled: !isOnline || turnMutation.isPending, children: option }, `${currentQuestion.id}-${option}`))) })] })), error && _jsx("p", { className: "text-sm text-red-700", children: error })] }) }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, activeTraitId: currentQuestion?.traitId ?? null })] }) }));
+    const totalTraits = scoringSnapshot?.traits.length ?? 0;
+    const completedTraits = (scoringSnapshot?.traits ?? []).filter((trait) => trait.status === "complete").length;
+    const progressLabel = totalTraits > 0 ? `${Math.min(completedTraits + (currentQuestion ? 1 : 0), totalTraits)} / ${totalTraits}` : null;
+    const optionMetaByLabel = new Map((currentQuestion?.answerOptionsMeta ?? [])
+        .filter((item) => typeof item?.label === "string")
+        .map((item) => [String(item.label), item]));
+    const traitDisplayName = currentQuestion?.publicLabel ?? currentQuestion?.traitName;
+    return (_jsx("main", { className: "mx-auto min-h-screen max-w-7xl px-4 py-8", children: _jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]", children: [_jsx(Card, { children: _jsxs("section", { className: "space-y-4", children: [_jsx("h2", { className: "text-2xl font-semibold", children: "Quiz" }), !started && (_jsxs("div", { className: "space-y-4 rounded-xl bg-gradient-to-br from-amber-100 via-orange-50 to-rose-100 p-4", children: [_jsx("p", { className: "text-xs font-semibold uppercase tracking-wide text-slate-600", children: quizExperience?.estimatedTimeLabel ?? "3-5 min" }), _jsx("h3", { className: "text-2xl font-bold text-slate-900", children: quizExperience?.headline ?? "Discover your best-fit graduate path" }), _jsx("p", { className: "text-sm text-slate-700", children: quizExperience?.subheadline ?? "A quick, personality-first quiz to see where you thrive." }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { onClick: startQuiz, disabled: !isOnline || createInterviewMutation.isPending, children: "Start" }), _jsx(Button, { className: "bg-slate-500", onClick: onRestart, children: "Back" })] })] })), started && currentQuestion && (_jsxs(_Fragment, { children: [_jsxs("div", { className: "flex items-center justify-between", children: [_jsx("p", { className: "text-xs uppercase tracking-wide text-slate-500", children: traitDisplayName }), progressLabel && _jsxs("p", { className: "text-xs font-semibold text-slate-600", children: ["Progress: ", progressLabel] })] }), currentQuestion.narrativeIntro && _jsx("p", { className: "text-sm text-slate-600", children: currentQuestion.narrativeIntro }), _jsx("h3", { className: "text-lg font-semibold text-slate-900", children: currentQuestion.prompt }), _jsx("div", { className: "grid gap-2", children: currentQuestion.options.map((option) => (_jsx("button", { type: "button", className: "rounded-xl border border-slate-300 bg-white px-4 py-3 text-left text-sm shadow-sm transition hover:-translate-y-0.5 hover:border-slate-900", onClick: () => void selectAnswer(option), disabled: !isOnline || turnMutation.isPending, children: _jsxs("div", { className: "flex items-start justify-between gap-3", children: [_jsxs("div", { children: [_jsx("p", { className: "font-semibold text-slate-900", children: option }), optionMetaByLabel.get(option)?.microCopy && (_jsx("p", { className: "mt-1 text-xs text-slate-600", children: optionMetaByLabel.get(option)?.microCopy }))] }), _jsx("span", { className: "rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-600", children: (optionMetaByLabel.get(option)?.iconToken ?? "spark").slice(0, 10) })] }) }, `${currentQuestion.id}-${option}`))) })] })), error && _jsx("p", { className: "text-sm text-red-700", children: error })] }) }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, activeTraitId: currentQuestion?.traitId ?? null })] }) }));
 };
 const ResultsPage = () => {
     const navigate = useNavigate();
@@ -626,5 +795,42 @@ const ResultsPage = () => {
     };
     return (_jsx("main", { className: "mx-auto min-h-screen max-w-7xl px-4 py-8", children: _jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]", children: [_jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-2xl font-semibold", children: "Results" }), _jsxs("p", { className: "text-sm text-slate-700", children: ["Interview mode: ", mode?.toUpperCase() ?? "N/A"] }), scorecard && _jsxs("p", { className: "text-sm text-slate-700", children: ["Overall score: ", scorecard.overallScore.toFixed(2), " / 5.00"] }), !scorecard && _jsx("p", { className: "text-sm text-slate-600", children: "Review rankings and trait evidence in the side panel." }), _jsxs("div", { className: "mt-4 rounded-md border border-slate-200 p-3", children: [_jsx("p", { className: "mb-2 text-sm font-semibold text-slate-900", children: "Request Info / Talk to an advisor" }), !leadSubmitted && (_jsxs("div", { className: "space-y-2", children: [_jsxs("div", { className: "grid gap-2 sm:grid-cols-2", children: [_jsx("input", { className: "rounded-md border border-slate-300 px-3 py-2 text-sm", placeholder: "First name", value: firstName, onChange: (event) => setFirstName(event.target.value) }), _jsx("input", { className: "rounded-md border border-slate-300 px-3 py-2 text-sm", placeholder: "Last name", value: lastName, onChange: (event) => setLastName(event.target.value) })] }), _jsxs("div", { className: "grid gap-2 sm:grid-cols-2", children: [_jsx("input", { className: "rounded-md border border-slate-300 px-3 py-2 text-sm", placeholder: "Email", type: "email", value: email, onChange: (event) => setEmail(event.target.value) }), _jsx("input", { className: "rounded-md border border-slate-300 px-3 py-2 text-sm", placeholder: "Phone (optional)", value: phone, onChange: (event) => setPhone(event.target.value) })] }), _jsxs("select", { className: "w-full rounded-md border border-slate-300 px-3 py-2 text-sm", value: preferredChannel, onChange: (event) => setPreferredChannel(event.target.value), children: [_jsx("option", { value: "email", children: "Email" }), _jsx("option", { value: "sms", children: "SMS" }), _jsx("option", { value: "phone", children: "Phone" })] }), _jsx(Button, { onClick: submitLead, disabled: createLeadMutation.isPending, children: createLeadMutation.isPending ? "Submitting..." : "Request Info" }), leadValidationError && _jsx("p", { className: "text-sm text-red-700", children: leadValidationError })] })), leadSubmitted && _jsx("p", { className: "text-sm text-emerald-700", children: "Thanks - we'll reach out soon." })] }), _jsx(Button, { className: "mt-4 bg-slate-500", onClick: () => navigate("/widget"), children: "Start over" })] }), _jsx(LiveInsightsSidebar, { snapshot: scoringSnapshot, programFit: programFit, done: true })] }) }));
 };
-const App = () => (_jsx(BrowserRouter, { children: _jsxs(Routes, { children: [_jsx(Route, { path: "/", element: _jsx(Navigate, { to: "/widget", replace: true }) }), _jsx(Route, { path: "/widget", element: _jsx(WidgetSetup, {}) }), _jsx(Route, { path: "/widget/results", element: _jsx(ResultsPage, {}) })] }) }));
-ReactDOM.createRoot(document.getElementById("root")).render(_jsx(React.StrictMode, { children: _jsx(QueryClientProvider, { client: queryClient, children: _jsx(App, {}) }) }));
+const router = createBrowserRouter([
+    { path: "/", element: _jsx(Navigate, { to: "/widget", replace: true }) },
+    { path: "/widget", element: _jsx(WidgetSetup, {}) },
+    { path: "/widget/results", element: _jsx(ResultsPage, {}) }
+], {
+    future: {
+        v7_relativeSplatPath: true,
+        ...{ v7_startTransition: true }
+    }
+});
+const container = document.getElementById("root");
+const root = container._widgetRoot ??
+    (container._widgetRoot =
+        ReactDOM.createRoot(container));
+const WidgetRuntime = () => {
+    const [tokens, setTokens] = useState(defaultWidgetThemeTokens);
+    useEffect(() => {
+        let cancelled = false;
+        const loadTheme = async () => {
+            try {
+                const payload = await api.getPublicWidgetTheme(widgetThemeVariantFromUrl());
+                if (!cancelled && payload.data?.tokens) {
+                    setTokens(payload.data.tokens);
+                }
+            }
+            catch {
+                if (!cancelled) {
+                    setTokens(defaultWidgetThemeTokens);
+                }
+            }
+        };
+        void loadTheme();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+    return (_jsx("div", { className: "pm-theme-root min-h-screen", style: themeCssVars(tokens), children: _jsx(RouterProvider, { router: router }) }));
+};
+root.render(_jsx(React.StrictMode, { children: _jsx(QueryClientProvider, { client: queryClient, children: _jsx(WidgetRuntime, {}) }) }));

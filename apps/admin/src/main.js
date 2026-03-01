@@ -1,9 +1,9 @@
-import { jsxs as _jsxs, jsx as _jsx, Fragment as _Fragment } from "react/jsx-runtime";
+import { jsxs as _jsxs, jsx as _jsx } from "react/jsx-runtime";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { programTraitPriorityBuckets, brandVoiceAvoidFlagOptions, brandVoiceStyleFlagOptions, boardStateToProgramTraitRows, defaultAvoidFlags, defaultStyleFlags, defaultToneProfile, generateBrandVoicePreview, traitCategories } from "@pmm/domain";
+import { computeProgramStatus, programTraitPriorityBuckets, brandVoiceAvoidFlagOptions, brandVoiceStyleFlagOptions, boardStateToProgramTraitRows, defaultAvoidFlags, defaultStyleFlags, defaultToneProfile, generateBrandVoicePreview, traitCategories } from "@pmm/domain";
 import { AppShell, Button, Card } from "@pmm/ui";
 import { BrandVoicePreview } from "./components/brand-voice/BrandVoicePreview";
 import { ChipSelectWithCustom } from "./components/brand-voice/ChipSelectWithCustom";
@@ -11,7 +11,13 @@ import { GeneratedSamplesPanel } from "./components/brand-voice/GeneratedSamples
 import { SimulationLab } from "./components/brand-voice/SimulationLab";
 import { ToneSelector } from "./components/brand-voice/ToneSelector";
 import { ToneSliders } from "./components/brand-voice/ToneSliders";
+import { TraitProgramsAccordion, TraitProgramsPanel } from "./components/trait-detail/TraitProgramsPanel";
 import { TraitPickerModal } from "./components/trait-picker/TraitPickerModal";
+import { AdminWidgetEmbedPage } from "./components/widget/AdminWidgetEmbedPage";
+import { WidgetBrandingPage } from "./components/widget/WidgetBrandingPage";
+import { AdminWidgetPreviewPage } from "./components/widget/AdminWidgetPreviewPage";
+import { AdminWidgetOrchestrationPage } from "./components/widget/AdminWidgetOrchestrationPage";
+import { WidgetDropdown } from "./components/widget/WidgetDropdown";
 import { createEmptyProgramBoardState, isBoardDirty, moveTraitInBoard, removeTraitFromBoard, toBoardIdState } from "./program-board-state";
 import "./styles.css";
 const queryClient = new QueryClient();
@@ -21,11 +27,48 @@ const inputClass = "w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
 const labelClass = "mb-1 block text-xs font-medium uppercase tracking-wide text-slate-600";
 const subtleButtonClass = "rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50";
 const openAiVoiceOptions = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
+const traitStatusOptions = ["DRAFT", "IN_REVIEW", "ACTIVE", "DEPRECATED"];
+const archetypeTagOptions = ["ANALYST", "BUILDER", "STRATEGIST", "OPERATOR", "VISIONARY", "LEADER", "COMMUNICATOR"];
+const visualMoodOptions = ["NEUTRAL", "ASPIRATIONAL", "PLAYFUL", "BOLD", "SERIOUS"];
+const canonicalQuizOptions = ["Beginner", "Developing", "Proficient", "Advanced"];
+const traitStatusRank = {
+    ACTIVE: 0,
+    IN_REVIEW: 1,
+    DRAFT: 2,
+    DEPRECATED: 3
+};
+const traitStatusTone = {
+    ACTIVE: "bg-emerald-100 text-emerald-800",
+    IN_REVIEW: "bg-amber-100 text-amber-800",
+    DRAFT: "bg-slate-200 text-slate-700",
+    DEPRECATED: "bg-rose-100 text-rose-700"
+};
+const traitListStatusMeta = {
+    ACTIVE: { label: "Active", dotClassName: "bg-emerald-500", textClassName: "text-emerald-700" },
+    DRAFT: { label: "Draft", dotClassName: "bg-slate-400", textClassName: "text-slate-600" },
+    ARCHIVED: { label: "Archived", dotClassName: "bg-rose-500", textClassName: "text-rose-700" }
+};
+const programListStatusMeta = {
+    DRAFT: { label: "Draft", dotClassName: "bg-slate-400", textClassName: "text-slate-600" },
+    ACTIVE: { label: "Active", dotClassName: "bg-emerald-500", textClassName: "text-emerald-700" },
+    INACTIVE: { label: "Inactive", dotClassName: "bg-slate-400", textClassName: "text-slate-600" }
+};
+class ApiError extends Error {
+    code;
+    missing;
+    details;
+}
 async function request(path, init) {
-    const response = await fetch(`${apiBaseUrl}${path}`, {
-        headers: { "Content-Type": "application/json" },
-        ...init
-    });
+    let response;
+    try {
+        response = await fetch(`${apiBaseUrl}${path}`, {
+            headers: { "Content-Type": "application/json" },
+            ...init
+        });
+    }
+    catch {
+        throw new Error(`Unable to reach API at ${apiBaseUrl}. Start the server and retry.`);
+    }
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
         const errorPayload = data?.error;
@@ -33,7 +76,17 @@ async function request(path, init) {
             throw new Error(errorPayload);
         }
         if (errorPayload && typeof errorPayload === "object" && typeof errorPayload.message === "string") {
-            throw new Error(errorPayload.message);
+            const apiError = new ApiError(errorPayload.message);
+            if (typeof errorPayload.code === "string") {
+                apiError.code = errorPayload.code;
+            }
+            if (Array.isArray(errorPayload.missing)) {
+                apiError.missing = errorPayload.missing.filter((item) => typeof item === "string");
+            }
+            if ("details" in errorPayload) {
+                apiError.details = errorPayload.details;
+            }
+            throw apiError;
         }
         throw new Error("Request failed");
     }
@@ -95,7 +148,14 @@ function qualityHint(value) {
 const emptyTraitForm = {
     name: "",
     category: "ACADEMIC",
+    status: "DRAFT",
     definition: "",
+    publicLabel: "",
+    oneLineHook: "",
+    archetypeTag: "ANALYST",
+    displayIcon: "spark",
+    visualMood: "ASPIRATIONAL",
+    experienceDraftJson: "",
     rubricPositiveSignals: "",
     rubricNegativeSignals: "",
     rubricFollowUps: ""
@@ -104,20 +164,163 @@ function toTraitFormState(trait) {
     return {
         name: trait.name,
         category: trait.category,
+        status: trait.status,
         definition: trait.definition ?? "",
+        publicLabel: trait.publicLabel ?? "",
+        oneLineHook: trait.oneLineHook ?? "",
+        archetypeTag: trait.archetypeTag ?? "ANALYST",
+        displayIcon: trait.displayIcon ?? "spark",
+        visualMood: trait.visualMood ?? "ASPIRATIONAL",
+        experienceDraftJson: trait.experienceDraftJson ?? "",
         rubricPositiveSignals: trait.rubricPositiveSignals ?? "",
         rubricNegativeSignals: trait.rubricNegativeSignals ?? "",
         rubricFollowUps: trait.rubricFollowUps ?? ""
     };
 }
+function normalizeTrait(trait) {
+    const status = trait.status ?? "DRAFT";
+    const completeness = trait.completeness ??
+        computeDraftCompleteness({
+            name: trait.name,
+            category: trait.category,
+            status,
+            definition: trait.definition ?? "",
+            publicLabel: trait.publicLabel ?? "",
+            oneLineHook: trait.oneLineHook ?? "",
+            archetypeTag: trait.archetypeTag ?? "ANALYST",
+            displayIcon: trait.displayIcon ?? "",
+            visualMood: trait.visualMood ?? "ASPIRATIONAL",
+            experienceDraftJson: trait.experienceDraftJson ?? "",
+            rubricPositiveSignals: trait.rubricPositiveSignals ?? "",
+            rubricNegativeSignals: trait.rubricNegativeSignals ?? "",
+            rubricFollowUps: trait.rubricFollowUps ?? ""
+        }, 0);
+    return {
+        id: trait.id,
+        name: trait.name,
+        category: trait.category,
+        status,
+        definition: trait.definition ?? null,
+        publicLabel: trait.publicLabel ?? null,
+        oneLineHook: trait.oneLineHook ?? null,
+        archetypeTag: trait.archetypeTag ?? null,
+        displayIcon: trait.displayIcon ?? null,
+        visualMood: trait.visualMood ?? null,
+        experienceDraftJson: trait.experienceDraftJson ?? null,
+        rubricScaleMin: trait.rubricScaleMin ?? 0,
+        rubricScaleMax: trait.rubricScaleMax ?? 5,
+        rubricPositiveSignals: trait.rubricPositiveSignals ?? null,
+        rubricNegativeSignals: trait.rubricNegativeSignals ?? null,
+        rubricFollowUps: trait.rubricFollowUps ?? null,
+        completeness,
+        programSummary: trait.programSummary
+            ? {
+                count: Number(trait.programSummary.count ?? 0),
+                topPrograms: Array.isArray(trait.programSummary.topPrograms)
+                    ? trait.programSummary.topPrograms.map((item) => ({
+                        programId: String(item.programId),
+                        programName: String(item.programName),
+                        bucket: item.bucket,
+                        weight: Number(item.weight ?? 0)
+                    }))
+                    : []
+            }
+            : undefined,
+        createdAt: trait.createdAt ?? new Date().toISOString(),
+        updatedAt: trait.updatedAt ?? new Date().toISOString()
+    };
+}
+function normalizeProgram(program) {
+    const nowIso = new Date().toISOString();
+    return {
+        id: program.id,
+        name: program.name,
+        description: program.description ?? null,
+        degreeLevel: program.degreeLevel ?? null,
+        department: program.department ?? null,
+        isActive: typeof program.isActive === "boolean" ? program.isActive : false,
+        createdAt: program.createdAt ?? nowIso,
+        updatedAt: program.updatedAt ?? nowIso
+    };
+}
+function normalizeTraitProgramAssociation(item) {
+    const nowIso = new Date().toISOString();
+    const parsedWeight = Number(item.weight ?? 0);
+    const safeWeight = Number.isFinite(parsedWeight) ? Math.max(0, Math.min(1, parsedWeight)) : 0;
+    const bucket = programTraitPriorityBuckets.includes(item.bucket)
+        ? item.bucket
+        : "IMPORTANT";
+    return {
+        programId: String(item.programId),
+        programName: typeof item.programName === "string" && item.programName.trim().length > 0 ? item.programName : "Unknown program",
+        bucket,
+        weight: safeWeight,
+        updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : nowIso
+    };
+}
+function computeDraftCompleteness(input, questionsCount) {
+    const positiveCount = splitListText(input.rubricPositiveSignals).length;
+    const negativeCount = splitListText(input.rubricNegativeSignals).length;
+    const questionCount = Math.max(0, questionsCount);
+    const checks = [
+        input.name.trim().length > 0,
+        Boolean(input.category),
+        input.definition.trim().length > 0,
+        positiveCount >= 3,
+        negativeCount >= 2,
+        questionCount >= 1
+    ];
+    const missing = [];
+    if (!checks[0])
+        missing.push("Name is required");
+    if (!checks[1])
+        missing.push("Category is required");
+    if (!checks[2])
+        missing.push("Definition is required");
+    if (!checks[3])
+        missing.push("At least 3 positive signals are required");
+    if (!checks[4])
+        missing.push("At least 2 negative signals are required");
+    if (!checks[5])
+        missing.push("At least 1 question is required");
+    return {
+        isComplete: missing.length === 0,
+        percentComplete: Math.round((checks.filter(Boolean).length / checks.length) * 100),
+        missing,
+        counts: {
+            positiveSignals: positiveCount,
+            negativeSignals: negativeCount,
+            questions: questionCount
+        }
+    };
+}
+function mapTraitListStatus(status) {
+    if (status === "ACTIVE")
+        return "ACTIVE";
+    if (status === "DEPRECATED")
+        return "ARCHIVED";
+    return "DRAFT";
+}
+function mapProgramListStatus(program) {
+    return computeProgramStatus(program);
+}
+function computeListCompletenessRatio(trait) {
+    const definitionComplete = (trait.definition ?? "").trim().length > 0;
+    const rubricSignalCount = trait.completeness.counts.positiveSignals + trait.completeness.counts.negativeSignals;
+    const rubricGeneratedCount = splitListText(trait.rubricFollowUps ?? "").length;
+    const rubricComplete = rubricSignalCount > 0 || rubricGeneratedCount > 0;
+    const hasQuestion = trait.completeness.counts.questions > 0;
+    const passedChecks = [definitionComplete, rubricComplete, hasQuestion].filter(Boolean).length;
+    return Math.round((passedChecks / 3) * 100);
+}
 function FieldMeta({ value }) {
     const hint = qualityHint(value);
-    return (_jsxs("div", { className: "mt-1 flex items-center justify-between text-xs", children: [_jsxs("span", { className: "text-slate-500", children: [value.length, " characters"] }), _jsx("span", { className: hint.className, children: hint.label })] }));
+    return (_jsxs("div", { className: "mt-1 flex items-center justify-end gap-2 text-xs text-slate-500", children: [_jsxs("span", { children: [value.length, " characters"] }), _jsx("span", { className: hint.className, children: hint.label })] }));
 }
 function CollapsibleSection({ title, defaultOpen = true, children }) {
     return (_jsxs("details", { open: defaultOpen, className: "rounded-md border border-slate-200 bg-slate-50/50", children: [_jsx("summary", { className: "cursor-pointer select-none px-3 py-2 text-sm font-semibold text-slate-800", children: title }), _jsx("div", { className: "space-y-3 border-t border-slate-200 bg-white p-3", children: children })] }));
 }
-function ListBuilder({ label, items, placeholder, onChange, emptyText, suggestionButtonLabel, onSuggestion }) {
+function ListBuilder({ label, items, placeholder, onChange, emptyText, addButtonLabel = "Add", suggestionButtonLabel, onSuggestion }) {
     const [draft, setDraft] = useState("");
     const addItem = () => {
         const next = draft.trim();
@@ -127,21 +330,131 @@ function ListBuilder({ label, items, placeholder, onChange, emptyText, suggestio
         onChange([...items, next]);
         setDraft("");
     };
-    return (_jsxs("div", { children: [_jsxs("div", { className: "mb-1 flex items-center justify-between", children: [_jsx("label", { className: labelClass, children: label }), suggestionButtonLabel && onSuggestion && (_jsx("button", { type: "button", className: subtleButtonClass, onClick: onSuggestion, children: suggestionButtonLabel }))] }), _jsxs("div", { className: "space-y-2", children: [items.length === 0 && _jsx("p", { className: "text-xs text-slate-500", children: emptyText }), items.map((item, index) => (_jsxs("div", { className: "flex items-start gap-2", children: [_jsx("input", { className: inputClass, value: item, onChange: (event) => {
+    return (_jsxs("div", { children: [_jsxs("div", { className: "mb-2 flex items-center justify-between", children: [_jsx("label", { className: "text-sm font-semibold text-slate-800", children: label }), suggestionButtonLabel && onSuggestion && (_jsx("button", { type: "button", className: "rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100", onClick: onSuggestion, children: suggestionButtonLabel }))] }), _jsxs("div", { className: "space-y-1.5", children: [items.length === 0 && _jsx("p", { className: "text-xs text-slate-500", children: emptyText }), items.map((item, index) => (_jsxs("div", { className: "flex items-center gap-2 py-1", children: [_jsx("input", { className: "w-full rounded-md border border-slate-200 px-3 py-2 text-sm", value: item, onChange: (event) => {
                                     const next = [...items];
                                     next[index] = event.target.value;
                                     onChange(next);
-                                } }), _jsx("button", { type: "button", className: "mt-2 text-xs text-red-700 underline", onClick: () => onChange(items.filter((_, itemIndex) => itemIndex !== index)), children: "Remove" })] }, `${label}-${index}`))), _jsxs("div", { className: "flex items-center gap-2", children: [_jsx("input", { className: inputClass, placeholder: placeholder, value: draft, onChange: (event) => setDraft(event.target.value), onKeyDown: (event) => {
+                                } }), _jsx("button", { type: "button", className: "text-xs text-red-600 hover:text-red-700", onClick: () => onChange(items.filter((_, itemIndex) => itemIndex !== index)), children: "Remove" })] }, `${label}-${index}`))), _jsxs("div", { className: "flex items-center gap-2 pt-1", children: [_jsx("input", { className: "w-full rounded-md border border-slate-200 px-3 py-2 text-sm", placeholder: placeholder, value: draft, onChange: (event) => setDraft(event.target.value), onKeyDown: (event) => {
                                     if (event.key === "Enter") {
                                         event.preventDefault();
                                         addItem();
                                     }
-                                } }), _jsx(Button, { type: "button", onClick: addItem, children: "Add" })] })] })] }));
+                                } }), _jsx("button", { type: "button", className: "text-sm font-medium text-slate-700 hover:text-slate-900", onClick: addItem, children: addButtonLabel })] })] })] }));
+}
+function TraitHeader({ name, category, status, editorStatusLabel, isSaving, onSave, onDelete, showDelete }) {
+    return (_jsx("header", { className: "sticky top-2 z-10 rounded-md border border-slate-200 bg-white/95 p-4 backdrop-blur", children: _jsxs("div", { className: "flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between", children: [_jsxs("div", { className: "min-w-0", children: [_jsx("h1", { className: "truncate text-2xl font-semibold text-slate-900", children: name.trim() || "New Trait" }), _jsxs("div", { className: "mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-600", children: [_jsx("span", { children: category }), _jsx("span", { "aria-hidden": true, children: "\u00B7" }), _jsxs("span", { className: `inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${traitStatusTone[status]}`, children: [_jsx("span", { "aria-hidden": true, className: "h-1.5 w-1.5 rounded-full bg-current opacity-80" }), status.replaceAll("_", " ")] })] })] }), _jsxs("div", { className: "flex shrink-0 items-center gap-3", children: [editorStatusLabel && _jsx("p", { className: "text-xs text-slate-500", children: editorStatusLabel }), _jsx(Button, { type: "button", disabled: isSaving, onClick: onSave, children: "Save Changes" }), showDelete && (_jsx("button", { type: "button", className: "text-sm text-red-600 hover:text-red-700", onClick: onDelete, children: "Delete" }))] })] }) }));
+}
+function TraitDefinitionSection({ form, setForm, titleInputRef, actionableMissing, showActivationNotice, isEditing, experienceDraft, generatingExperienceDraft, onGenerateExperienceDraft, onApplyExperienceDraft, onDiscardExperienceDraft }) {
+    return (_jsxs("section", { className: "space-y-4 rounded-md border border-slate-200 bg-white p-5", children: [_jsx("h2", { className: "text-xl font-semibold text-slate-900", children: "Definition" }), _jsxs("div", { className: "space-y-5", children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, htmlFor: "trait-title-input", children: "Name" }), _jsx("input", { id: "trait-title-input", ref: titleInputRef, required: true, className: inputClass, value: form.name, onChange: (event) => setForm((prev) => ({ ...prev, name: event.target.value })) }), _jsx(FieldMeta, { value: form.name })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Category" }), _jsx("select", { className: inputClass, value: form.category, onChange: (event) => setForm((prev) => ({ ...prev, category: event.target.value })), children: traitCategories.map((category) => (_jsx("option", { value: category, children: category }, category))) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, htmlFor: "trait-status-select", children: "Status" }), _jsx("select", { id: "trait-status-select", className: inputClass, value: form.status, onChange: (event) => setForm((prev) => ({ ...prev, status: event.target.value })), children: traitStatusOptions.map((status) => (_jsx("option", { value: status, children: status.replaceAll("_", " ") }, status))) })] }), _jsxs("div", { children: [_jsxs("div", { className: "mb-1 flex items-center justify-between", children: [_jsx("label", { className: labelClass, children: "Definition" }), _jsx("button", { type: "button", className: "rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100", onClick: () => setForm((prev) => ({
+                                            ...prev,
+                                            definition: buildDefinitionDraft(prev.name, prev.category)
+                                        })), children: "AI Draft Definition" })] }), _jsx("textarea", { className: inputClass, value: form.definition, onChange: (event) => setForm((prev) => ({ ...prev, definition: event.target.value })) }), _jsx(FieldMeta, { value: form.definition })] })] }), _jsxs("details", { className: "rounded-md border border-slate-200 bg-slate-50/50 p-3", children: [_jsx("summary", { className: "cursor-pointer text-sm font-semibold text-slate-800", children: "Student-Facing Label" }), _jsxs("div", { className: "mt-3 space-y-4", children: [_jsx("p", { className: "text-xs text-slate-600", children: "Used in the quiz UI and results. Does not affect scoring." }), _jsxs("div", { className: "flex flex-wrap gap-2", children: [_jsx("button", { type: "button", className: subtleButtonClass, disabled: !isEditing || generatingExperienceDraft, onClick: () => onGenerateExperienceDraft("generate"), children: generatingExperienceDraft ? "Generating..." : "Generate with AI" }), _jsx("button", { type: "button", className: subtleButtonClass, disabled: !isEditing || generatingExperienceDraft, onClick: () => onGenerateExperienceDraft("gen_z"), children: "Rewrite for Gen Z" }), _jsx("button", { type: "button", className: subtleButtonClass, disabled: !isEditing || generatingExperienceDraft, onClick: () => onGenerateExperienceDraft("simplify"), children: "Simplify" }), _jsx("button", { type: "button", className: subtleButtonClass, disabled: !isEditing || generatingExperienceDraft, onClick: () => onGenerateExperienceDraft("aspirational"), children: "Make more aspirational" })] }), experienceDraft && (_jsxs("div", { className: "rounded-md border border-blue-200 bg-blue-50 p-3 text-sm", children: [_jsx("p", { className: "font-semibold text-slate-900", children: "AI Draft Ready" }), _jsxs("p", { className: "mt-1 text-xs text-slate-700", children: [experienceDraft.publicLabel || form.name, " \u00B7 ", experienceDraft.archetypeTag, " \u00B7 ", experienceDraft.visualMood] }), _jsx("p", { className: "mt-1 text-xs text-slate-700", children: experienceDraft.oneLineHook }), _jsxs("div", { className: "mt-2 flex gap-2", children: [_jsx("button", { type: "button", className: subtleButtonClass, onClick: onApplyExperienceDraft, children: "Apply" }), _jsx("button", { type: "button", className: subtleButtonClass, onClick: onDiscardExperienceDraft, children: "Discard" })] })] })), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Display Name" }), _jsx("input", { className: inputClass, value: form.publicLabel, onChange: (event) => setForm((prev) => ({ ...prev, publicLabel: event.target.value })) }), _jsxs("p", { className: "mt-1 text-xs text-slate-500", children: ["Preview label: ", _jsx("span", { className: "font-medium text-slate-700", children: form.publicLabel.trim() || form.name.trim() || "Untitled trait" })] })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Short Description" }), _jsx("textarea", { className: inputClass, value: form.oneLineHook, onChange: (event) => setForm((prev) => ({ ...prev, oneLineHook: event.target.value })) })] }), _jsxs("details", { className: "rounded-md border border-slate-200 bg-white p-3", children: [_jsx("summary", { className: "cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-600", children: "Advanced" }), _jsxs("div", { className: "mt-3 grid gap-3 md:grid-cols-2", children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Archetype Tag" }), _jsx("select", { className: inputClass, value: form.archetypeTag, onChange: (event) => setForm((prev) => ({ ...prev, archetypeTag: event.target.value })), children: archetypeTagOptions.map((option) => (_jsx("option", { value: option, children: option }, option))) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Display Icon" }), _jsx("input", { className: inputClass, value: form.displayIcon, onChange: (event) => setForm((prev) => ({ ...prev, displayIcon: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Visual Mood" }), _jsx("select", { className: inputClass, value: form.visualMood, onChange: (event) => setForm((prev) => ({ ...prev, visualMood: event.target.value })), children: visualMoodOptions.map((option) => (_jsx("option", { value: option, children: option }, option))) })] })] })] })] })] }), showActivationNotice && (_jsxs("div", { className: "rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900", children: [_jsx("p", { className: "font-medium", children: "This trait won't affect scoring until Active." }), actionableMissing.length > 0 && (_jsx("ul", { className: "mt-2 list-disc space-y-1 pl-5 text-xs", children: actionableMissing.map((item) => (_jsx("li", { children: item }, item))) }))] }))] }));
+}
+function TraitRubricEditor({ isEditing, generatingRubric, onGenerateRubricWithAi, rubricDraft, onApplyRubricDraft, onDiscardRubricDraft, positiveSignals, negativeSignals, followUps, setForm }) {
+    return (_jsxs("section", { className: "space-y-4 border-b border-slate-200/80 pb-6", children: [_jsxs("div", { className: "flex items-center justify-between", children: [_jsx("h3", { className: "text-lg font-semibold text-slate-900", children: "Scoring Signals" }), isEditing && (_jsx("button", { type: "button", className: "rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-60", disabled: generatingRubric, onClick: onGenerateRubricWithAi, children: generatingRubric ? "Generating…" : "Generate with AI" }))] }), !isEditing && _jsx("p", { className: "text-xs text-slate-500", children: "Save the trait first to use \"Generate with AI\"." }), rubricDraft && (_jsxs("div", { className: "rounded-md border border-blue-200 bg-blue-50 p-3 text-sm", children: [_jsx("p", { className: "font-semibold text-slate-900", children: "Draft rubric ready" }), _jsxs("p", { className: "mt-1 text-xs text-slate-700", children: [rubricDraft.positiveSignals.length, " positive \u00B7 ", rubricDraft.negativeSignals.length, " negative \u00B7 ", rubricDraft.followUps.length, " follow-ups"] }), _jsxs("div", { className: "mt-2 flex gap-2", children: [_jsx("button", { type: "button", className: subtleButtonClass, onClick: onApplyRubricDraft, children: "Apply" }), _jsx("button", { type: "button", className: subtleButtonClass, onClick: onDiscardRubricDraft, children: "Discard" })] })] })), _jsx(ListBuilder, { label: "Positive Signals", items: positiveSignals, placeholder: "Add a positive signal", emptyText: "No positive signals yet.", addButtonLabel: "+ Add signal", suggestionButtonLabel: "Generate 3 positive signals", onSuggestion: () => setForm((prev) => ({
+                    ...prev,
+                    rubricPositiveSignals: joinListText(buildSignalSuggestions("positive", prev.name))
+                })), onChange: (items) => setForm((prev) => ({ ...prev, rubricPositiveSignals: joinListText(items) })) }), _jsx(ListBuilder, { label: "Negative Signals", items: negativeSignals, placeholder: "Add a negative signal", emptyText: "No negative signals yet.", addButtonLabel: "+ Add signal", suggestionButtonLabel: "Generate 3 negative signals", onSuggestion: () => setForm((prev) => ({
+                    ...prev,
+                    rubricNegativeSignals: joinListText(buildSignalSuggestions("negative", prev.name))
+                })), onChange: (items) => setForm((prev) => ({ ...prev, rubricNegativeSignals: joinListText(items) })) }), _jsx(ListBuilder, { label: "Rubric Follow-Ups", items: followUps, placeholder: "Add an optional follow-up", emptyText: "No follow-up prompts yet.", addButtonLabel: "+ Add follow-up", onChange: (items) => setForm((prev) => ({ ...prev, rubricFollowUps: joinListText(items.slice(0, 2)) })) }), positiveSignals.length === 0 && negativeSignals.length === 0 && (_jsx("p", { className: "text-xs text-slate-500", children: "Add at least 3 positive and 2 negative signals to activate." }))] }));
+}
+function TraitQuestionsEditor({ selectedTrait, generatingQuestionsDraft, onGenerateQuestionsDraftWithAi, onSaveQuizDesign, onSaveChatDesign, questions, rubricFollowUps }) {
+    const [tab, setTab] = useState("quiz");
+    const [savingQuiz, setSavingQuiz] = useState(false);
+    const [savingChat, setSavingChat] = useState(false);
+    const [quizDraft, setQuizDraft] = useState(null);
+    const [chatDraft, setChatDraft] = useState(null);
+    const savedQuizQuestion = useMemo(() => questions.find((question) => question.type === "quiz") ?? null, [questions]);
+    const savedChatQuestions = useMemo(() => questions.filter((question) => question.type === "chat").slice(0, 2), [questions]);
+    const [quizForm, setQuizForm] = useState({
+        narrativeIntro: "",
+        questionText: "",
+        answerStyle: "CARD_GRID",
+        optionMeta: canonicalQuizOptions.map((label, index) => ({
+            label,
+            microCopy: "",
+            iconToken: "",
+            traitScore: index + 1
+        }))
+    });
+    const [chatForm, setChatForm] = useState({ chatQuestion1: "", chatQuestion2: "", rubricFollowUps: "" });
+    useEffect(() => {
+        const optionMetaFromQuestion = canonicalQuizOptions.map((label, index) => {
+            const savedMeta = savedQuizQuestion?.answerOptionsMeta?.find((item) => item.label === label) ?? savedQuizQuestion?.answerOptionsMeta?.[index];
+            return {
+                label,
+                microCopy: savedMeta?.microCopy ?? "",
+                iconToken: savedMeta?.iconToken ?? "",
+                traitScore: savedMeta?.traitScore ?? index + 1
+            };
+        });
+        setQuizForm({
+            narrativeIntro: savedQuizQuestion?.narrativeIntro ?? "",
+            questionText: savedQuizQuestion?.prompt ?? "",
+            answerStyle: savedQuizQuestion?.answerStyle === "RADIO" || savedQuizQuestion?.answerStyle === "SLIDER" ? savedQuizQuestion.answerStyle : "CARD_GRID",
+            optionMeta: optionMetaFromQuestion
+        });
+        setChatForm({
+            chatQuestion1: savedChatQuestions[0]?.prompt ?? "",
+            chatQuestion2: savedChatQuestions[1]?.prompt ?? "",
+            rubricFollowUps
+        });
+    }, [savedQuizQuestion, savedChatQuestions, rubricFollowUps]);
+    if (!selectedTrait) {
+        return _jsx("p", { className: "text-sm text-slate-500", children: "Select a trait to manage interview questions." });
+    }
+    return (_jsxs("section", { className: "space-y-4", children: [_jsxs("div", { className: "flex items-center justify-between", children: [_jsx("h3", { className: "text-lg font-semibold text-slate-900", children: "Interaction Design" }), _jsxs("div", { className: "flex gap-2", children: [_jsx("button", { type: "button", className: `rounded-md px-2 py-1 text-xs font-medium ${tab === "quiz" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"}`, onClick: () => setTab("quiz"), children: "Quiz" }), _jsx("button", { type: "button", className: `rounded-md px-2 py-1 text-xs font-medium ${tab === "chat" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"}`, onClick: () => setTab("chat"), children: "Chat" })] })] }), _jsx("p", { className: "text-sm text-slate-500", children: "Questions elicit evidence. Scoring uses rubric signals." }), tab === "quiz" && (_jsxs("div", { className: "space-y-4 rounded-md border border-slate-200/80 p-3", children: [_jsxs("div", { className: "text-xs text-slate-500", children: [_jsx("p", { className: "font-semibold text-slate-700", children: "Current (saved)" }), _jsx("p", { children: savedQuizQuestion?.prompt || "No quiz question saved yet." })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Narrative Intro (optional)" }), _jsx("textarea", { className: inputClass, value: quizForm.narrativeIntro, onChange: (event) => setQuizForm((prev) => ({ ...prev, narrativeIntro: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Question Text" }), _jsx("textarea", { className: inputClass, value: quizForm.questionText, onChange: (event) => setQuizForm((prev) => ({ ...prev, questionText: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Answer Style" }), _jsxs("select", { className: inputClass, value: quizForm.answerStyle, onChange: (event) => setQuizForm((prev) => ({ ...prev, answerStyle: event.target.value })), children: [_jsx("option", { value: "CARD_GRID", children: "CARD_GRID" }), _jsx("option", { value: "RADIO", children: "RADIO" }), _jsx("option", { value: "SLIDER", children: "SLIDER" })] })] }), _jsxs("div", { className: "space-y-2", children: [_jsx("p", { className: "text-xs font-semibold uppercase tracking-wide text-slate-500", children: "Option Microcopy (display-only)" }), quizForm.optionMeta.map((meta, index) => (_jsxs("div", { className: "grid gap-2 md:grid-cols-4", children: [_jsx("input", { className: inputClass, value: meta.label, readOnly: true }), _jsx("input", { className: inputClass, placeholder: "Microcopy", value: meta.microCopy, onChange: (event) => setQuizForm((prev) => ({
+                                            ...prev,
+                                            optionMeta: prev.optionMeta.map((item, itemIndex) => (itemIndex === index ? { ...item, microCopy: event.target.value } : item))
+                                        })) }), _jsx("input", { className: inputClass, placeholder: "Icon token", value: meta.iconToken, onChange: (event) => setQuizForm((prev) => ({
+                                            ...prev,
+                                            optionMeta: prev.optionMeta.map((item, itemIndex) => (itemIndex === index ? { ...item, iconToken: event.target.value } : item))
+                                        })) }), _jsx("input", { className: inputClass, type: "number", min: 0, max: 5, value: meta.traitScore, onChange: (event) => setQuizForm((prev) => ({
+                                            ...prev,
+                                            optionMeta: prev.optionMeta.map((item, itemIndex) => (itemIndex === index ? { ...item, traitScore: Number(event.target.value || 0) } : item))
+                                        })) })] }, `quiz-meta-${meta.label}-${index}`)))] }), quizDraft && (_jsxs("div", { className: "rounded-md border border-blue-200 bg-blue-50 p-3 text-sm", children: [_jsx("p", { className: "font-semibold text-slate-900", children: "Draft values ready" }), _jsx("p", { className: "mt-1 text-xs text-slate-700", children: quizDraft.questionText }), _jsxs("div", { className: "mt-2 flex gap-2", children: [_jsx("button", { type: "button", className: subtleButtonClass, onClick: () => {
+                                            void onSaveQuizDesign(quizDraft);
+                                            setQuizDraft(null);
+                                        }, children: "Apply" }), _jsx("button", { type: "button", className: subtleButtonClass, onClick: () => setQuizDraft(null), children: "Discard" })] })] })), _jsxs("div", { className: "flex items-center gap-2", children: [_jsx("button", { type: "button", className: subtleButtonClass, disabled: generatingQuestionsDraft, onClick: () => void onGenerateQuestionsDraftWithAi().then((draft) => {
+                                    setQuizDraft(draft.quiz);
+                                }), children: generatingQuestionsDraft ? "Generating..." : "Generate" }), _jsx(Button, { type: "button", disabled: savingQuiz, onClick: async () => {
+                                    setSavingQuiz(true);
+                                    try {
+                                        await onSaveQuizDesign(quizForm);
+                                    }
+                                    finally {
+                                        setSavingQuiz(false);
+                                    }
+                                }, children: savingQuiz ? "Saving..." : "Save Quiz Design" })] })] })), tab === "chat" && (_jsxs("div", { className: "space-y-4 rounded-md border border-slate-200/80 p-3", children: [_jsxs("div", { className: "text-xs text-slate-500", children: [_jsx("p", { className: "font-semibold text-slate-700", children: "Current (saved)" }), _jsx("p", { children: savedChatQuestions[0]?.prompt || "No chat questions saved yet." }), savedChatQuestions[1]?.prompt && _jsx("p", { children: savedChatQuestions[1]?.prompt })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Chat Question 1" }), _jsx("textarea", { className: inputClass, value: chatForm.chatQuestion1, onChange: (event) => setChatForm((prev) => ({ ...prev, chatQuestion1: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Chat Question 2" }), _jsx("textarea", { className: inputClass, value: chatForm.chatQuestion2, onChange: (event) => setChatForm((prev) => ({ ...prev, chatQuestion2: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Rubric Follow-Ups (0-2 lines)" }), _jsx("textarea", { className: inputClass, value: chatForm.rubricFollowUps, onChange: (event) => setChatForm((prev) => ({ ...prev, rubricFollowUps: event.target.value })) })] }), _jsx("div", { className: "rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700", children: "Chat scoring uses rubric signals (3 positive, 3 negative) to derive a 0-5 score." }), chatDraft && (_jsxs("div", { className: "rounded-md border border-blue-200 bg-blue-50 p-3 text-sm", children: [_jsx("p", { className: "font-semibold text-slate-900", children: "Draft values ready" }), _jsx("p", { className: "mt-1 text-xs text-slate-700", children: chatDraft.chatQuestion1 }), _jsx("p", { className: "mt-1 text-xs text-slate-700", children: chatDraft.chatQuestion2 }), _jsxs("div", { className: "mt-2 flex gap-2", children: [_jsx("button", { type: "button", className: subtleButtonClass, onClick: () => {
+                                            void onSaveChatDesign(chatDraft);
+                                            setChatDraft(null);
+                                        }, children: "Apply" }), _jsx("button", { type: "button", className: subtleButtonClass, onClick: () => setChatDraft(null), children: "Discard" })] })] })), _jsxs("div", { className: "flex items-center gap-2", children: [_jsx("button", { type: "button", className: subtleButtonClass, disabled: generatingQuestionsDraft, onClick: () => void onGenerateQuestionsDraftWithAi().then((draft) => {
+                                    setChatDraft(draft.chat);
+                                }), children: generatingQuestionsDraft ? "Generating..." : "Generate" }), _jsx(Button, { type: "button", disabled: savingChat, onClick: async () => {
+                                    setSavingChat(true);
+                                    try {
+                                        await onSaveChatDesign(chatForm);
+                                    }
+                                    finally {
+                                        setSavingChat(false);
+                                    }
+                                }, children: savingChat ? "Saving..." : "Save Chat Design" })] })] }))] }));
+}
+function TraitScoringInterviewSection({ children }) {
+    return (_jsxs("section", { className: "space-y-6 rounded-md border border-slate-200 bg-white p-5", children: [_jsx("h2", { className: "text-xl font-semibold text-slate-900", children: "Scoring & Interview" }), children] }));
+}
+function TraitProgramsSidebar({ selectedTrait, selectedTraitPrograms, selectedTraitProgramsLoading, selectedTraitProgramsError, onManage, onProgramClick }) {
+    if (!selectedTrait) {
+        return null;
+    }
+    return (_jsx("aside", { className: "hidden w-full min-w-[240px] max-w-[340px] self-start overflow-auto lg:block lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)]", "aria-label": "Used in programs", children: _jsx(TraitProgramsPanel, { programs: selectedTraitPrograms, loading: selectedTraitProgramsLoading, error: selectedTraitProgramsError, onManage: onManage, onProgramClick: onProgramClick }) }));
 }
 function ShellLayout({ children }) {
-    return (_jsxs(AppShell, { children: [_jsx("header", { className: "border-b border-slate-200 bg-white", children: _jsxs("div", { className: "mx-auto flex max-w-7xl items-center justify-between p-4", children: [_jsx("h1", { className: "text-xl font-semibold", children: "Program Match Admin" }), _jsxs("nav", { className: "flex gap-2", children: [_jsx(Link, { className: navLinkClass, to: "/traits", children: "Traits" }), _jsx(Link, { className: navLinkClass, to: "/programs", children: "Programs" }), _jsx(Link, { className: navLinkClass, to: "/brand-voice", children: "Brand Voice" })] })] }) }), _jsx("main", { className: "mx-auto max-w-7xl p-4", children: children })] }));
+    return (_jsxs(AppShell, { children: [_jsx("header", { className: "border-b border-slate-200 bg-white", children: _jsxs("div", { className: "mx-auto flex max-w-7xl items-center justify-between p-4", children: [_jsx("h1", { className: "text-xl font-semibold", children: "Program Match Admin" }), _jsxs("nav", { className: "flex items-center gap-2", children: [_jsx(Link, { className: navLinkClass, to: "/traits", children: "Traits" }), _jsx(Link, { className: navLinkClass, to: "/programs", children: "Programs" }), _jsx(Link, { className: navLinkClass, to: "/brand-voice", children: "Brand Voice" }), _jsx(Link, { className: navLinkClass, to: "/quiz-experience", children: "Quiz Experience" }), _jsx(Link, { className: navLinkClass, to: "/widget/branding", children: "Widget Branding" }), _jsx(WidgetDropdown, {})] })] }) }), _jsx("main", { className: "mx-auto max-w-7xl p-4", children: children })] }));
 }
-function TraitsPage() {
+export function TraitsPage() {
+    const navigate = useNavigate();
     const [traits, setTraits] = useState([]);
     const [questions, setQuestions] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -150,22 +463,52 @@ function TraitsPage() {
     const [selectedTraitId, setSelectedTraitId] = useState(null);
     const [form, setForm] = useState({ ...emptyTraitForm });
     const [baselineForm, setBaselineForm] = useState({ ...emptyTraitForm });
-    const [questionForm, setQuestionForm] = useState({
-        id: "",
-        prompt: "",
-        type: "chat",
-        optionsText: ""
-    });
+    const [experienceDraft, setExperienceDraft] = useState(null);
+    const [generatingExperienceDraft, setGeneratingExperienceDraft] = useState(false);
     const [traitNotice, setTraitNotice] = useState(null);
     const [traitError, setTraitError] = useState(null);
+    const [activationMissing, setActivationMissing] = useState([]);
+    const [rubricDraft, setRubricDraft] = useState(null);
+    const [generatingRubric, setGeneratingRubric] = useState(false);
+    const [generatingQuestionsDraft, setGeneratingQuestionsDraft] = useState(false);
+    const [programDrawerTraitId, setProgramDrawerTraitId] = useState(null);
+    const [selectedTraitPrograms, setSelectedTraitPrograms] = useState([]);
+    const [selectedTraitProgramsLoading, setSelectedTraitProgramsLoading] = useState(false);
+    const [selectedTraitProgramsError, setSelectedTraitProgramsError] = useState(null);
+    const [isCreatingDraft, setIsCreatingDraft] = useState(false);
+    const [editorSaveStatus, setEditorSaveStatus] = useState("idle");
+    const titleInputRef = useRef(null);
+    const focusTitleOnSelectRef = useRef(false);
+    const createDraftRequestIdRef = useRef(0);
+    const isMountedRef = useRef(true);
     const positiveSignals = useMemo(() => splitListText(form.rubricPositiveSignals), [form.rubricPositiveSignals]);
     const negativeSignals = useMemo(() => splitListText(form.rubricNegativeSignals), [form.rubricNegativeSignals]);
-    const quizOptions = useMemo(() => splitListText(questionForm.optionsText), [questionForm.optionsText]);
+    const followUps = useMemo(() => splitListText(form.rubricFollowUps), [form.rubricFollowUps]);
     const traitFormDirty = useMemo(() => JSON.stringify(form) !== JSON.stringify(baselineForm), [form, baselineForm]);
+    const draftCompleteness = useMemo(() => computeDraftCompleteness(form, questions.length), [form, questions.length]);
+    const editorStatusLabel = useMemo(() => {
+        if (isCreatingDraft || editorSaveStatus === "saving") {
+            return "Saving...";
+        }
+        if (traitFormDirty) {
+            return "Unsaved changes";
+        }
+        if (editorSaveStatus === "saved") {
+            return "Saved";
+        }
+        return null;
+    }, [editorSaveStatus, isCreatingDraft, traitFormDirty]);
     const selectedTrait = traits.find((trait) => trait.id === selectedTraitId) ?? null;
     const isEditing = Boolean(selectedTraitId && selectedTrait);
+    const sortedTraits = useMemo(() => [...traits].sort((a, b) => {
+        const statusDiff = traitStatusRank[a.status] - traitStatusRank[b.status];
+        if (statusDiff !== 0)
+            return statusDiff;
+        return a.name.localeCompare(b.name);
+    }), [traits]);
     const loadTraits = async () => {
         setLoading(true);
+        setTraitError(null);
         try {
             const query = new URLSearchParams();
             if (search.trim()) {
@@ -174,14 +517,18 @@ function TraitsPage() {
             if (categoryFilter !== "ALL") {
                 query.set("category", categoryFilter);
             }
+            query.set("include", "programSummary");
             const payload = await request(`/api/admin/traits?${query.toString()}`);
-            setTraits(payload.data);
+            setTraits(payload.data.map((trait) => normalizeTrait(trait)));
             if (payload.data.length === 0) {
                 setSelectedTraitId(null);
             }
             else if (selectedTraitId && !payload.data.some((trait) => trait.id === selectedTraitId)) {
                 setSelectedTraitId(payload.data[0]?.id ?? null);
             }
+        }
+        catch (error) {
+            setTraitError(error instanceof Error ? error.message : "Failed to load traits.");
         }
         finally {
             setLoading(false);
@@ -191,15 +538,50 @@ function TraitsPage() {
         const payload = await request(`/api/admin/traits/${traitId}/questions`);
         setQuestions(payload.data);
     };
+    const loadTraitPrograms = async (traitId) => {
+        setSelectedTraitProgramsLoading(true);
+        setSelectedTraitProgramsError(null);
+        try {
+            const payload = await request(`/api/admin/traits/${traitId}/programs`);
+            setSelectedTraitPrograms(payload.data.map((item) => normalizeTraitProgramAssociation(item)));
+        }
+        catch (error) {
+            setSelectedTraitPrograms([]);
+            setSelectedTraitProgramsError(error instanceof Error ? error.message : "Failed to load associated programs.");
+        }
+        finally {
+            setSelectedTraitProgramsLoading(false);
+        }
+    };
+    useEffect(() => {
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
     useEffect(() => {
         void loadTraits();
     }, [search, categoryFilter]);
     useEffect(() => {
         if (!selectedTraitId) {
             setQuestions([]);
+            setSelectedTraitPrograms([]);
+            setSelectedTraitProgramsError(null);
+            setSelectedTraitProgramsLoading(false);
             return;
         }
-        void loadQuestions(selectedTraitId);
+        void loadQuestions(selectedTraitId).catch((error) => {
+            setTraitError(error instanceof Error ? error.message : "Failed to load questions.");
+        });
+        void loadTraitPrograms(selectedTraitId);
+    }, [selectedTraitId]);
+    useEffect(() => {
+        if (!selectedTraitId || !focusTitleOnSelectRef.current)
+            return;
+        focusTitleOnSelectRef.current = false;
+        window.setTimeout(() => {
+            titleInputRef.current?.focus();
+            titleInputRef.current?.select();
+        }, 0);
     }, [selectedTraitId]);
     const canLeaveTraitForm = () => {
         if (!traitFormDirty) {
@@ -207,16 +589,57 @@ function TraitsPage() {
         }
         return window.confirm("You have unsaved trait changes. Discard them and continue?");
     };
-    const startCreateTrait = () => {
+    const startCreateTrait = async () => {
+        if (isCreatingDraft)
+            return;
         if (!canLeaveTraitForm()) {
             return;
         }
-        setSelectedTraitId(null);
-        setForm({ ...emptyTraitForm });
-        setBaselineForm({ ...emptyTraitForm });
-        setQuestionForm({ id: "", prompt: "", type: "chat", optionsText: "" });
+        const requestId = createDraftRequestIdRef.current + 1;
+        createDraftRequestIdRef.current = requestId;
+        setIsCreatingDraft(true);
+        setEditorSaveStatus("saving");
         setTraitNotice(null);
         setTraitError(null);
+        try {
+            const created = await request("/api/admin/traits", {
+                method: "POST",
+                body: JSON.stringify({
+                    name: "Untitled trait",
+                    category: emptyTraitForm.category,
+                    status: "DRAFT"
+                })
+            });
+            if (!isMountedRef.current || createDraftRequestIdRef.current !== requestId) {
+                return;
+            }
+            const normalized = normalizeTrait(created.data);
+            const nextForm = toTraitFormState(normalized);
+            setTraits((prev) => [normalized, ...prev.filter((item) => item.id !== normalized.id)]);
+            setSelectedTraitId(normalized.id);
+            setForm(nextForm);
+            setBaselineForm(nextForm);
+            setExperienceDraft(null);
+            setRubricDraft(null);
+            setActivationMissing([]);
+            setTraitNotice("Saved");
+            setEditorSaveStatus("saved");
+            focusTitleOnSelectRef.current = true;
+            await loadTraits();
+            await loadQuestions(normalized.id);
+        }
+        catch (error) {
+            if (!isMountedRef.current || createDraftRequestIdRef.current !== requestId) {
+                return;
+            }
+            setTraitError(error instanceof Error ? error.message : "Could not create draft trait.");
+            setEditorSaveStatus("error");
+        }
+        finally {
+            if (isMountedRef.current && createDraftRequestIdRef.current === requestId) {
+                setIsCreatingDraft(false);
+            }
+        }
     };
     const startEditTrait = (trait) => {
         if (selectedTraitId === trait.id) {
@@ -231,21 +654,16 @@ function TraitsPage() {
         setBaselineForm(nextForm);
         setTraitNotice(null);
         setTraitError(null);
-    };
-    const resetTraitForm = () => {
-        if (selectedTrait) {
-            const nextForm = toTraitFormState(selectedTrait);
-            setForm(nextForm);
-            setBaselineForm(nextForm);
-            return;
-        }
-        setForm({ ...emptyTraitForm });
-        setBaselineForm({ ...emptyTraitForm });
+        setExperienceDraft(null);
+        setActivationMissing([]);
+        setEditorSaveStatus("idle");
     };
     const submitTrait = async (event) => {
-        event.preventDefault();
+        event?.preventDefault();
         setTraitError(null);
         setTraitNotice(null);
+        setActivationMissing([]);
+        setEditorSaveStatus("saving");
         try {
             const body = {
                 ...form,
@@ -260,7 +678,7 @@ function TraitsPage() {
                 const nextForm = toTraitFormState(updated.data);
                 setForm(nextForm);
                 setBaselineForm(nextForm);
-                setTraitNotice("Trait saved.");
+                setTraitNotice("Saved");
             }
             else {
                 const created = await request("/api/admin/traits", {
@@ -271,15 +689,25 @@ function TraitsPage() {
                 setSelectedTraitId(created.data.id);
                 setForm(nextForm);
                 setBaselineForm(nextForm);
-                setTraitNotice("Trait created.");
+                setTraitNotice("Saved");
             }
+            setEditorSaveStatus("saved");
             await loadTraits();
             if (selectedTraitId) {
                 await loadQuestions(selectedTraitId);
             }
         }
         catch (error) {
-            setTraitError(error instanceof Error ? error.message : "Failed to save trait.");
+            if (error instanceof ApiError && error.code === "TRAIT_INCOMPLETE") {
+                setTraitError("Trait incomplete");
+                setActivationMissing(error.missing ?? []);
+                setForm((prev) => ({ ...prev, status: baselineForm.status }));
+                setEditorSaveStatus("error");
+            }
+            else {
+                setTraitError(error instanceof Error ? error.message : "Failed to save trait.");
+                setEditorSaveStatus("error");
+            }
         }
     };
     const deleteTrait = async (id) => {
@@ -291,65 +719,372 @@ function TraitsPage() {
         }
         await loadTraits();
     };
-    const submitQuestion = async (event) => {
-        event.preventDefault();
-        if (!selectedTraitId) {
+    const upsertQuestion = async (existingQuestionId, body) => {
+        if (!selectedTraitId)
             return;
-        }
-        const body = {
-            prompt: questionForm.prompt,
-            type: questionForm.type,
-            options: questionForm.type === "quiz"
-                ? questionForm.optionsText
-                    .split("\n")
-                    .map((line) => line.trim())
-                    .filter(Boolean)
-                : undefined
-        };
-        if (questionForm.id) {
-            await request(`/api/admin/questions/${questionForm.id}`, {
+        if (existingQuestionId) {
+            await request(`/api/admin/questions/${existingQuestionId}`, {
                 method: "PUT",
                 body: JSON.stringify(body)
             });
+            return;
         }
-        else {
-            await request(`/api/admin/traits/${selectedTraitId}/questions`, {
-                method: "POST",
-                body: JSON.stringify(body)
+        await request(`/api/admin/traits/${selectedTraitId}/questions`, {
+            method: "POST",
+            body: JSON.stringify(body)
+        });
+    };
+    const generateRubricWithAi = async () => {
+        if (!selectedTraitId) {
+            return;
+        }
+        setGeneratingRubric(true);
+        setTraitError(null);
+        try {
+            const payload = await request(`/api/admin/traits/${selectedTraitId}/generate-signals`, { method: "POST" });
+            const { positiveSignals: pos, negativeSignals: neg, followUps: follow } = payload.data;
+            setRubricDraft({
+                positiveSignals: (pos ?? []).slice(0, 3),
+                negativeSignals: (neg ?? []).slice(0, 3),
+                followUps: (follow ?? []).slice(0, 2)
             });
         }
-        setQuestionForm({
-            id: "",
-            prompt: "",
-            type: "chat",
-            optionsText: ""
-        });
-        await loadQuestions(selectedTraitId);
-    };
-    const deleteQuestion = async (id) => {
-        await request(`/api/admin/questions/${id}`, { method: "DELETE" });
-        if (selectedTraitId) {
-            await loadQuestions(selectedTraitId);
+        catch (error) {
+            setTraitError(error instanceof Error ? error.message : "Failed to generate rubric with AI.");
+        }
+        finally {
+            setGeneratingRubric(false);
         }
     };
-    return (_jsxs("div", { className: "grid gap-4 lg:grid-cols-[320px_1fr_1fr]", children: [_jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: "Traits Library" }), _jsxs("div", { className: "space-y-2", children: [_jsx("button", { type: "button", className: `${subtleButtonClass} w-full`, onClick: startCreateTrait, children: "+ New Trait" }), _jsx("input", { className: inputClass, placeholder: "Search traits...", value: search, onChange: (event) => setSearch(event.target.value) }), _jsxs("select", { className: inputClass, value: categoryFilter, onChange: (event) => setCategoryFilter(event.target.value), children: [_jsx("option", { value: "ALL", children: "All categories" }), traitCategories.map((category) => (_jsx("option", { value: category, children: category }, category)))] })] }), _jsxs("div", { className: "mt-4 space-y-2", children: [loading && _jsx("p", { className: "text-sm text-slate-500", children: "Loading..." }), !loading && traits.length === 0 && _jsx("p", { className: "text-sm text-slate-500", children: "No traits yet. Create your first trait." }), traits.map((trait) => (_jsxs("button", { type: "button", onClick: () => startEditTrait(trait), className: `w-full rounded-md border p-2 text-left text-sm ${selectedTraitId === trait.id ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white"}`, children: [_jsx("div", { className: "font-semibold", children: trait.name }), _jsx("div", { className: "text-xs text-slate-500", children: trait.category })] }, trait.id)))] })] }), _jsxs(Card, { children: [_jsxs("div", { className: "mb-3 flex items-center justify-between", children: [_jsxs("div", { children: [_jsx("h2", { className: "text-lg font-semibold", children: isEditing ? `Edit Trait: ${selectedTrait?.name ?? ""}` : "Create New Trait" }), _jsx("p", { className: "text-xs text-slate-500", children: isEditing ? "Editing existing trait" : "Creating a new trait" })] }), selectedTrait && (_jsx("div", { className: "flex gap-2", children: _jsx("button", { type: "button", className: "text-xs text-red-700 underline", onClick: () => void deleteTrait(selectedTrait.id), children: "Delete trait" }) }))] }), _jsxs("form", { className: "space-y-3", onSubmit: (event) => void submitTrait(event), children: [_jsxs(CollapsibleSection, { title: "Basics", children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Name" }), _jsx("input", { required: true, className: inputClass, value: form.name, onChange: (event) => setForm((prev) => ({ ...prev, name: event.target.value })) }), _jsx(FieldMeta, { value: form.name })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Category" }), _jsx("select", { className: inputClass, value: form.category, onChange: (event) => setForm((prev) => ({ ...prev, category: event.target.value })), children: traitCategories.map((category) => (_jsx("option", { value: category, children: category }, category))) })] }), _jsxs("div", { children: [_jsxs("div", { className: "mb-1 flex items-center justify-between", children: [_jsx("label", { className: labelClass, children: "Definition" }), _jsx("button", { type: "button", className: subtleButtonClass, onClick: () => setForm((prev) => ({
-                                                            ...prev,
-                                                            definition: buildDefinitionDraft(prev.name, prev.category)
-                                                        })), children: "AI Draft Definition" })] }), _jsx("textarea", { className: inputClass, value: form.definition, onChange: (event) => setForm((prev) => ({ ...prev, definition: event.target.value })) }), _jsx(FieldMeta, { value: form.definition })] })] }), _jsxs(CollapsibleSection, { title: "Rubric Signals", children: [_jsx(ListBuilder, { label: "Positive Signals", items: positiveSignals, placeholder: "Add a positive signal", emptyText: "No positive signals yet.", suggestionButtonLabel: "Generate 3 positive signals", onSuggestion: () => setForm((prev) => ({
-                                            ...prev,
-                                            rubricPositiveSignals: joinListText(buildSignalSuggestions("positive", prev.name))
-                                        })), onChange: (items) => setForm((prev) => ({ ...prev, rubricPositiveSignals: joinListText(items) })) }), _jsx(ListBuilder, { label: "Negative Signals", items: negativeSignals, placeholder: "Add a negative signal", emptyText: "No negative signals yet.", suggestionButtonLabel: "Generate 3 negative signals", onSuggestion: () => setForm((prev) => ({
-                                            ...prev,
-                                            rubricNegativeSignals: joinListText(buildSignalSuggestions("negative", prev.name))
-                                        })), onChange: (items) => setForm((prev) => ({ ...prev, rubricNegativeSignals: joinListText(items) })) })] }), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { type: "submit", children: isEditing ? "Save Changes" : "Create Trait" }), _jsx("button", { type: "button", className: "text-sm underline", onClick: resetTraitForm, children: "Reset" })] }), traitNotice && _jsx("p", { className: "text-sm text-emerald-700", children: traitNotice }), traitError && _jsx("p", { className: "text-sm text-red-700", children: traitError })] })] }), _jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: "Trait Questions" }), !selectedTrait ? (_jsx("p", { className: "text-sm text-slate-500", children: "Select a trait to manage questions after creating it." })) : (_jsxs(_Fragment, { children: [_jsx("p", { className: "mb-3 text-sm text-slate-600", children: selectedTrait.name }), _jsxs("form", { className: "space-y-3", onSubmit: (event) => void submitQuestion(event), children: [_jsxs(CollapsibleSection, { title: "Question Details", children: [_jsx("p", { className: "mb-2 text-xs text-slate-500", children: "Questions elicit evidence. Scoring is based on the trait's rubric signals." }), _jsxs("div", { children: [_jsxs("div", { className: "mb-1 flex items-center justify-between", children: [_jsx("label", { className: labelClass, children: "Prompt" }), _jsx("button", { type: "button", className: subtleButtonClass, onClick: () => setQuestionForm((prev) => ({
-                                                                    ...prev,
-                                                                    prompt: buildQuestionPromptDraft(selectedTrait, prev.type)
-                                                                })), children: "AI Draft Prompt" })] }), _jsx("textarea", { required: true, className: inputClass, value: questionForm.prompt, onChange: (event) => setQuestionForm((prev) => ({ ...prev, prompt: event.target.value })) }), _jsx(FieldMeta, { value: questionForm.prompt })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Type" }), _jsxs("select", { className: inputClass, value: questionForm.type, onChange: (event) => setQuestionForm((prev) => ({ ...prev, type: event.target.value })), children: [_jsx("option", { value: "chat", children: "Chat" }), _jsx("option", { value: "quiz", children: "Quiz" })] })] })] }), questionForm.type === "quiz" && (_jsx(CollapsibleSection, { title: "Quiz Options", defaultOpen: false, children: _jsx(ListBuilder, { label: "Options", items: quizOptions, placeholder: "Add a quiz option", emptyText: "No options yet.", onChange: (items) => setQuestionForm((prev) => ({ ...prev, optionsText: joinListText(items) })) }) })), _jsxs("div", { className: "flex gap-2", children: [_jsx(Button, { type: "submit", children: questionForm.id ? "Save Question" : "Add Question" }), _jsx("button", { type: "button", className: "text-sm underline", onClick: () => setQuestionForm({ id: "", prompt: "", type: "chat", optionsText: "" }), children: "Reset" })] })] }), _jsx("div", { className: "mt-4 space-y-2", children: questions.map((question) => (_jsxs("div", { className: "rounded-md border border-slate-200 p-2", children: [_jsx("div", { className: "text-xs text-slate-500", children: question.type.toUpperCase() }), _jsx("div", { className: "text-sm font-medium", children: question.prompt }), question.options.length > 0 && _jsxs("div", { className: "text-xs text-slate-600", children: ["Options: ", question.options.join(", ")] }), _jsxs("div", { className: "mt-2 flex gap-2 text-xs", children: [_jsx("button", { type: "button", className: "underline", onClick: () => setQuestionForm({
-                                                        id: question.id,
-                                                        prompt: question.prompt,
-                                                        type: question.type,
-                                                        optionsText: question.options.join("\n")
-                                                    }), children: "Edit" }), _jsx("button", { type: "button", className: "text-red-700 underline", onClick: () => void deleteQuestion(question.id), children: "Delete" })] })] }, question.id))) })] }))] })] }));
+    const applyRubricDraft = () => {
+        if (!rubricDraft)
+            return;
+        setForm((prev) => ({
+            ...prev,
+            rubricPositiveSignals: joinListText(rubricDraft.positiveSignals),
+            rubricNegativeSignals: joinListText(rubricDraft.negativeSignals),
+            rubricFollowUps: joinListText(rubricDraft.followUps)
+        }));
+        setRubricDraft(null);
+    };
+    const discardRubricDraft = () => setRubricDraft(null);
+    const generateQuestionsDraftWithAi = async () => {
+        if (!selectedTraitId) {
+            throw new Error("Select a trait first.");
+        }
+        setGeneratingQuestionsDraft(true);
+        setTraitError(null);
+        try {
+            const payload = await request(`/api/admin/traits/${selectedTraitId}/generate-questions`, { method: "POST" });
+            const quizDraftMeta = canonicalQuizOptions.map((label, index) => ({
+                label,
+                microCopy: index === 0 ? "Just getting started" : index === 1 ? "Building consistency" : index === 2 ? "Strong in practice" : "Clear standout",
+                iconToken: ["seedling", "wrench", "target", "crown"][index] ?? "spark",
+                traitScore: index + 1
+            }));
+            return {
+                quiz: {
+                    narrativeIntro: selectedTrait?.definition ?? "",
+                    questionText: payload.data.quizPrompt,
+                    answerStyle: "CARD_GRID",
+                    optionMeta: quizDraftMeta
+                },
+                chat: {
+                    chatQuestion1: payload.data.chatPrompt,
+                    chatQuestion2: `Tell me about another example where you showed ${selectedTrait?.name.toLowerCase() ?? "this trait"}.`,
+                    rubricFollowUps: form.rubricFollowUps
+                }
+            };
+        }
+        catch (error) {
+            setTraitError(error instanceof Error ? error.message : "Failed to generate questions with AI.");
+            throw error;
+        }
+        finally {
+            setGeneratingQuestionsDraft(false);
+        }
+    };
+    const saveQuizDesign = async (input) => {
+        if (!selectedTraitId)
+            return;
+        const existingQuiz = questions.find((question) => question.type === "quiz") ?? null;
+        await upsertQuestion(existingQuiz?.id ?? null, {
+            prompt: input.questionText,
+            questionText: input.questionText,
+            narrativeIntro: input.narrativeIntro || null,
+            answerStyle: input.answerStyle,
+            answerOptionsMeta: input.optionMeta,
+            type: "quiz",
+            options: canonicalQuizOptions
+        });
+        await loadQuestions(selectedTraitId);
+        setTraitNotice("Saved");
+    };
+    const saveChatDesign = async (input) => {
+        if (!selectedTraitId)
+            return;
+        const existingChat = questions.filter((question) => question.type === "chat").slice(0, 2);
+        await upsertQuestion(existingChat[0]?.id ?? null, {
+            prompt: input.chatQuestion1,
+            questionText: input.chatQuestion1,
+            answerStyle: "CHAT",
+            type: "chat"
+        });
+        await upsertQuestion(existingChat[1]?.id ?? null, {
+            prompt: input.chatQuestion2,
+            questionText: input.chatQuestion2,
+            answerStyle: "CHAT",
+            type: "chat"
+        });
+        setForm((prev) => ({ ...prev, rubricFollowUps: input.rubricFollowUps }));
+        await loadQuestions(selectedTraitId);
+        setTraitNotice("Saved");
+    };
+    const generateExperienceDraftWithAi = async (action) => {
+        if (!selectedTraitId)
+            return;
+        setGeneratingExperienceDraft(true);
+        setTraitError(null);
+        try {
+            const payload = await request(`/api/admin/traits/${selectedTraitId}/experience-draft`, {
+                method: "POST",
+                body: JSON.stringify({ action })
+            });
+            setExperienceDraft(payload.data);
+        }
+        catch (error) {
+            setTraitError(error instanceof Error ? error.message : "Failed to generate experience draft with AI.");
+        }
+        finally {
+            setGeneratingExperienceDraft(false);
+        }
+    };
+    const applyExperienceDraft = () => {
+        if (!experienceDraft)
+            return;
+        setForm((prev) => ({
+            ...prev,
+            publicLabel: experienceDraft.publicLabel,
+            oneLineHook: experienceDraft.oneLineHook,
+            archetypeTag: experienceDraft.archetypeTag,
+            displayIcon: experienceDraft.displayIcon,
+            visualMood: experienceDraft.visualMood
+        }));
+        setExperienceDraft(null);
+    };
+    const discardExperienceDraft = () => setExperienceDraft(null);
+    const actionableMissing = Array.from(new Set(activationMissing.length > 0 ? activationMissing : draftCompleteness.missing));
+    const showActivationNotice = form.status !== "ACTIVE" || actionableMissing.length > 0;
+    return (_jsxs("div", { className: "grid gap-4 lg:grid-cols-[320px_1fr]", children: [_jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: "Traits Library" }), _jsxs("div", { className: "space-y-2", children: [_jsx("button", { type: "button", className: `${subtleButtonClass} w-full disabled:cursor-not-allowed disabled:opacity-60`, onClick: startCreateTrait, disabled: isCreatingDraft, "aria-busy": isCreatingDraft ? "true" : undefined, children: isCreatingDraft ? "Saving..." : "+ New Trait" }), _jsx("input", { className: inputClass, placeholder: "Search traits...", value: search, onChange: (event) => setSearch(event.target.value) }), _jsxs("select", { className: inputClass, value: categoryFilter, onChange: (event) => setCategoryFilter(event.target.value), children: [_jsx("option", { value: "ALL", children: "All categories" }), traitCategories.map((category) => (_jsx("option", { value: category, children: category }, category)))] })] }), _jsxs("div", { className: "mt-4 space-y-2", children: [loading && _jsx("p", { className: "text-sm text-slate-500", children: "Loading..." }), !loading && sortedTraits.length === 0 && (_jsx("p", { className: "text-sm text-slate-500", children: search.trim() || categoryFilter !== "ALL"
+                                    ? "No traits match your search or category filter."
+                                    : "No traits yet. Create your first trait." })), sortedTraits.map((trait) => (_jsx(TraitLibraryRow, { trait: trait, loading: loading, selected: selectedTraitId === trait.id, onSelect: () => startEditTrait(trait), onOpenPrograms: () => setProgramDrawerTraitId(trait.id) }, trait.id)))] })] }), _jsxs("div", { className: "flex flex-col gap-6", children: [selectedTrait && (_jsx("div", { className: "lg:hidden", children: _jsx(TraitProgramsAccordion, { programs: selectedTraitPrograms, loading: selectedTraitProgramsLoading, error: selectedTraitProgramsError, onManage: () => setProgramDrawerTraitId(selectedTrait.id), onProgramClick: (programId) => {
+                                window.sessionStorage.setItem("pmm:selectedProgramId", programId);
+                                navigate("/programs");
+                            } }) })), _jsxs("div", { className: "grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(240px,320px)]", children: [_jsx("div", { className: "min-w-0", children: _jsxs("div", { className: "space-y-6", children: [_jsx(TraitHeader, { name: form.name, category: form.category, status: form.status, editorStatusLabel: editorStatusLabel, isSaving: editorSaveStatus === "saving" || isCreatingDraft, onSave: () => void submitTrait(), onDelete: () => selectedTrait && void deleteTrait(selectedTrait.id), showDelete: Boolean(selectedTrait) }), _jsx(TraitDefinitionSection, { form: form, setForm: setForm, titleInputRef: titleInputRef, actionableMissing: actionableMissing, showActivationNotice: showActivationNotice, isEditing: isEditing, experienceDraft: experienceDraft, generatingExperienceDraft: generatingExperienceDraft, onGenerateExperienceDraft: (action) => void generateExperienceDraftWithAi(action), onApplyExperienceDraft: applyExperienceDraft, onDiscardExperienceDraft: discardExperienceDraft }), _jsxs(TraitScoringInterviewSection, { children: [_jsx(TraitRubricEditor, { isEditing: isEditing, generatingRubric: generatingRubric, onGenerateRubricWithAi: () => void generateRubricWithAi(), rubricDraft: rubricDraft, onApplyRubricDraft: applyRubricDraft, onDiscardRubricDraft: discardRubricDraft, positiveSignals: positiveSignals, negativeSignals: negativeSignals, followUps: followUps, setForm: setForm }), _jsx(TraitQuestionsEditor, { selectedTrait: selectedTrait, generatingQuestionsDraft: generatingQuestionsDraft, onGenerateQuestionsDraftWithAi: generateQuestionsDraftWithAi, onSaveQuizDesign: saveQuizDesign, onSaveChatDesign: saveChatDesign, questions: questions, rubricFollowUps: form.rubricFollowUps })] }), traitNotice && _jsx("p", { className: "text-sm text-emerald-700", children: traitNotice }), traitError && _jsx("p", { className: "text-sm text-red-700", children: traitError })] }) }), _jsx(TraitProgramsSidebar, { selectedTrait: selectedTrait, selectedTraitPrograms: selectedTraitPrograms, selectedTraitProgramsLoading: selectedTraitProgramsLoading, selectedTraitProgramsError: selectedTraitProgramsError, onManage: () => selectedTrait && setProgramDrawerTraitId(selectedTrait.id), onProgramClick: (programId) => {
+                                    window.sessionStorage.setItem("pmm:selectedProgramId", programId);
+                                    navigate("/programs");
+                                } })] })] }), _jsx(TraitProgramsDrawer, { open: programDrawerTraitId !== null, trait: traits.find((trait) => trait.id === programDrawerTraitId) ?? null, onClose: () => setProgramDrawerTraitId(null), onProgramOpen: (programId) => {
+                    window.sessionStorage.setItem("pmm:selectedProgramId", programId);
+                    navigate("/programs");
+                }, onAssociationsChanged: () => {
+                    void loadTraits();
+                    if (selectedTraitId === programDrawerTraitId && programDrawerTraitId) {
+                        void loadTraitPrograms(programDrawerTraitId);
+                    }
+                } })] }));
+}
+function TraitLibraryRow({ trait, selected, onSelect, loading, onOpenPrograms }) {
+    const status = mapTraitListStatus(trait.status);
+    const statusMeta = traitListStatusMeta[status];
+    const programCount = trait.programSummary?.count ?? 0;
+    return (_jsx("div", { role: "button", tabIndex: 0, onClick: onSelect, onKeyDown: (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onSelect();
+            }
+        }, "data-testid": `trait-row-${trait.id}`, "aria-current": selected ? "true" : undefined, className: `group relative w-full overflow-hidden rounded-md border px-3 py-2 text-left text-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-700 ${selected ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white hover:bg-slate-50"}`, children: _jsxs("div", { className: "flex items-start justify-between gap-3", children: [_jsxs("div", { className: "min-w-0 flex-1", children: [_jsx("div", { className: "truncate font-semibold text-slate-900", children: trait.name }), _jsx("div", { className: "mt-0.5 truncate text-xs text-slate-500", children: trait.category }), !loading && (_jsx("button", { type: "button", className: "mt-1 text-xs font-medium text-slate-600 hover:text-slate-900", onClick: (event) => {
+                                event.stopPropagation();
+                                onOpenPrograms();
+                            }, children: programCount === 0 ? "Not linked" : `${programCount} program${programCount === 1 ? "" : "s"}` })), loading && _jsx("span", { className: "mt-1 inline-block h-4 w-24 animate-pulse rounded bg-slate-200" })] }), _jsxs("div", { className: `mt-0.5 inline-flex shrink-0 items-center gap-1 text-[11px] font-medium ${statusMeta.textClassName}`, children: [_jsx("span", { "aria-hidden": "true", className: `h-1.5 w-1.5 rounded-full ${statusMeta.dotClassName}` }), _jsx("span", { children: statusMeta.label })] })] }) }));
+}
+function TraitProgramsDrawer({ open, trait, onClose, onProgramOpen, onAssociationsChanged }) {
+    const [associations, setAssociations] = useState([]);
+    const [allPrograms, setAllPrograms] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState(null);
+    const [programSearch, setProgramSearch] = useState("");
+    const [selectedProgramToAdd, setSelectedProgramToAdd] = useState("");
+    const [newBucket, setNewBucket] = useState("IMPORTANT");
+    const [newWeight, setNewWeight] = useState("0.50");
+    useEffect(() => {
+        if (!open || !trait)
+            return;
+        const load = async () => {
+            setLoading(true);
+            setError(null);
+            try {
+                const [assocPayload, programPayload] = await Promise.all([
+                    request(`/api/admin/traits/${trait.id}/programs`),
+                    request("/api/admin/programs")
+                ]);
+                setAssociations(assocPayload.data.map((item) => normalizeTraitProgramAssociation(item)));
+                setAllPrograms(programPayload.data.map((program) => normalizeProgram(program)));
+            }
+            catch (loadError) {
+                setError(loadError instanceof Error ? loadError.message : "Failed to load associated programs.");
+            }
+            finally {
+                setLoading(false);
+            }
+        };
+        void load();
+    }, [open, trait]);
+    useEffect(() => {
+        if (!open)
+            return;
+        const onKeyDown = (event) => {
+            if (event.key === "Escape")
+                onClose();
+        };
+        window.addEventListener("keydown", onKeyDown);
+        return () => window.removeEventListener("keydown", onKeyDown);
+    }, [open, onClose]);
+    const linkedProgramIds = useMemo(() => new Set(associations.map((item) => item.programId)), [associations]);
+    const availablePrograms = useMemo(() => {
+        const q = programSearch.trim().toLowerCase();
+        return allPrograms
+            .filter((program) => !linkedProgramIds.has(program.id))
+            .filter((program) => (q ? program.name.toLowerCase().includes(q) : true))
+            .sort((a, b) => a.name.localeCompare(b.name));
+    }, [allPrograms, linkedProgramIds, programSearch]);
+    useEffect(() => {
+        if (!open)
+            return;
+        const firstOption = availablePrograms[0]?.id ?? "";
+        setSelectedProgramToAdd(firstOption);
+    }, [open, availablePrograms]);
+    const persistPatch = async (programId, patch) => {
+        if (!trait)
+            return;
+        const previous = associations;
+        setAssociations((current) => current.map((item) => item.programId === programId
+            ? {
+                ...item,
+                ...(patch.bucket ? { bucket: patch.bucket } : {}),
+                ...(patch.weight !== undefined ? { weight: patch.weight } : {})
+            }
+            : item));
+        setSaving(true);
+        setError(null);
+        try {
+            await request(`/api/admin/traits/${trait.id}/programs/${programId}`, {
+                method: "PATCH",
+                body: JSON.stringify(patch)
+            });
+            onAssociationsChanged();
+        }
+        catch (patchError) {
+            setAssociations(previous);
+            setError(patchError instanceof Error ? patchError.message : "Failed to update association.");
+        }
+        finally {
+            setSaving(false);
+        }
+    };
+    const addAssociation = async () => {
+        if (!trait || !selectedProgramToAdd)
+            return;
+        const selectedProgram = allPrograms.find((program) => program.id === selectedProgramToAdd);
+        if (!selectedProgram)
+            return;
+        const optimistic = {
+            programId: selectedProgram.id,
+            programName: selectedProgram.name,
+            bucket: newBucket,
+            weight: Number(newWeight),
+            updatedAt: new Date().toISOString()
+        };
+        const previous = associations;
+        setAssociations((current) => [...current, optimistic]);
+        setSaving(true);
+        setError(null);
+        try {
+            const payload = await request(`/api/admin/traits/${trait.id}/programs`, {
+                method: "POST",
+                body: JSON.stringify({
+                    programId: selectedProgram.id,
+                    bucket: newBucket,
+                    weight: Number(newWeight)
+                })
+            });
+            setAssociations((current) => current.map((item) => (item.programId === optimistic.programId ? payload.data : item)));
+            setProgramSearch("");
+            setNewBucket("IMPORTANT");
+            setNewWeight("0.50");
+            onAssociationsChanged();
+        }
+        catch (addError) {
+            setAssociations(previous);
+            setError(addError instanceof Error ? addError.message : "Failed to add program association.");
+        }
+        finally {
+            setSaving(false);
+        }
+    };
+    const removeAssociation = async (programId) => {
+        if (!trait)
+            return;
+        const target = associations.find((item) => item.programId === programId);
+        if (!target)
+            return;
+        const approved = window.confirm(`Remove ${target.programName} from ${trait.name}?`);
+        if (!approved)
+            return;
+        const previous = associations;
+        setAssociations((current) => current.filter((item) => item.programId !== programId));
+        setSaving(true);
+        setError(null);
+        try {
+            await request(`/api/admin/traits/${trait.id}/programs/${programId}`, { method: "DELETE" });
+            onAssociationsChanged();
+        }
+        catch (deleteError) {
+            setAssociations(previous);
+            setError(deleteError instanceof Error ? deleteError.message : "Failed to remove association.");
+        }
+        finally {
+            setSaving(false);
+        }
+    };
+    if (!open || !trait)
+        return null;
+    return (_jsx("div", { className: "fixed inset-0 z-40 flex justify-end bg-black/30", role: "presentation", onClick: onClose, children: _jsxs("aside", { className: "h-full w-full max-w-2xl overflow-y-auto bg-white p-6 shadow-xl", role: "dialog", "aria-modal": "true", "aria-label": "Trait associated programs", onClick: (event) => event.stopPropagation(), children: [_jsxs("div", { className: "mb-4 flex items-start justify-between gap-3 border-b border-slate-200 pb-4", children: [_jsxs("div", { children: [_jsx("h2", { className: "text-xl font-semibold text-slate-900", children: trait.name }), _jsx("p", { className: "text-sm text-slate-500", children: trait.category })] }), _jsx("button", { type: "button", className: "text-sm text-slate-600 hover:text-slate-900", onClick: onClose, children: "Close" })] }), _jsxs("div", { className: "space-y-4", children: [_jsxs("div", { className: "flex items-end gap-2", children: [_jsxs("div", { className: "min-w-0 flex-1", children: [_jsx("label", { className: labelClass, children: "Add Program" }), _jsx("input", { className: inputClass, placeholder: "Search programs...", value: programSearch, onChange: (event) => setProgramSearch(event.target.value) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Bucket" }), _jsx("select", { className: inputClass, value: newBucket, onChange: (event) => setNewBucket(event.target.value), children: programTraitPriorityBuckets.map((bucket) => (_jsx("option", { value: bucket, children: bucket }, bucket))) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Weight" }), _jsx("input", { className: inputClass, type: "number", min: 0, max: 1, step: 0.05, value: newWeight, onChange: (event) => setNewWeight(event.target.value) })] })] }), _jsxs("div", { className: "flex items-center gap-2", children: [_jsxs("select", { className: `${inputClass} max-w-md`, value: selectedProgramToAdd, onChange: (event) => setSelectedProgramToAdd(event.target.value), children: [availablePrograms.length === 0 && _jsx("option", { value: "", children: "No available programs" }), availablePrograms.map((program) => (_jsx("option", { value: program.id, children: program.name }, program.id)))] }), _jsx(Button, { type: "button", disabled: saving || availablePrograms.length === 0 || !selectedProgramToAdd, onClick: () => void addAssociation(), children: "Add Program" })] }), error && _jsx("p", { className: "text-sm text-red-700", children: error }), loading ? (_jsx("p", { className: "text-sm text-slate-500", children: "Loading associated programs\u2026" })) : associations.length === 0 ? (_jsxs("div", { className: "rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-600", children: [_jsx("p", { children: "Not linked" }), _jsx("p", { className: "mt-1 text-xs text-slate-500", children: "Link this trait to a program to control scoring priority." })] })) : (_jsx("div", { className: "overflow-hidden rounded-md border border-slate-200", children: _jsxs("table", { className: "w-full text-left text-sm", children: [_jsx("thead", { className: "bg-slate-50 text-xs uppercase tracking-wide text-slate-600", children: _jsxs("tr", { children: [_jsx("th", { className: "px-3 py-2 font-medium", children: "Program" }), _jsx("th", { className: "px-3 py-2 font-medium", children: "Priority Bucket" }), _jsx("th", { className: "px-3 py-2 font-medium", children: "Weight" }), _jsx("th", { className: "px-3 py-2 font-medium", children: "Updated At" }), _jsx("th", { className: "px-3 py-2 font-medium", children: "Actions" })] }) }), _jsx("tbody", { children: associations.map((item) => (_jsxs("tr", { className: "border-t border-slate-200", children: [_jsx("td", { className: "px-3 py-2", children: _jsx("button", { type: "button", className: "text-slate-700 underline hover:text-slate-900", onClick: () => onProgramOpen(item.programId), children: item.programName }) }), _jsx("td", { className: "px-3 py-2", children: _jsx("select", { className: "rounded-md border border-slate-300 px-2 py-1 text-xs", value: item.bucket, onChange: (event) => void persistPatch(item.programId, { bucket: event.target.value }), children: programTraitPriorityBuckets.map((bucket) => (_jsx("option", { value: bucket, children: bucket }, bucket))) }) }), _jsx("td", { className: "px-3 py-2", children: _jsx("input", { className: "w-20 rounded-md border border-slate-300 px-2 py-1 text-xs", type: "number", min: 0, max: 1, step: 0.05, defaultValue: item.weight.toFixed(2), onBlur: (event) => {
+                                                            const parsed = Number(event.target.value);
+                                                            if (!Number.isFinite(parsed)) {
+                                                                event.target.value = item.weight.toFixed(2);
+                                                                return;
+                                                            }
+                                                            const clamped = Math.max(0, Math.min(1, parsed));
+                                                            event.target.value = clamped.toFixed(2);
+                                                            if (Math.abs(clamped - item.weight) < 0.001)
+                                                                return;
+                                                            void persistPatch(item.programId, { weight: clamped });
+                                                        } }) }), _jsx("td", { className: "px-3 py-2 text-xs text-slate-500", children: new Date(item.updatedAt).toLocaleDateString() }), _jsx("td", { className: "px-3 py-2", children: _jsx("button", { type: "button", className: "text-xs text-red-600 hover:text-red-700", onClick: () => void removeAssociation(item.programId), children: "Remove" }) })] }, item.programId))) })] }) }))] })] }) }));
+}
+function ProgramLibraryRow({ program, selected, onSelect }) {
+    const secondary = program.department?.trim() || program.degreeLevel?.trim() || "No department";
+    const statusMeta = programListStatusMeta[mapProgramListStatus(program)];
+    return (_jsx("div", { role: "button", tabIndex: 0, "aria-current": selected ? "true" : undefined, "data-testid": `program-row-${program.id}`, className: [
+            "group relative w-full overflow-hidden rounded-md border px-3 py-2 text-left text-sm transition-colors",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-700",
+            selected ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white hover:bg-slate-50"
+        ].join(" "), onClick: onSelect, onKeyDown: (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onSelect();
+            }
+        }, children: _jsxs("div", { className: "flex items-start justify-between gap-3", children: [_jsxs("div", { className: "min-w-0 flex-1", children: [_jsx("div", { className: "truncate font-semibold text-slate-900", children: program.name }), _jsx("div", { className: "mt-0.5 truncate text-xs text-slate-500", children: secondary })] }), _jsxs("div", { className: `mt-0.5 inline-flex shrink-0 items-center gap-1 text-[11px] font-medium ${statusMeta.textClassName}`, children: [_jsx("span", { "aria-hidden": "true", className: `h-1.5 w-1.5 rounded-full ${statusMeta.dotClassName}` }), _jsx("span", { children: statusMeta.label })] })] }) }));
 }
 export function ProgramsPage() {
     const [programs, setPrograms] = useState([]);
@@ -361,18 +1096,21 @@ export function ProgramsPage() {
         name: "",
         description: "",
         degreeLevel: "",
-        department: ""
+        department: "",
+        isActive: false
     });
+    const [programSearch, setProgramSearch] = useState("");
+    const [debouncedProgramSearch, setDebouncedProgramSearch] = useState("");
+    const [programsLoading, setProgramsLoading] = useState(false);
+    const [isCreatingProgramDraft, setIsCreatingProgramDraft] = useState(false);
     const [traitModalOpen, setTraitModalOpen] = useState(false);
-    const [isCreatingNew, setIsCreatingNew] = useState(false);
-    const [newProgramDraft, setNewProgramDraft] = useState({ name: "", degreeLevel: "", department: "" });
-    const [isCreatingSubmitting, setIsCreatingSubmitting] = useState(false);
-    const [createError, setCreateError] = useState(null);
     const [removingTrait, setRemovingTrait] = useState(null);
     const [removeDialogOpen, setRemoveDialogOpen] = useState(false);
     const [expandedBuckets, setExpandedBuckets] = useState(() => new Set(["CRITICAL", "VERY_IMPORTANT", "IMPORTANT"]));
     const cancelRemoveButtonRef = useRef(null);
     const confirmRemoveButtonRef = useRef(null);
+    const programNameInputRef = useRef(null);
+    const focusProgramNameOnSelectRef = useRef(false);
     const toggleBucketExpanded = (bucket) => {
         setExpandedBuckets((prev) => {
             const next = new Set(prev);
@@ -391,33 +1129,67 @@ export function ProgramsPage() {
         return (programForm.name !== selectedProgram.name ||
             programForm.description !== (selectedProgram.description ?? "") ||
             programForm.degreeLevel !== (selectedProgram.degreeLevel ?? "") ||
-            programForm.department !== (selectedProgram.department ?? ""));
+            programForm.department !== (selectedProgram.department ?? "") ||
+            programForm.isActive !== selectedProgram.isActive);
     }, [selectedProgram, programForm]);
     const pageDirty = programDirty || boardDirty;
     const [saveStatus, setSaveStatus] = useState("idle");
     const [saveError, setSaveError] = useState(null);
+    const [programStatusFilter, setProgramStatusFilter] = useState("ALL");
+    const [statusToast, setStatusToast] = useState(null);
+    const [statusToggleInFlight, setStatusToggleInFlight] = useState(null);
+    const statusToastTimerRef = useRef(null);
+    const inactiveProgramCount = useMemo(() => programs.filter((program) => mapProgramListStatus(program) === "INACTIVE").length, [programs]);
+    const filteredPrograms = useMemo(() => {
+        const q = debouncedProgramSearch.trim().toLowerCase();
+        const statusFiltered = programStatusFilter === "INACTIVE"
+            ? programs.filter((program) => mapProgramListStatus(program) === "INACTIVE")
+            : programs;
+        const sorted = [...statusFiltered].sort((a, b) => a.name.localeCompare(b.name));
+        if (!q)
+            return sorted;
+        return sorted.filter((program) => {
+            const nameMatch = program.name.toLowerCase().includes(q);
+            const departmentMatch = (program.department ?? "").toLowerCase().includes(q);
+            return nameMatch || departmentMatch;
+        });
+    }, [programs, debouncedProgramSearch, programStatusFilter]);
     const loadPrograms = async () => {
-        const payload = await request("/api/admin/programs");
-        setPrograms(payload.data);
-        if (payload.data.length > 0 && !payload.data.some((program) => program.id === selectedProgramId)) {
-            setSelectedProgramId(payload.data[0]?.id ?? null);
+        setProgramsLoading(true);
+        try {
+            const payload = await request("/api/admin/programs");
+            const normalizedPrograms = payload.data.map((program) => normalizeProgram(program));
+            const preferredProgramId = window.sessionStorage.getItem("pmm:selectedProgramId");
+            setPrograms(normalizedPrograms);
+            if (normalizedPrograms.length > 0 &&
+                preferredProgramId &&
+                normalizedPrograms.some((program) => program.id === preferredProgramId)) {
+                setSelectedProgramId(preferredProgramId);
+                window.sessionStorage.removeItem("pmm:selectedProgramId");
+            }
+            else if (normalizedPrograms.length > 0 && !normalizedPrograms.some((program) => program.id === selectedProgramId)) {
+                setSelectedProgramId(normalizedPrograms[0]?.id ?? null);
+            }
+            if (normalizedPrograms.length === 0) {
+                setSelectedProgramId(null);
+                const empty = createEmptyProgramBoardState();
+                setBoard(empty);
+                setSavedBoard(empty);
+            }
         }
-        if (payload.data.length === 0) {
-            setSelectedProgramId(null);
-            const empty = createEmptyProgramBoardState();
-            setBoard(empty);
-            setSavedBoard(empty);
+        finally {
+            setProgramsLoading(false);
         }
     };
     const loadTraits = async () => {
         const payload = await request("/api/admin/traits");
-        setTraits(payload.data);
+        setTraits(payload.data.map((trait) => normalizeTrait(trait)));
     };
     const loadProgramTraits = async (programId) => {
         const payload = await request(`/api/admin/programs/${programId}/traits`);
         const nextState = createEmptyProgramBoardState();
         for (const item of payload.data) {
-            nextState[item.bucket].push(item.trait);
+            nextState[item.bucket].push(normalizeTrait(item.trait));
         }
         setBoard(nextState);
         setSavedBoard(nextState);
@@ -425,6 +1197,12 @@ export function ProgramsPage() {
     useEffect(() => {
         void Promise.all([loadPrograms(), loadTraits()]);
     }, []);
+    useEffect(() => {
+        const timeoutId = window.setTimeout(() => {
+            setDebouncedProgramSearch(programSearch);
+        }, 200);
+        return () => window.clearTimeout(timeoutId);
+    }, [programSearch]);
     useEffect(() => {
         if (!selectedProgramId) {
             const empty = createEmptyProgramBoardState();
@@ -436,16 +1214,74 @@ export function ProgramsPage() {
     }, [selectedProgramId]);
     useEffect(() => {
         if (!selectedProgram) {
-            setProgramForm({ name: "", description: "", degreeLevel: "", department: "" });
+            setProgramForm({ name: "", description: "", degreeLevel: "", department: "", isActive: false });
             return;
         }
         setProgramForm({
             name: selectedProgram.name,
             description: selectedProgram.description ?? "",
             degreeLevel: selectedProgram.degreeLevel ?? "",
-            department: selectedProgram.department ?? ""
+            department: selectedProgram.department ?? "",
+            isActive: selectedProgram.isActive
         });
     }, [selectedProgram]);
+    useEffect(() => {
+        if (!selectedProgramId || !focusProgramNameOnSelectRef.current)
+            return;
+        focusProgramNameOnSelectRef.current = false;
+        window.setTimeout(() => {
+            programNameInputRef.current?.focus();
+            programNameInputRef.current?.select();
+        }, 0);
+    }, [selectedProgramId]);
+    useEffect(() => {
+        return () => {
+            if (statusToastTimerRef.current !== null) {
+                window.clearTimeout(statusToastTimerRef.current);
+            }
+        };
+    }, []);
+    const showStatusToast = (toast) => {
+        if (statusToastTimerRef.current !== null) {
+            window.clearTimeout(statusToastTimerRef.current);
+        }
+        setStatusToast(toast);
+        statusToastTimerRef.current = window.setTimeout(() => {
+            setStatusToast(null);
+            statusToastTimerRef.current = null;
+        }, 2400);
+    };
+    const toggleProgramActive = async (programId, nextIsActive) => {
+        if (statusToggleInFlight)
+            return;
+        const previous = programs.find((program) => program.id === programId);
+        if (!previous)
+            return;
+        setStatusToggleInFlight(programId);
+        setPrograms((current) => current.map((program) => program.id === programId ? { ...program, isActive: nextIsActive, updatedAt: new Date().toISOString() } : program));
+        try {
+            const payload = await request(`/api/admin/programs/${programId}/status`, {
+                method: "PATCH",
+                body: JSON.stringify({ isActive: nextIsActive })
+            });
+            const normalized = normalizeProgram(payload.data);
+            setPrograms((current) => current.map((program) => (program.id === programId ? normalized : program)));
+            showStatusToast({
+                type: "success",
+                message: `Program marked ${normalized.isActive ? "Active" : "Inactive"}.`
+            });
+        }
+        catch (error) {
+            setPrograms((current) => current.map((program) => (program.id === programId ? previous : program)));
+            showStatusToast({
+                type: "error",
+                message: error instanceof Error ? error.message : "Failed to update program status."
+            });
+        }
+        finally {
+            setStatusToggleInFlight(null);
+        }
+    };
     const createProgram = async (event) => {
         event.preventDefault();
         const payload = await request("/api/admin/programs", {
@@ -453,45 +1289,47 @@ export function ProgramsPage() {
             body: JSON.stringify(programForm)
         });
         await loadPrograms();
-        setSelectedProgramId(payload.data.id);
+        setSelectedProgramId(normalizeProgram(payload.data).id);
     };
-    const startNewProgram = () => {
-        setIsCreatingNew(true);
-        setNewProgramDraft({ name: "", degreeLevel: "", department: "" });
-        setCreateError(null);
-    };
-    const cancelNewProgram = () => {
-        setIsCreatingNew(false);
-        setCreateError(null);
-    };
-    const createProgramFromDraft = async (event) => {
-        event.preventDefault();
-        if (!newProgramDraft.name.trim() || !newProgramDraft.degreeLevel.trim() || !newProgramDraft.department.trim()) {
-            setCreateError("Name, Degree Level, and Department are required.");
+    const startNewProgram = async () => {
+        if (isCreatingProgramDraft)
             return;
+        const untitledBase = "Untitled program";
+        const untitledNames = new Set(programs
+            .map((program) => program.name)
+            .filter((name) => name === untitledBase || /^Untitled program \d+$/.test(name)));
+        let draftName = untitledBase;
+        if (untitledNames.has(untitledBase)) {
+            let suffix = 2;
+            while (untitledNames.has(`${untitledBase} ${suffix}`)) {
+                suffix += 1;
+            }
+            draftName = `${untitledBase} ${suffix}`;
         }
-        setCreateError(null);
-        setIsCreatingSubmitting(true);
+        setIsCreatingProgramDraft(true);
+        setSaveError(null);
         try {
             const payload = await request("/api/admin/programs", {
                 method: "POST",
                 body: JSON.stringify({
-                    name: newProgramDraft.name.trim(),
+                    name: draftName,
                     description: "",
-                    degreeLevel: newProgramDraft.degreeLevel.trim(),
-                    department: newProgramDraft.department.trim()
+                    degreeLevel: "",
+                    department: ""
                 })
             });
+            const normalizedProgram = normalizeProgram(payload.data);
+            setPrograms((prev) => [normalizedProgram, ...prev.filter((program) => program.id !== normalizedProgram.id)]);
+            focusProgramNameOnSelectRef.current = true;
+            setSelectedProgramId(normalizedProgram.id);
             await loadPrograms();
-            setSelectedProgramId(payload.data.id);
-            setIsCreatingNew(false);
-            setNewProgramDraft({ name: "", degreeLevel: "", department: "" });
         }
         catch (error) {
-            setCreateError(error instanceof Error ? error.message : "Failed to create program.");
+            setSaveError(error instanceof Error ? error.message : "Failed to create program.");
+            setSaveStatus("error");
         }
         finally {
-            setIsCreatingSubmitting(false);
+            setIsCreatingProgramDraft(false);
         }
     };
     const deleteProgram = async (id) => {
@@ -584,6 +1422,52 @@ export function ProgramsPage() {
         }
         return ids;
     }, [board]);
+    const nonActiveBoardTraits = useMemo(() => {
+        const items = [];
+        const seen = new Set();
+        for (const bucket of programTraitPriorityBuckets) {
+            for (const trait of board[bucket]) {
+                if (seen.has(trait.id))
+                    continue;
+                const status = trait.status ?? "DRAFT";
+                if (status !== "ACTIVE") {
+                    seen.add(trait.id);
+                    items.push({
+                        id: trait.id,
+                        name: trait.name,
+                        status
+                    });
+                }
+            }
+        }
+        return items;
+    }, [board]);
+    const programScoringReadiness = useMemo(() => {
+        const uniqueTraits = new Map();
+        for (const bucket of programTraitPriorityBuckets) {
+            for (const trait of board[bucket]) {
+                if (!uniqueTraits.has(trait.id)) {
+                    uniqueTraits.set(trait.id, trait.status ?? "DRAFT");
+                }
+            }
+        }
+        const totalTraits = uniqueTraits.size;
+        const activeTraits = [...uniqueTraits.values()].filter((status) => status === "ACTIVE").length;
+        const missing = [];
+        if (totalTraits === 0) {
+            missing.push("Add at least 1 trait to the priority board.");
+        }
+        if (activeTraits === 0) {
+            missing.push("Mark at least 1 assigned trait as Active.");
+        }
+        return {
+            isScorable: missing.length === 0,
+            missing,
+            totalTraits,
+            activeTraits,
+            nonActiveTraits: Math.max(0, totalTraits - activeTraits)
+        };
+    }, [board]);
     const addTraitsToBoard = (traitIds, destinationBucket) => {
         if (!selectedProgramId)
             return;
@@ -605,37 +1489,43 @@ export function ProgramsPage() {
         setBoard(nextBoard);
         setTraitModalOpen(false);
     };
-    return (_jsxs("div", { className: "space-y-4", children: [_jsxs("div", { className: "flex flex-wrap items-center justify-between gap-3", children: [_jsxs("div", { className: "flex items-center gap-3", children: [pageDirty && (_jsx("span", { className: "text-sm font-medium text-amber-700", role: "status", children: "Unsaved changes" })), saveStatus === "saving" && (_jsx("span", { className: "text-sm text-slate-500", role: "status", children: "Saving..." })), saveStatus === "saved" && (_jsx("span", { className: "text-sm text-emerald-700", role: "status", children: "All changes saved" })), saveStatus === "error" && saveError && (_jsx("span", { className: "text-sm text-red-700", role: "alert", children: saveError }))] }), _jsx(Button, { type: "button", onClick: () => void saveAllChanges(), disabled: !pageDirty || saveStatus === "saving", children: "Save Changes" })] }), _jsxs("div", { className: "grid gap-4 lg:grid-cols-[280px_320px_1fr]", children: [_jsxs(Card, { children: [_jsxs("div", { className: "mb-3 flex items-center justify-between gap-2", children: [_jsx("h2", { className: "text-lg font-semibold", children: "Programs" }), _jsx("button", { type: "button", onClick: startNewProgram, disabled: isCreatingNew, className: "rounded-md border border-slate-300 px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50", children: "+ New Program" })] }), _jsxs("div", { className: "space-y-2", children: [isCreatingNew && (_jsxs("form", { onSubmit: (e) => void createProgramFromDraft(e), className: "rounded-md border border-slate-200 bg-slate-50/80 p-3", children: [_jsxs("div", { className: "space-y-2", children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Name" }), _jsx("input", { required: true, className: inputClass, placeholder: "Program name", value: newProgramDraft.name, onChange: (e) => setNewProgramDraft((prev) => ({ ...prev, name: e.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Degree Level" }), _jsx("input", { required: true, className: inputClass, placeholder: "e.g. Bachelor's", value: newProgramDraft.degreeLevel, onChange: (e) => setNewProgramDraft((prev) => ({ ...prev, degreeLevel: e.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Department" }), _jsx("input", { required: true, className: inputClass, placeholder: "e.g. Engineering", value: newProgramDraft.department, onChange: (e) => setNewProgramDraft((prev) => ({ ...prev, department: e.target.value })) })] })] }), createError && _jsx("p", { className: "mt-2 text-sm text-red-700", role: "alert", children: createError }), _jsxs("div", { className: "mt-3 flex gap-2", children: [_jsx(Button, { type: "submit", disabled: isCreatingSubmitting, children: isCreatingSubmitting ? "Creating..." : "Create" }), _jsx("button", { type: "button", onClick: cancelNewProgram, disabled: isCreatingSubmitting, className: subtleButtonClass, children: "Cancel" })] })] })), programs.length === 0 && !isCreatingNew && (_jsx("p", { className: "text-sm text-slate-500", children: "No programs yet. Create one to begin." })), programs.map((program) => (_jsxs("button", { type: "button", onClick: () => setSelectedProgramId(program.id), className: `w-full rounded-md border p-2 text-left text-sm ${selectedProgramId === program.id ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white"}`, children: [_jsx("div", { className: "font-semibold", children: program.name }), program.department && _jsx("div", { className: "text-xs text-slate-500", children: program.department })] }, program.id)))] })] }), _jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: selectedProgram ? "Edit Program" : "Create Program" }), _jsxs("form", { className: "space-y-3", onSubmit: (event) => {
+    return (_jsxs("div", { className: "space-y-4", children: [_jsxs("div", { className: "flex flex-wrap items-center justify-between gap-3", children: [_jsxs("div", { className: "flex items-center gap-3", children: [pageDirty && (_jsx("span", { className: "text-sm font-medium text-amber-700", role: "status", children: "Unsaved changes" })), saveStatus === "saving" && (_jsx("span", { className: "text-sm text-slate-500", role: "status", children: "Saving..." })), saveStatus === "saved" && (_jsx("span", { className: "text-sm text-emerald-700", role: "status", children: "All changes saved" })), saveStatus === "error" && saveError && (_jsx("span", { className: "text-sm text-red-700", role: "alert", children: saveError }))] }), _jsx(Button, { type: "button", onClick: () => void saveAllChanges(), disabled: !pageDirty || saveStatus === "saving", children: "Save Changes" })] }), _jsxs("div", { className: "grid items-start gap-4 lg:grid-cols-[minmax(16rem,18rem)_minmax(18rem,22rem)_minmax(0,1fr)]", children: [_jsxs(Card, { children: [_jsxs("div", { className: "mb-3 flex items-center justify-between gap-2", children: [_jsx("h2", { className: "text-lg font-semibold", children: "Programs" }), _jsx("button", { type: "button", onClick: () => void startNewProgram(), disabled: isCreatingProgramDraft, "aria-busy": isCreatingProgramDraft ? "true" : undefined, className: `${subtleButtonClass} disabled:cursor-not-allowed disabled:opacity-60`, children: isCreatingProgramDraft ? "Saving..." : "+ New Program" })] }), _jsxs("div", { className: "space-y-2", children: [inactiveProgramCount > 0 && (_jsxs("div", { className: "rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900", children: [_jsxs("p", { children: [inactiveProgramCount, " program", inactiveProgramCount !== 1 ? "s are" : " is", " Inactive and will not be used in matchmaking."] }), _jsx("button", { type: "button", className: "mt-1 font-semibold underline", onClick: () => setProgramStatusFilter((current) => (current === "INACTIVE" ? "ALL" : "INACTIVE")), children: programStatusFilter === "INACTIVE" ? "Show all" : "Show inactive" })] })), _jsx("input", { className: inputClass, placeholder: "Search programs...", value: programSearch, onChange: (event) => setProgramSearch(event.target.value) }), programStatusFilter === "INACTIVE" && (_jsx("p", { className: "text-xs text-slate-600", children: "Filtering to Inactive programs." })), programsLoading && _jsx("p", { className: "text-sm text-slate-500", children: "Loading..." }), !programsLoading && programs.length === 0 && (_jsx("p", { className: "text-sm text-slate-500", children: "No programs yet. Create one to begin." })), !programsLoading && programs.length > 0 && filteredPrograms.length === 0 && (_jsxs("div", { className: "text-sm text-slate-500", children: [_jsx("p", { children: "No programs found." }), _jsx("button", { type: "button", className: "mt-1 text-xs font-medium text-slate-700 hover:text-slate-900", onClick: () => setProgramSearch(""), children: "Clear search" })] })), filteredPrograms.map((program) => (_jsx(ProgramLibraryRow, { program: program, selected: selectedProgramId === program.id, onSelect: () => setSelectedProgramId(program.id) }, program.id)))] })] }), _jsxs(Card, { children: [_jsx("h2", { className: "mb-3 text-lg font-semibold", children: selectedProgram ? "Edit Program" : "Create Program" }), _jsxs("form", { className: "space-y-3", onSubmit: (event) => {
                                     event.preventDefault();
                                     if (selectedProgram)
                                         return;
                                     void createProgram(event);
-                                }, children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Name" }), _jsx("input", { required: true, className: inputClass, value: programForm.name, onChange: (event) => setProgramForm((prev) => ({ ...prev, name: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Description" }), _jsx("textarea", { className: inputClass, value: programForm.description, onChange: (event) => setProgramForm((prev) => ({ ...prev, description: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Degree Level" }), _jsx("input", { className: inputClass, value: programForm.degreeLevel, onChange: (event) => setProgramForm((prev) => ({ ...prev, degreeLevel: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Department" }), _jsx("input", { className: inputClass, value: programForm.department, onChange: (event) => setProgramForm((prev) => ({ ...prev, department: event.target.value })) })] }), _jsxs("div", { className: "flex gap-2", children: [!selectedProgram && _jsx(Button, { type: "submit", children: "Create Program" }), selectedProgram && (_jsx("button", { type: "button", className: "text-sm text-red-700 underline", onClick: () => void deleteProgram(selectedProgram.id), children: "Delete" }))] })] })] }), _jsxs(Card, { children: [_jsxs("div", { className: "mb-3 flex items-center justify-between", children: [_jsx("h2", { className: "text-lg font-semibold", children: "Trait Priority Board" }), _jsx("button", { type: "button", className: `${subtleButtonClass} disabled:cursor-not-allowed disabled:opacity-50`, onClick: () => setTraitModalOpen(true), disabled: !selectedProgram, children: "Add Trait" })] }), !selectedProgram ? (_jsx("p", { className: "text-sm text-slate-500", children: "Select a program to edit board priorities." })) : (_jsx("div", { className: "flex max-h-[32rem] flex-col gap-4 overflow-y-auto pr-1", children: programTraitPriorityBuckets.map((bucket) => {
-                                    const isExpanded = expandedBuckets.has(bucket);
-                                    return (_jsxs("div", { className: "flex-shrink-0 rounded-lg border border-slate-200 bg-slate-50/80 shadow-sm", onDragOver: (event) => event.preventDefault(), onDrop: (event) => {
-                                            event.preventDefault();
-                                            const payload = event.dataTransfer.getData("text/plain");
-                                            if (!payload) {
-                                                return;
-                                            }
-                                            const parsed = JSON.parse(payload);
-                                            if (!isExpanded) {
-                                                setExpandedBuckets((prev) => new Set(prev).add(bucket));
-                                            }
-                                            moveTrait(parsed.fromBucket, parsed.fromIndex, bucket);
-                                        }, children: [_jsxs("div", { className: "flex items-center justify-between border-b border-slate-200 px-3 py-2", children: [_jsxs("button", { type: "button", onClick: () => toggleBucketExpanded(bucket), className: "flex min-w-0 flex-1 items-center gap-2 rounded text-left text-sm font-semibold text-slate-800 hover:bg-slate-100/80", "aria-expanded": isExpanded, "aria-label": isExpanded ? `Collapse ${bucket}` : `Expand ${bucket}`, children: [_jsx("span", { className: "flex-shrink-0 text-slate-500", "aria-hidden": true, children: isExpanded ? "\u25BC" : "\u25B6" }), _jsxs("span", { className: "truncate", children: [bucket, " (", board[bucket].length, ")"] })] }), board[bucket].length === 0 && (_jsx("span", { className: "text-xs text-slate-500", children: "Drag traits here" }))] }), isExpanded && (_jsxs("div", { className: "min-h-[4rem] space-y-2 p-3", children: [board[bucket].length === 0 && (_jsx("p", { className: "rounded-lg border border-dashed border-slate-300 bg-white/70 px-3 py-4 text-center text-xs text-slate-500", children: "Drag traits here" })), board[bucket].map((trait, index) => (_jsx("div", { draggable: true, onDragStart: (event) => event.dataTransfer.setData("text/plain", JSON.stringify({
-                                                            fromBucket: bucket,
-                                                            fromIndex: index
-                                                        })), onDragOver: (event) => event.preventDefault(), onDrop: (event) => {
-                                                            event.preventDefault();
-                                                            const payload = event.dataTransfer.getData("text/plain");
-                                                            if (!payload) {
+                                }, children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Name" }), _jsx("input", { ref: programNameInputRef, required: true, className: inputClass, value: programForm.name, onChange: (event) => setProgramForm((prev) => ({ ...prev, name: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Description" }), _jsx("textarea", { className: inputClass, value: programForm.description, onChange: (event) => setProgramForm((prev) => ({ ...prev, description: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Degree Level" }), _jsx("input", { className: inputClass, value: programForm.degreeLevel, onChange: (event) => setProgramForm((prev) => ({ ...prev, degreeLevel: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Department" }), _jsx("input", { className: inputClass, value: programForm.department, onChange: (event) => setProgramForm((prev) => ({ ...prev, department: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Active" }), _jsxs("div", { className: "flex items-center justify-between rounded-md border border-slate-300 px-3 py-2", children: [_jsx("span", { className: "text-sm text-slate-700", children: "Active programs are included in matchmaking." }), _jsx("button", { type: "button", role: "switch", "aria-checked": programForm.isActive, "aria-label": "Active", disabled: !selectedProgram || statusToggleInFlight === selectedProgram.id, onClick: () => {
+                                                            if (!selectedProgram)
                                                                 return;
-                                                            }
-                                                            const parsed = JSON.parse(payload);
-                                                            moveTrait(parsed.fromBucket, parsed.fromIndex, bucket, index);
-                                                        }, className: "group rounded-md border border-slate-300 bg-white p-2 text-sm transition hover:border-slate-400 hover:bg-slate-50", children: _jsxs("div", { className: "flex items-start justify-between gap-2", children: [_jsxs("div", { className: "flex min-w-0 items-start gap-2", children: [_jsx("button", { type: "button", className: "mt-0.5 cursor-grab rounded px-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700", title: "Drag trait", "aria-label": `Drag ${trait.name}`, children: "::" }), _jsxs("div", { className: "min-w-0", children: [_jsx("div", { className: "truncate font-medium", children: trait.name }), _jsx("div", { className: "text-xs text-slate-500", children: trait.category })] })] }), _jsx("button", { type: "button", className: "rounded p-1 text-slate-500 hover:bg-red-50 hover:text-red-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-700 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100", "aria-label": `Remove ${trait.name} from board`, onClick: () => openRemoveDialog(trait), children: "x" })] }) }, trait.id)))] }))] }, bucket));
-                                }) })), removeDialogOpen && removingTrait && (_jsx("div", { className: "fixed inset-0 z-30 flex items-center justify-center bg-black/30 p-4", role: "presentation", children: _jsxs("div", { role: "dialog", "aria-modal": "true", "aria-labelledby": "remove-trait-title", "aria-describedby": "remove-trait-body", className: "w-full max-w-md rounded-md bg-white p-4 shadow-lg", onKeyDown: onRemoveDialogKeyDown, children: [_jsx("h3", { id: "remove-trait-title", className: "text-lg font-semibold", children: "Remove trait from this program?" }), _jsx("p", { id: "remove-trait-body", className: "mt-2 text-sm text-slate-600", children: "This will remove the trait from the priority board for this program. It will not delete the trait from the library." }), _jsxs("div", { className: "mt-4 flex justify-end gap-2", children: [_jsx("button", { type: "button", className: subtleButtonClass, autoFocus: true, ref: cancelRemoveButtonRef, onClick: cancelRemoveTrait, "aria-label": "Cancel trait removal", children: "Cancel" }), _jsx("button", { type: "button", className: "rounded-md bg-red-700 px-4 py-2 font-medium text-white hover:bg-red-800", ref: confirmRemoveButtonRef, onClick: confirmRemoveTrait, "aria-label": `Remove ${removingTrait.name} from board`, children: "Remove" })] })] }) })), _jsx(TraitPickerModal, { isOpen: traitModalOpen, onClose: () => setTraitModalOpen(false), traits: traits, assignedTraitIds: assignedTraitIds, programId: selectedProgram?.id ?? null, degreeLevel: selectedProgram?.degreeLevel ?? null, department: selectedProgram?.department ?? null, onAddTraits: addTraitsToBoard })] })] })] }));
+                                                            const nextValue = !programForm.isActive;
+                                                            setProgramForm((prev) => ({ ...prev, isActive: nextValue }));
+                                                            void toggleProgramActive(selectedProgram.id, nextValue);
+                                                        }, className: `relative inline-flex h-6 w-12 shrink-0 items-center rounded-full p-0.5 transition-colors ${programForm.isActive ? "bg-emerald-600" : "bg-slate-300"} disabled:cursor-not-allowed disabled:opacity-60`, children: _jsx("span", { className: `inline-block h-5 w-5 shrink-0 transform rounded-full bg-white transition-transform ${programForm.isActive ? "translate-x-[22px]" : "translate-x-0"}` }) })] })] }), _jsxs("div", { className: "flex gap-2", children: [!selectedProgram && _jsx(Button, { type: "submit", children: "Create Program" }), selectedProgram && (_jsx("button", { type: "button", className: "text-sm text-red-700 underline", onClick: () => void deleteProgram(selectedProgram.id), children: "Delete" }))] })] })] }), _jsxs(Card, { children: [_jsxs("div", { className: "sticky top-0 z-10 mb-3 flex items-center justify-between bg-white pb-2", children: [_jsx("h2", { className: "text-lg font-semibold", children: "Trait Priority Board" }), _jsx("button", { type: "button", className: `${subtleButtonClass} disabled:cursor-not-allowed disabled:opacity-50`, onClick: () => setTraitModalOpen(true), disabled: !selectedProgram, children: "Add Trait" })] }), !selectedProgram ? (_jsx("p", { className: "text-sm text-slate-500", children: "Select a program to edit board priorities." })) : (_jsxs("div", { className: "flex min-h-[20rem] flex-col gap-4 pb-2", children: [!programScoringReadiness.isScorable && (_jsxs("div", { className: "rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900", children: [_jsx("p", { className: "font-medium", children: "This program cannot be scored yet." }), _jsx("ul", { className: "mt-2 list-disc space-y-1 pl-5 text-xs", children: programScoringReadiness.missing.map((item) => (_jsx("li", { children: item }, item))) })] })), programScoringReadiness.isScorable && nonActiveBoardTraits.length > 0 && (_jsxs("div", { className: "rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900", children: [_jsxs("p", { className: "font-medium", children: [nonActiveBoardTraits.length, " trait", nonActiveBoardTraits.length !== 1 ? "s are" : " is", " not Active and will not affect scoring."] }), _jsx("ul", { className: "mt-2 list-disc space-y-1 pl-5 text-xs", children: nonActiveBoardTraits.map((trait) => (_jsxs("li", { children: [trait.name, " (", trait.status.replaceAll("_", " "), ")"] }, trait.id))) })] })), programTraitPriorityBuckets.map((bucket) => {
+                                        const isExpanded = expandedBuckets.has(bucket);
+                                        return (_jsxs("div", { className: "flex-shrink-0 rounded-lg border border-slate-200 bg-slate-50/80 shadow-sm", onDragOver: (event) => event.preventDefault(), onDrop: (event) => {
+                                                event.preventDefault();
+                                                const payload = event.dataTransfer.getData("text/plain");
+                                                if (!payload) {
+                                                    return;
+                                                }
+                                                const parsed = JSON.parse(payload);
+                                                if (!isExpanded) {
+                                                    setExpandedBuckets((prev) => new Set(prev).add(bucket));
+                                                }
+                                                moveTrait(parsed.fromBucket, parsed.fromIndex, bucket);
+                                            }, children: [_jsxs("div", { className: "flex items-center justify-between border-b border-slate-200 px-3 py-2", children: [_jsxs("button", { type: "button", onClick: () => toggleBucketExpanded(bucket), className: "flex min-w-0 flex-1 items-center gap-2 rounded text-left text-sm font-semibold text-slate-800 hover:bg-slate-100/80", "aria-expanded": isExpanded, "aria-label": isExpanded ? `Collapse ${bucket}` : `Expand ${bucket}`, children: [_jsx("span", { className: "flex-shrink-0 text-slate-500", "aria-hidden": true, children: isExpanded ? "\u25BC" : "\u25B6" }), _jsxs("span", { className: "truncate", children: [bucket, " (", board[bucket].length, ")"] })] }), board[bucket].length === 0 && (_jsx("span", { className: "text-xs text-slate-500", children: "Drag traits here" }))] }), isExpanded && (_jsxs("div", { className: "min-h-[4rem] space-y-2 p-3", children: [board[bucket].length === 0 && (_jsx("p", { className: "rounded-lg border border-dashed border-slate-300 bg-white/70 px-3 py-4 text-center text-xs text-slate-500", children: "Drag traits here" })), board[bucket].map((trait, index) => (_jsx("div", { draggable: true, onDragStart: (event) => event.dataTransfer.setData("text/plain", JSON.stringify({
+                                                                fromBucket: bucket,
+                                                                fromIndex: index
+                                                            })), onDragOver: (event) => event.preventDefault(), onDrop: (event) => {
+                                                                event.preventDefault();
+                                                                const payload = event.dataTransfer.getData("text/plain");
+                                                                if (!payload) {
+                                                                    return;
+                                                                }
+                                                                const parsed = JSON.parse(payload);
+                                                                moveTrait(parsed.fromBucket, parsed.fromIndex, bucket, index);
+                                                            }, className: "group rounded-md border border-slate-300 bg-white p-2 text-sm transition hover:border-slate-400 hover:bg-slate-50", children: _jsxs("div", { className: "flex items-start justify-between gap-2", children: [_jsxs("div", { className: "flex min-w-0 items-start gap-2", children: [_jsx("button", { type: "button", className: "mt-0.5 cursor-grab rounded px-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700", title: "Drag trait", "aria-label": `Drag ${trait.name}`, children: "::" }), _jsxs("div", { className: "min-w-0", children: [_jsx("div", { className: "truncate font-medium", children: trait.name }), _jsx("div", { className: "text-xs text-slate-500", children: trait.category }), _jsxs("div", { className: "mt-1 flex flex-wrap items-center gap-1.5", children: [_jsx("span", { className: `rounded-full px-2 py-0.5 text-[11px] ${traitStatusTone[trait.status]}`, children: trait.status.replaceAll("_", " ") }), trait.status !== "ACTIVE" && (_jsx("span", { className: "rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800", children: "Excluded from scoring" }))] })] })] }), _jsx("button", { type: "button", className: "rounded p-1 text-slate-500 hover:bg-red-50 hover:text-red-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-700 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100", "aria-label": `Remove ${trait.name} from board`, onClick: () => openRemoveDialog(trait), children: "x" })] }) }, trait.id)))] }))] }, bucket));
+                                    })] })), removeDialogOpen && removingTrait && (_jsx("div", { className: "fixed inset-0 z-30 flex items-center justify-center bg-black/30 p-4", role: "presentation", children: _jsxs("div", { role: "dialog", "aria-modal": "true", "aria-labelledby": "remove-trait-title", "aria-describedby": "remove-trait-body", className: "w-full max-w-md rounded-md bg-white p-4 shadow-lg", onKeyDown: onRemoveDialogKeyDown, children: [_jsx("h3", { id: "remove-trait-title", className: "text-lg font-semibold", children: "Remove trait from this program?" }), _jsx("p", { id: "remove-trait-body", className: "mt-2 text-sm text-slate-600", children: "This will remove the trait from the priority board for this program. It will not delete the trait from the library." }), _jsxs("div", { className: "mt-4 flex justify-end gap-2", children: [_jsx("button", { type: "button", className: subtleButtonClass, autoFocus: true, ref: cancelRemoveButtonRef, onClick: cancelRemoveTrait, "aria-label": "Cancel trait removal", children: "Cancel" }), _jsx("button", { type: "button", className: "rounded-md bg-red-700 px-4 py-2 font-medium text-white hover:bg-red-800", ref: confirmRemoveButtonRef, onClick: confirmRemoveTrait, "aria-label": `Remove ${removingTrait.name} from board`, children: "Remove" })] })] }) })), _jsx(TraitPickerModal, { isOpen: traitModalOpen, onClose: () => setTraitModalOpen(false), traits: traits, assignedTraitIds: assignedTraitIds, programId: selectedProgram?.id ?? null, degreeLevel: selectedProgram?.degreeLevel ?? null, department: selectedProgram?.department ?? null, onAddTraits: addTraitsToBoard })] })] }), statusToast && (_jsx("div", { role: "status", className: `fixed bottom-4 right-4 rounded-md px-4 py-2 text-sm text-white shadow-lg ${statusToast.type === "success" ? "bg-emerald-700" : "bg-red-700"}`, children: statusToast.message }))] }));
 }
 export function BrandVoicePage() {
     const defaultBrandVoiceForm = () => ({
@@ -824,7 +1714,71 @@ export function BrandVoicePage() {
                                             [type]: text
                                         })) }))] })] })) : (_jsx(SimulationLab, { brandVoiceId: selectedVoiceId, request: request }))] })] }));
 }
+export function QuizExperiencePage() {
+    const [form, setForm] = useState({
+        id: "default",
+        headline: "Discover your best-fit graduate path",
+        subheadline: "A quick, personality-first quiz to see where you thrive.",
+        estimatedTimeLabel: "3-5 min",
+        tonePreset: "GEN_Z_FRIENDLY",
+        gradientSet: "SUNRISE",
+        motionIntensity: "MEDIUM",
+        rankingMotionStyle: "SPRING",
+        revealStyle: "IDENTITY",
+        introMediaPrompt: "",
+        revealMediaPrompt: ""
+    });
+    const [loading, setLoading] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [notice, setNotice] = useState(null);
+    const [error, setError] = useState(null);
+    const loadConfig = async () => {
+        setLoading(true);
+        try {
+            const payload = await request("/api/admin/quiz-experience");
+            setForm(payload.data);
+        }
+        catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to load quiz experience config.");
+        }
+        finally {
+            setLoading(false);
+        }
+    };
+    useEffect(() => {
+        void loadConfig();
+    }, []);
+    const save = async (event) => {
+        event.preventDefault();
+        setSaving(true);
+        setError(null);
+        setNotice(null);
+        try {
+            const payload = await request("/api/admin/quiz-experience", {
+                method: "PUT",
+                body: JSON.stringify(form)
+            });
+            setForm(payload.data);
+            setNotice("Saved");
+        }
+        catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to save quiz experience config.");
+        }
+        finally {
+            setSaving(false);
+        }
+    };
+    return (_jsxs("div", { className: "grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]", children: [_jsxs(Card, { children: [_jsx("h2", { className: "mb-4 text-lg font-semibold", children: "Quiz Experience" }), loading && _jsx("p", { className: "mb-2 text-sm text-slate-500", children: "Loading..." }), _jsxs("form", { className: "space-y-3", onSubmit: (event) => void save(event), children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Hook Headline" }), _jsx("input", { className: inputClass, value: form.headline, onChange: (event) => setForm((prev) => ({ ...prev, headline: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Hook Subheadline" }), _jsx("textarea", { className: inputClass, value: form.subheadline, onChange: (event) => setForm((prev) => ({ ...prev, subheadline: event.target.value })) })] }), _jsxs("div", { className: "grid gap-3 md:grid-cols-2", children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Estimated Time" }), _jsx("input", { className: inputClass, value: form.estimatedTimeLabel, onChange: (event) => setForm((prev) => ({ ...prev, estimatedTimeLabel: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Tone Preset" }), _jsx("input", { className: inputClass, value: form.tonePreset, onChange: (event) => setForm((prev) => ({ ...prev, tonePreset: event.target.value })) })] })] }), _jsxs("div", { className: "grid gap-3 md:grid-cols-2", children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Gradient Set" }), _jsx("input", { className: inputClass, value: form.gradientSet, onChange: (event) => setForm((prev) => ({ ...prev, gradientSet: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Motion Intensity" }), _jsxs("select", { className: inputClass, value: form.motionIntensity, onChange: (event) => setForm((prev) => ({ ...prev, motionIntensity: event.target.value })), children: [_jsx("option", { value: "LOW", children: "LOW" }), _jsx("option", { value: "MEDIUM", children: "MEDIUM" }), _jsx("option", { value: "HIGH", children: "HIGH" })] })] })] }), _jsxs("div", { className: "grid gap-3 md:grid-cols-2", children: [_jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Ranking Motion Style" }), _jsx("input", { className: inputClass, value: form.rankingMotionStyle, onChange: (event) => setForm((prev) => ({ ...prev, rankingMotionStyle: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Reveal Style" }), _jsx("input", { className: inputClass, value: form.revealStyle, onChange: (event) => setForm((prev) => ({ ...prev, revealStyle: event.target.value })) })] })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Intro Media Prompt (optional)" }), _jsx("textarea", { className: inputClass, value: form.introMediaPrompt ?? "", onChange: (event) => setForm((prev) => ({ ...prev, introMediaPrompt: event.target.value })) })] }), _jsxs("div", { children: [_jsx("label", { className: labelClass, children: "Reveal Media Prompt (optional)" }), _jsx("textarea", { className: inputClass, value: form.revealMediaPrompt ?? "", onChange: (event) => setForm((prev) => ({ ...prev, revealMediaPrompt: event.target.value })) })] }), _jsxs("div", { className: "flex items-center gap-3", children: [_jsx(Button, { type: "submit", disabled: saving, children: saving ? "Saving..." : "Save Quiz Experience" }), notice && _jsx("span", { className: "text-sm text-emerald-700", children: notice }), error && _jsx("span", { className: "text-sm text-red-700", children: error })] })] })] }), _jsxs(Card, { children: [_jsx("h3", { className: "mb-3 text-lg font-semibold", children: "Live Preview" }), _jsxs("div", { className: "rounded-xl bg-gradient-to-br from-orange-200 via-amber-100 to-rose-100 p-4", children: [_jsx("p", { className: "text-xs uppercase tracking-wide text-slate-700", children: form.estimatedTimeLabel }), _jsx("h4", { className: "mt-2 text-xl font-semibold text-slate-900", children: form.headline }), _jsx("p", { className: "mt-2 text-sm text-slate-700", children: form.subheadline }), _jsxs("div", { className: "mt-3 flex flex-wrap gap-2 text-xs text-slate-700", children: [_jsxs("span", { className: "rounded-full bg-white/80 px-2 py-1", children: ["Tone: ", form.tonePreset] }), _jsxs("span", { className: "rounded-full bg-white/80 px-2 py-1", children: ["Motion: ", form.motionIntensity] }), _jsxs("span", { className: "rounded-full bg-white/80 px-2 py-1", children: ["Reveal: ", form.revealStyle] })] })] })] })] }));
+}
 const rootElement = document.getElementById("root");
-if (rootElement) {
-    ReactDOM.createRoot(rootElement).render(_jsx(React.StrictMode, { children: _jsx(QueryClientProvider, { client: queryClient, children: _jsx(BrowserRouter, { children: _jsx(ShellLayout, { children: _jsxs(Routes, { children: [_jsx(Route, { path: "/", element: _jsx(Navigate, { to: "/traits", replace: true }) }), _jsx(Route, { path: "/traits", element: _jsx(TraitsPage, {}) }), _jsx(Route, { path: "/programs", element: _jsx(ProgramsPage, {}) }), _jsx(Route, { path: "/brand-voice", element: _jsx(BrandVoicePage, {}) }), _jsx(Route, { path: "*", element: _jsx(Navigate, { to: "/traits", replace: true }) })] }) }) }) }) }));
+const isTestRuntime = import.meta.env.MODE === "test";
+if (rootElement && !isTestRuntime) {
+    const routerFuture = {
+        v7_relativeSplatPath: true,
+        ...{ v7_startTransition: true }
+    };
+    const root = rootElement._adminRoot ??
+        (rootElement._adminRoot =
+            ReactDOM.createRoot(rootElement));
+    root.render(_jsx(React.StrictMode, { children: _jsx(QueryClientProvider, { client: queryClient, children: _jsx(BrowserRouter, { future: routerFuture, children: _jsx(ShellLayout, { children: _jsxs(Routes, { children: [_jsx(Route, { path: "/", element: _jsx(Navigate, { to: "/traits", replace: true }) }), _jsx(Route, { path: "/traits", element: _jsx(TraitsPage, {}) }), _jsx(Route, { path: "/programs", element: _jsx(ProgramsPage, {}) }), _jsx(Route, { path: "/brand-voice", element: _jsx(BrandVoicePage, {}) }), _jsx(Route, { path: "/quiz-experience", element: _jsx(QuizExperiencePage, {}) }), _jsx(Route, { path: "/widget/branding", element: _jsx(WidgetBrandingPage, {}) }), _jsx(Route, { path: "/widget/embed", element: _jsx(AdminWidgetEmbedPage, {}) }), _jsx(Route, { path: "/widget/preview", element: _jsx(AdminWidgetPreviewPage, {}) }), _jsx(Route, { path: "/widget/orchestration", element: _jsx(AdminWidgetOrchestrationPage, {}) }), _jsx(Route, { path: "*", element: _jsx(Navigate, { to: "/traits", replace: true }) })] }) }) }) }) }));
 }

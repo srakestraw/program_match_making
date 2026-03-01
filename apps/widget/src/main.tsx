@@ -1,9 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, Navigate, Route, Routes, useNavigate, useSearchParams } from "react-router-dom";
+import {
+  createBrowserRouter,
+  Navigate,
+  RouterProvider,
+  useNavigate,
+  useSearchParams
+} from "react-router-dom";
 import { QueryClient, QueryClientProvider, useMutation } from "@tanstack/react-query";
 import { Button, Card } from "@pmm/ui";
-import { createApiClient, type ProgramFit, type ScoringSnapshot } from "@pmm/api-client";
+import { createApiClient, type ProgramFit, type ScoringSnapshot, type WidgetTheme } from "@pmm/api-client";
 import { RealtimeSession, type ConnectionState, type TranscriptTurn } from "@pmm/voice";
 import { ProgramFloatField } from "./components/ProgramFloatField";
 import { TraitScorePanel } from "./components/TraitScorePanel";
@@ -41,6 +47,51 @@ const parseModeParam = (value: string | null): InterviewMode | null => {
 
 const transcriptId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const defaultWidgetThemeTokens: WidgetTheme["tokens"] = {
+  fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif",
+  headingFontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif",
+  colors: {
+    primary: "#0f172a",
+    primaryHover: "#1e293b",
+    background: "#f8fafc",
+    surface: "#ffffff",
+    text: "#0f172a",
+    mutedText: "#475569",
+    border: "rgba(15, 23, 42, 0.14)"
+  },
+  radii: {
+    sm: 6,
+    md: 10,
+    lg: 14
+  },
+  shadows: {
+    card: "0 8px 26px rgba(15, 23, 42, 0.08)"
+  },
+  logoUrl: undefined
+};
+
+const widgetThemeVariantFromUrl = (): "active" | "draft" => {
+  if (typeof window === "undefined") return "active";
+  return new URLSearchParams(window.location.search).get("theme") === "draft" ? "draft" : "active";
+};
+
+const themeCssVars = (tokens: WidgetTheme["tokens"]): React.CSSProperties =>
+  ({
+    "--pm-font": tokens.fontFamily || defaultWidgetThemeTokens.fontFamily,
+    "--pm-heading-font": tokens.headingFontFamily || tokens.fontFamily || defaultWidgetThemeTokens.headingFontFamily,
+    "--pm-primary": tokens.colors.primary || defaultWidgetThemeTokens.colors.primary,
+    "--pm-primary-hover": tokens.colors.primaryHover || defaultWidgetThemeTokens.colors.primaryHover,
+    "--pm-bg": tokens.colors.background || defaultWidgetThemeTokens.colors.background,
+    "--pm-surface": tokens.colors.surface || defaultWidgetThemeTokens.colors.surface,
+    "--pm-text": tokens.colors.text || defaultWidgetThemeTokens.colors.text,
+    "--pm-muted": tokens.colors.mutedText || defaultWidgetThemeTokens.colors.mutedText,
+    "--pm-border": tokens.colors.border || defaultWidgetThemeTokens.colors.border,
+    "--pm-radius-sm": `${tokens.radii.sm ?? defaultWidgetThemeTokens.radii.sm}px`,
+    "--pm-radius-md": `${tokens.radii.md ?? defaultWidgetThemeTokens.radii.md}px`,
+    "--pm-radius-lg": `${tokens.radii.lg ?? defaultWidgetThemeTokens.radii.lg}px`,
+    "--pm-card-shadow": tokens.shadows?.card || defaultWidgetThemeTokens.shadows?.card || "none"
+  }) as React.CSSProperties;
 
 const useOnlineStatus = () => {
   const [isOnline, setIsOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
@@ -167,13 +218,17 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
   const [checkpointOpen, setCheckpointOpen] = useState(false);
   const [connectStalled, setConnectStalled] = useState(false);
   const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
+  const [speechEngine, setSpeechEngine] = useState<"realtime-brand-voice" | "browser-fallback" | "none">("none");
+  const [lastMintedVoice, setLastMintedVoice] = useState<string | null>(null);
+  const [debugVoiceEnabled, setDebugVoiceEnabled] = useState(false);
 
   const realtimeSessionRef = useRef<RealtimeSession | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const lastCandidateTurnIdRef = useRef<string | null>(null);
   const kickoffStartedRef = useRef(false);
-  const speechSynthesisRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const realtimeSpeechFallbackTimerRef = useRef<number | null>(null);
+  const realtimeAssistantStartedRef = useRef(false);
   const isOnline = useOnlineStatus();
 
   const {
@@ -250,15 +305,21 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
   }, [voicePhase]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    setDebugVoiceEnabled(window.localStorage.getItem("DEBUG_VOICE") === "1");
+  }, []);
+
+  useEffect(() => {
     if (!realtimeSessionRef.current) return;
     if (!isConnectedPhase(voicePhase)) return;
-    realtimeSessionRef.current.updateInstructions(
-      `You are a warm admissions interviewer. Respond in ${sessionLanguageLabel} only. Do not switch languages unless the user explicitly asks.`
-    );
+    realtimeSessionRef.current.updateSession({
+      instructions: `You are a warm admissions interviewer. Respond in ${sessionLanguageLabel} only. Do not switch languages unless the user explicitly asks.`,
+      inputAudioLanguage: sessionLanguageTag
+    });
   }, [sessionLanguageTag, sessionLanguageLabel, voicePhase]);
 
   const tokenMutation = useMutation({
-    mutationFn: (input?: { brandVoiceId?: string; voiceName?: string; language?: string }) => api.getRealtimeToken(input)
+    mutationFn: (input?: { brandVoiceId?: string; voiceName?: string; language?: string; debug?: boolean }) => api.getRealtimeToken(input)
   });
   const appendTranscriptMutation = useMutation({
     mutationFn: ({ id, turns }: { id: string; turns: Array<{ ts: string; speaker: "candidate" | "assistant"; text: string }> }) =>
@@ -290,6 +351,7 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
       api.submitInterviewCheckpoint(sessionIdRef.current!, {
         mode,
         action,
+        language: sessionLanguageTag,
         focusTraitIds: action === "focus" ? checkpoint?.suggestedTraitIds : undefined,
         askedTraitIds,
         askedQuestionIds,
@@ -298,32 +360,58 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
   });
 
   const speakPrompt = (text: string) => {
-    if (typeof window === "undefined" || !window.speechSynthesis) {
-      transitionPhase("assistant_done");
+    const speakWithBrowserTts = () => {
+      if (typeof window === "undefined" || !window.speechSynthesis) {
+        transitionPhase("assistant_done");
+        return;
+      }
+      window.speechSynthesis.cancel();
+      const utterance = createLanguageUtterance(text, sessionLanguageTag, window.speechSynthesis.getVoices?.() ?? []);
+      utterance.onstart = () => {
+        debugVoice("tts.start.browser", { chars: text.length });
+        setSpeechEngine("browser-fallback");
+        setVoicePhase("speaking");
+      };
+      utterance.onend = () => {
+        debugVoice("tts.end.browser");
+        transitionPhase("assistant_done");
+      };
+      utterance.onerror = () => {
+        transitionPhase("assistant_done");
+      };
+      window.speechSynthesis.speak(utterance);
+    };
+
+    const realtime = realtimeSessionRef.current;
+    if (realtime && realtime.connectionState === "connected") {
+      realtimeAssistantStartedRef.current = false;
+      setSpeechEngine("realtime-brand-voice");
+      setVoicePhase("speaking");
+      debugVoice("tts.start.realtime", { chars: text.length });
+      realtime.promptAssistant(
+        `Respond in ${sessionLanguageLabel}. Say exactly this text and nothing else: "${text}"`
+      );
+
+      if (realtimeSpeechFallbackTimerRef.current !== null) {
+        window.clearTimeout(realtimeSpeechFallbackTimerRef.current);
+      }
+      realtimeSpeechFallbackTimerRef.current = window.setTimeout(() => {
+        if (!realtimeAssistantStartedRef.current) {
+          debugVoice("tts.fallback.browser", { reason: "no_realtime_audio_start" });
+          speakWithBrowserTts();
+        }
+      }, 3500);
       return;
     }
-    window.speechSynthesis.cancel();
-    const utterance = createLanguageUtterance(text, sessionLanguageTag, window.speechSynthesis.getVoices?.() ?? []);
-    speechSynthesisRef.current = utterance;
-    utterance.onstart = () => {
-      debugVoice("tts.start", { chars: text.length });
-      setVoicePhase("speaking");
-    };
-    utterance.onend = () => {
-      debugVoice("tts.end");
-      transitionPhase("assistant_done");
-    };
-    utterance.onerror = () => {
-      transitionPhase("assistant_done");
-    };
-    window.speechSynthesis.speak(utterance);
+
+    speakWithBrowserTts();
   };
 
   const pushAssistantQuestion = async (question: any, prefix?: string) => {
     if (!question) return;
     setCurrentQuestion(question);
     setAskedQuestionIds((prev) => (prev.includes(question.id) ? prev : [...prev, question.id]));
-    setAskedTraitIds((prev) => (prev[prev.length - 1] === question.traitId ? prev : [...prev, question.traitId]));
+    setAskedTraitIds((prev) => [...prev, question.traitId]);
     const text = prefix ? `${prefix} ${question.prompt}` : question.prompt;
     addTranscriptTurn({ id: transcriptId("assistant"), speaker: "assistant", text, ts: new Date().toISOString() });
     if (sessionIdRef.current) {
@@ -358,6 +446,14 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
   };
 
   const onTranscriptTurn = async (turn: TranscriptTurn) => {
+    if (turn.speaker === "assistant") {
+      realtimeAssistantStartedRef.current = true;
+      if (realtimeSpeechFallbackTimerRef.current !== null) {
+        window.clearTimeout(realtimeSpeechFallbackTimerRef.current);
+        realtimeSpeechFallbackTimerRef.current = null;
+      }
+      return;
+    }
     if (turn.speaker !== "candidate") {
       return;
     }
@@ -367,8 +463,18 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
 
     addTranscriptTurn(turn);
     debugVoice("transcript.candidate", { chars: turn.text.length });
-    if (/\b(hola|gracias|por favor|buenos|buenas|adios)\b/i.test(turn.text)) {
-      setDetectedLanguage("es", "Spanish");
+    const lowerTurn = turn.text.toLowerCase();
+    if (/\b(hola|gracias|por favor|buenos|buenas|adios)\b/i.test(turn.text) || /\bspanish|español\b/i.test(turn.text)) {
+      setDetectedLanguage("es", languageLabelFromTag("es"));
+    } else if (/\bfrench|français\b/i.test(turn.text)) {
+      setDetectedLanguage("fr", languageLabelFromTag("fr"));
+    } else if (/\bchinese|mandarin\b/i.test(turn.text)) {
+      setDetectedLanguage("zh", languageLabelFromTag("zh"));
+    } else if (/\barabic\b/i.test(turn.text)) {
+      setDetectedLanguage("ar", languageLabelFromTag("ar"));
+    }
+    if (/can we do this in\s+([a-z]+)/i.test(lowerTurn) || /switch to\s+([a-z]+)/i.test(lowerTurn)) {
+      debugVoice("language.explicit-request", { text: turn.text.slice(0, 120) });
     }
     if (sessionIdRef.current) {
       void appendTranscriptMutation.mutateAsync({
@@ -414,10 +520,15 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
       transitionPhase("permissions_granted");
 
       const interview = await createInterviewMutation.mutateAsync();
+      const responseLanguageTag = interview.languageTag ?? interview.language ?? sessionLanguageTag;
+      setSessionLanguage(responseLanguageTag, languageLabelFromTag(responseLanguageTag));
+      const debugEnabled = typeof window !== "undefined" && window.localStorage.getItem("DEBUG_VOICE") === "1";
       const token = await tokenMutation.mutateAsync({
         brandVoiceId: interview.brandVoiceId ?? undefined,
-        language: interview.language ?? sessionLanguageTag
+        language: responseLanguageTag,
+        debug: debugEnabled
       });
+      setLastMintedVoice(token.debug?.selectedVoice ?? null);
       const id = interview.sessionId;
       if (!id) throw new Error("Session id missing");
       setSessionId(id);
@@ -433,15 +544,39 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
             setVoicePhase("error");
           }
         },
+        onDetectedLanguage: (tag) => {
+          const normalized = tag.toLowerCase();
+          const current = useWidgetStore.getState().sessionLanguageTag.toLowerCase();
+          if (normalized !== current) {
+            setDetectedLanguage(tag, languageLabelFromTag(tag));
+          }
+        },
+        onAssistantAudioStart: () => {
+          realtimeAssistantStartedRef.current = true;
+          if (realtimeSpeechFallbackTimerRef.current !== null) {
+            window.clearTimeout(realtimeSpeechFallbackTimerRef.current);
+            realtimeSpeechFallbackTimerRef.current = null;
+          }
+        },
+        onAssistantDone: () => {
+          debugVoice("tts.end.realtime");
+          if (realtimeSpeechFallbackTimerRef.current !== null) {
+            window.clearTimeout(realtimeSpeechFallbackTimerRef.current);
+            realtimeSpeechFallbackTimerRef.current = null;
+          }
+          transitionPhase("assistant_done");
+        },
         onTranscriptTurn
       });
       realtimeSession.setAudioTrack(track);
       realtimeSessionRef.current = realtimeSession;
       await realtimeSession.connect(token.client_secret.value);
-      realtimeSession.updateInstructions(
-        interview.systemPrompt ??
-          `You are a warm admissions interviewer. Respond in ${sessionLanguageLabel} only. Do not switch languages unless the user explicitly asks.`
-      );
+      realtimeSession.updateSession({
+        instructions:
+          interview.systemPrompt ??
+          `You are a warm admissions interviewer. Respond in ${languageLabelFromTag(responseLanguageTag)} only. Do not switch languages unless the user explicitly asks.`,
+        inputAudioLanguage: responseLanguageTag
+      });
       transitionPhase("transport_connected");
       await kickoffIfNeeded(interview);
     } catch (startError) {
@@ -474,6 +609,10 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
 
   const endSession = async () => {
     try {
+      if (realtimeSpeechFallbackTimerRef.current !== null) {
+        window.clearTimeout(realtimeSpeechFallbackTimerRef.current);
+        realtimeSpeechFallbackTimerRef.current = null;
+      }
       window.speechSynthesis?.cancel();
       await realtimeSessionRef.current?.disconnect();
       if (sessionIdRef.current) await api.completeSession(sessionIdRef.current);
@@ -488,6 +627,10 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
   const resetFlow = async () => {
     await realtimeSessionRef.current?.disconnect();
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    if (realtimeSpeechFallbackTimerRef.current !== null) {
+      window.clearTimeout(realtimeSpeechFallbackTimerRef.current);
+      realtimeSpeechFallbackTimerRef.current = null;
+    }
     window.speechSynthesis?.cancel();
     clear();
     setTransportState("idle");
@@ -645,6 +788,19 @@ const VoiceFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode;
 
             {!isOnline && <p className="text-sm text-red-700">You are offline. Reconnect to continue.</p>}
             {error && <p className="text-sm text-red-700">{error}</p>}
+            {debugVoiceEnabled && (
+              <div className="rounded-md border border-slate-300 bg-slate-50 p-2 text-xs text-slate-700">
+                <p>
+                  Debug voice: engine=<span className="font-semibold">{speechEngine}</span>
+                </p>
+                <p>
+                  Minted voice=<span className="font-semibold">{lastMintedVoice ?? "(none)"}</span>
+                </p>
+                <p>
+                  Language=<span className="font-semibold">{sessionLanguageTag}</span>
+                </p>
+              </div>
+            )}
           </section>
           <LanguagePickerModal
             open={languagePickerOpen}
@@ -821,6 +977,11 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; 
   const [started, setStarted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentQuestion, setCurrentQuestion] = useState<any>(null);
+  const [quizExperience, setQuizExperience] = useState<{
+    headline: string;
+    subheadline: string;
+    estimatedTimeLabel: string;
+  } | null>(null);
   const [askedTraitIds, setAskedTraitIds] = useState<string[]>([]);
   const [askedQuestionIds, setAskedQuestionIds] = useState<string[]>([]);
   const isOnline = useOnlineStatus();
@@ -868,6 +1029,31 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; 
     setProgramFilterIds(programFilterIds);
   }, [clear, mode, programFilterIds, setMode, setProgramFilterIds]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .getQuizExperienceConfig()
+      .then((payload) => {
+        if (cancelled) return;
+        setQuizExperience({
+          headline: payload.data.headline,
+          subheadline: payload.data.subheadline,
+          estimatedTimeLabel: payload.data.estimatedTimeLabel
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setQuizExperience({
+          headline: "Discover your best-fit graduate path",
+          subheadline: "A quick, personality-first quiz to see where you thrive.",
+          estimatedTimeLabel: "3-5 min"
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const startQuiz = async () => {
     try {
       const session = await createInterviewMutation.mutateAsync();
@@ -903,6 +1089,16 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; 
     }
   };
 
+  const totalTraits = scoringSnapshot?.traits.length ?? 0;
+  const completedTraits = (scoringSnapshot?.traits ?? []).filter((trait) => trait.status === "complete").length;
+  const progressLabel = totalTraits > 0 ? `${Math.min(completedTraits + (currentQuestion ? 1 : 0), totalTraits)} / ${totalTraits}` : null;
+  const optionMetaByLabel = new Map(
+    ((currentQuestion?.answerOptionsMeta as Array<{ label?: string; microCopy?: string; iconToken?: string }> | undefined) ?? [])
+      .filter((item) => typeof item?.label === "string")
+      .map((item) => [String(item.label), item] as const)
+  );
+  const traitDisplayName = currentQuestion?.publicLabel ?? currentQuestion?.traitName;
+
   return (
     <main className="mx-auto min-h-screen max-w-7xl px-4 py-8">
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]">
@@ -910,28 +1106,48 @@ const QuizFlow = ({ mode, programFilterIds, onRestart }: { mode: InterviewMode; 
           <section className="space-y-4">
             <h2 className="text-2xl font-semibold">Quiz</h2>
             {!started && (
-              <div className="flex gap-2">
-                <Button onClick={startQuiz} disabled={!isOnline || createInterviewMutation.isPending}>
-                  Start quiz
-                </Button>
-                <Button className="bg-slate-500" onClick={onRestart}>
-                  Back
-                </Button>
+              <div className="space-y-4 rounded-xl bg-gradient-to-br from-amber-100 via-orange-50 to-rose-100 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">{quizExperience?.estimatedTimeLabel ?? "3-5 min"}</p>
+                <h3 className="text-2xl font-bold text-slate-900">{quizExperience?.headline ?? "Discover your best-fit graduate path"}</h3>
+                <p className="text-sm text-slate-700">{quizExperience?.subheadline ?? "A quick, personality-first quiz to see where you thrive."}</p>
+                <div className="flex gap-2">
+                  <Button onClick={startQuiz} disabled={!isOnline || createInterviewMutation.isPending}>
+                    Start
+                  </Button>
+                  <Button className="bg-slate-500" onClick={onRestart}>
+                    Back
+                  </Button>
+                </div>
               </div>
             )}
             {started && currentQuestion && (
               <>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">{traitDisplayName}</p>
+                  {progressLabel && <p className="text-xs font-semibold text-slate-600">Progress: {progressLabel}</p>}
+                </div>
+                {currentQuestion.narrativeIntro && <p className="text-sm text-slate-600">{currentQuestion.narrativeIntro}</p>}
                 <h3 className="text-lg font-semibold text-slate-900">{currentQuestion.prompt}</h3>
                 <div className="grid gap-2">
                   {currentQuestion.options.map((option: string) => (
                     <button
                       key={`${currentQuestion.id}-${option}`}
                       type="button"
-                      className="rounded-md border border-slate-300 bg-white px-4 py-2 text-left text-sm hover:border-slate-900"
+                      className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-left text-sm shadow-sm transition hover:-translate-y-0.5 hover:border-slate-900"
                       onClick={() => void selectAnswer(option)}
                       disabled={!isOnline || turnMutation.isPending}
                     >
-                      {option}
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold text-slate-900">{option}</p>
+                          {optionMetaByLabel.get(option)?.microCopy && (
+                            <p className="mt-1 text-xs text-slate-600">{optionMetaByLabel.get(option)?.microCopy}</p>
+                          )}
+                        </div>
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-600">
+                          {(optionMetaByLabel.get(option)?.iconToken ?? "spark").slice(0, 10)}
+                        </span>
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -1043,20 +1259,60 @@ const ResultsPage = () => {
   );
 };
 
-const App = () => (
-  <BrowserRouter>
-    <Routes>
-      <Route path="/" element={<Navigate to="/widget" replace />} />
-      <Route path="/widget" element={<WidgetSetup />} />
-      <Route path="/widget/results" element={<ResultsPage />} />
-    </Routes>
-  </BrowserRouter>
+const router = createBrowserRouter(
+  [
+    { path: "/", element: <Navigate to="/widget" replace /> },
+    { path: "/widget", element: <WidgetSetup /> },
+    { path: "/widget/results", element: <ResultsPage /> }
+  ],
+  {
+    future: {
+      v7_relativeSplatPath: true,
+      ...( { v7_startTransition: true } as Record<string, boolean>)
+    }
+  }
 );
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
+const container = document.getElementById("root")!;
+const root =
+  (container as unknown as { _widgetRoot?: ReturnType<typeof ReactDOM.createRoot> })._widgetRoot ??
+  ((container as unknown as { _widgetRoot?: ReturnType<typeof ReactDOM.createRoot> })._widgetRoot =
+    ReactDOM.createRoot(container));
+
+const WidgetRuntime = () => {
+  const [tokens, setTokens] = useState<WidgetTheme["tokens"]>(defaultWidgetThemeTokens);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadTheme = async () => {
+      try {
+        const payload = await api.getPublicWidgetTheme(widgetThemeVariantFromUrl());
+        if (!cancelled && payload.data?.tokens) {
+          setTokens(payload.data.tokens);
+        }
+      } catch {
+        if (!cancelled) {
+          setTokens(defaultWidgetThemeTokens);
+        }
+      }
+    };
+    void loadTheme();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <div className="pm-theme-root min-h-screen" style={themeCssVars(tokens)}>
+      <RouterProvider router={router} />
+    </div>
+  );
+};
+
+root.render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <App />
+      <WidgetRuntime />
     </QueryClientProvider>
   </React.StrictMode>
 );

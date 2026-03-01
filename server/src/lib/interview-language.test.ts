@@ -9,6 +9,7 @@ describe("buildInterviewSystemPrompt", () => {
     });
 
     expect(prompt).toContain("Brand voice: warm, direct, credible.");
+    expect(prompt).toContain("ask at most one brief follow-up for the same trait");
     expect(prompt).toContain(ENGLISH_ONLY_GUARDRAIL);
     expect(prompt.indexOf("Brand voice: warm, direct, credible.")).toBeLessThan(prompt.indexOf(ENGLISH_ONLY_GUARDRAIL));
   });

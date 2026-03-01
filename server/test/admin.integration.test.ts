@@ -44,7 +44,8 @@ describe("admin persistence integration", () => {
     const program = await prisma.program.create({
       data: {
         name: `Integration Program ${suffix}`,
-        degreeLevel: "Graduate"
+        degreeLevel: "Graduate",
+        isActive: true
       }
     });
 

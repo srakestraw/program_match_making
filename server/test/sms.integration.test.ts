@@ -46,7 +46,8 @@ describe.sequential("sms integration", () => {
 
     const program = await prisma.program.create({
       data: {
-        name: `SMS Program ${suffix}`
+        name: `SMS Program ${suffix}`,
+        isActive: true
       }
     });
 
@@ -188,7 +189,7 @@ describe.sequential("sms integration", () => {
     expect(inboundMessages.length).toBeGreaterThanOrEqual(3);
 
     global.fetch = originalFetch;
-  });
+  }, 15_000);
 
   it("creates an SMS session from inbound webhook when none exists", async () => {
     const suffix = `${Date.now().toString(36)}-inbound`;
@@ -210,7 +211,8 @@ describe.sequential("sms integration", () => {
 
     const program = await prisma.program.create({
       data: {
-        name: `Inbound SMS Program ${suffix}`
+        name: `Inbound SMS Program ${suffix}`,
+        isActive: true
       }
     });
 

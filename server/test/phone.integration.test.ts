@@ -48,7 +48,8 @@ describe.sequential("phone calling integration", () => {
 
     const program = await prisma.program.create({
       data: {
-        name: `Phone Program ${suffix}`
+        name: `Phone Program ${suffix}`,
+        isActive: true
       }
     });
 

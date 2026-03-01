@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   boardStateToProgramTraitRows,
+  computeProgramStatus,
   computeTraitImpacts,
   generateBrandVoicePreview,
+  isProgramDraft,
   pickNextTrait,
   rankProgramsByTraits,
   scoreCandidateSession,
@@ -173,6 +175,26 @@ describe("pickNextTrait", () => {
 
     expect(next.traitId).toBe("t3");
   });
+
+  it("penalizes repeated trait streaks so interview rotates", () => {
+    const next = pickNextTrait({
+      traits: [
+        { traitId: "t1", category: "ACADEMIC" },
+        { traitId: "t2", category: "MOTIVATION" }
+      ],
+      traitStates: [
+        { traitId: "t1", traitName: "T1", score0to5: 3.5, confidence0to1: 0.2 },
+        { traitId: "t2", traitName: "T2", score0to5: null, confidence0to1: 0.35 }
+      ],
+      traitImpacts: {
+        t1: 1,
+        t2: 0.8
+      },
+      recentTraitIds: ["t1", "t1", "t1"]
+    });
+
+    expect(next.traitId).toBe("t2");
+  });
 });
 
 describe("shouldTriggerCheckpoint", () => {
@@ -180,5 +202,52 @@ describe("shouldTriggerCheckpoint", () => {
     expect(shouldTriggerCheckpoint(1)).toBe(false);
     expect(shouldTriggerCheckpoint(3)).toBe(true);
     expect(shouldTriggerCheckpoint(6)).toBe(true);
+  });
+});
+
+describe("computeProgramStatus", () => {
+  it("returns DRAFT when degree level is missing", () => {
+    expect(
+      computeProgramStatus({
+        degreeLevel: " ",
+        department: "Business",
+        isActive: true
+      })
+    ).toBe("DRAFT");
+  });
+
+  it("returns DRAFT when department is missing", () => {
+    expect(
+      computeProgramStatus({
+        degreeLevel: "Masters",
+        department: "",
+        isActive: true
+      })
+    ).toBe("DRAFT");
+  });
+
+  it("returns ACTIVE for complete and active programs", () => {
+    expect(
+      computeProgramStatus({
+        degreeLevel: "Masters",
+        department: "Business",
+        isActive: true
+      })
+    ).toBe("ACTIVE");
+  });
+
+  it("returns INACTIVE for complete and inactive programs", () => {
+    expect(
+      computeProgramStatus({
+        degreeLevel: "Masters",
+        department: "Business",
+        isActive: false
+      })
+    ).toBe("INACTIVE");
+  });
+
+  it("matches isProgramDraft helper", () => {
+    expect(isProgramDraft({ degreeLevel: null, department: "Business" })).toBe(true);
+    expect(isProgramDraft({ degreeLevel: "Masters", department: "Business" })).toBe(false);
   });
 });

@@ -6,7 +6,10 @@ type SetWithTraits = SuggestedSet & { traitIds: string[] };
 
 export type TraitSetSectionProps = {
   sets: SetWithTraits[];
-  traitsById: Map<string, { id: string; name: string; definition: string | null }>;
+  traitsById: Map<
+    string,
+    { id: string; name: string; definition: string | null; status: "DRAFT" | "IN_REVIEW" | "ACTIVE" | "DEPRECATED" }
+  >;
   alreadyAddedTraitIds: Set<string>;
   selectedTraitIds: Set<string>;
   previewSetId: string | null;
@@ -54,9 +57,9 @@ export function TraitSetSection({
         onClick={() => setIsExpanded((prev) => !prev)}
         className="flex w-full items-center gap-1 text-left text-sm font-semibold text-slate-800 hover:text-slate-900"
         aria-expanded={isExpanded}
-        aria-label={isExpanded ? "Collapse suggested sets" : "Expand suggested sets"}
+        aria-label={isExpanded ? "Collapse sets" : "Expand sets"}
       >
-        Suggested sets
+        Sets (based on your selection)
         <span className="text-slate-500" aria-hidden>
           {isExpanded ? "\u25BC" : "\u25B6"}
         </span>
@@ -88,10 +91,10 @@ export function TraitSetSection({
                     <button
                       type="button"
                       onClick={() => onSelectSet(set.id)}
-                      aria-label={`Add all ${addableCount} traits from set ${set.name}`}
+                      aria-label={`Select set ${set.name}`}
                       className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
                     >
-                      Add all ({addableCount})
+                      Select set
                     </button>
                   </div>
                 </div>
@@ -108,7 +111,7 @@ export function TraitSetSection({
                             <span className="font-medium text-slate-800">{trait.name}</span>
                             {isAdded ? (
                               <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] text-slate-600">
-                                On board
+                                Already added
                               </span>
                             ) : isSelected ? (
                               <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] text-slate-600">
@@ -117,6 +120,11 @@ export function TraitSetSection({
                             ) : (
                               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
                                 Available
+                              </span>
+                            )}
+                            {trait.status !== "ACTIVE" && (
+                              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800">
+                                Excluded from scoring
                               </span>
                             )}
                           </div>

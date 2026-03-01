@@ -77,7 +77,7 @@ describe("SimulationLab", () => {
 
     render(<SimulationLab brandVoiceId="voice-1" request={requestMock} />);
 
-    await screen.findByRole("heading", { name: "Transcript" });
+    await screen.findByRole("heading", { name: "Chat" });
     await user.click(screen.getByRole("button", { name: "Start simulation" }));
 
     await waitFor(() => {

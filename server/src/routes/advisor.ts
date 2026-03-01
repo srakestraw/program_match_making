@@ -84,6 +84,7 @@ export const advisorRouter = Router();
 advisorRouter.get("/programs", async (_req, res) => {
   try {
     const programs = await prisma.program.findMany({
+      where: { isActive: true },
       select: { id: true, name: true },
       orderBy: { name: "asc" }
     });

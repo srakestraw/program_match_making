@@ -41,6 +41,13 @@ export function WidgetDropdown() {
         >
           <Link
             className="block px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+            to="/widget/branding"
+            role="menuitem"
+          >
+            Branding
+          </Link>
+          <Link
+            className="block px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
             to="/widget/embed"
             role="menuitem"
           >
@@ -52,6 +59,13 @@ export function WidgetDropdown() {
             role="menuitem"
           >
             Candidate Preview
+          </Link>
+          <Link
+            className="block px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+            to="/widget/orchestration"
+            role="menuitem"
+          >
+            Orchestration
           </Link>
         </div>
       )}

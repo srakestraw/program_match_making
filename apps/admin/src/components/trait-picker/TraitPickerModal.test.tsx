@@ -10,6 +10,8 @@ const baseTraits: TraitForPicker[] = [
     id: "trait-1",
     name: "Analytical Thinking",
     category: "ACADEMIC",
+    status: "ACTIVE",
+    completeness: { isComplete: true, percentComplete: 100, missing: [], counts: { positiveSignals: 3, negativeSignals: 2, questions: 1 } },
     definition: "Breaks problems into clear parts.",
     createdAt: "2026-02-01T00:00:00.000Z"
   },
@@ -17,6 +19,8 @@ const baseTraits: TraitForPicker[] = [
     id: "trait-2",
     name: "Data Storytelling",
     category: "ACADEMIC",
+    status: "ACTIVE",
+    completeness: { isComplete: true, percentComplete: 100, missing: [], counts: { positiveSignals: 3, negativeSignals: 2, questions: 1 } },
     definition: "Communicates data clearly.",
     createdAt: "2026-02-02T00:00:00.000Z"
   },
@@ -24,6 +28,8 @@ const baseTraits: TraitForPicker[] = [
     id: "trait-3",
     name: "Communication",
     category: "INTERPERSONAL",
+    status: "ACTIVE",
+    completeness: { isComplete: true, percentComplete: 100, missing: [], counts: { positiveSignals: 3, negativeSignals: 2, questions: 1 } },
     definition: "Conveys ideas effectively.",
     createdAt: "2026-02-03T00:00:00.000Z"
   }
@@ -56,27 +62,28 @@ describe("TraitPickerModal", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.click(screen.getByRole("button", { name: "Select Communication" }));
+    await user.click(screen.getByRole("checkbox", { name: "Communication" }));
 
-    const selectedRail = screen.getByLabelText("Selected traits");
-    expect(selectedRail).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Remove Communication from selection" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add 1 traits" })).toBeTruthy();
+    expect(screen.getByText("1 selected")).toBeTruthy();
   });
 
   it("selecting a set adds only traits that are not already added", async () => {
     const user = userEvent.setup();
     renderModal({ assignedTraitIds: new Set(["trait-1"]) });
 
+    await user.click(screen.getByRole("button", { name: "Expand sets" }));
     await user.click(screen.getByRole("button", { name: "Select set Analytics fundamentals" }));
 
-    expect(screen.getByRole("button", { name: "Remove Data Storytelling from selection" })).toBeTruthy();
-    expect(screen.queryByLabelText("Remove Analytical Thinking from selection")).toBeNull();
+    expect(screen.getByRole("checkbox", { name: "Data Storytelling, selected" })).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: "Analytical Thinking, selected" })).toBeNull();
   });
 
   it("shows a notice when selecting a set that is fully unavailable", async () => {
     const user = userEvent.setup();
     renderModal({ assignedTraitIds: new Set(["trait-1", "trait-2"]) });
 
+    await user.click(screen.getByRole("button", { name: "Expand sets" }));
     await user.click(screen.getByRole("button", { name: "Select set Analytics fundamentals" }));
 
     expect(screen.getByText("All traits in this set are already added.")).toBeTruthy();
@@ -86,8 +93,8 @@ describe("TraitPickerModal", () => {
     const user = userEvent.setup();
     const { onAddTraits } = renderModal();
 
-    await user.click(screen.getByRole("button", { name: "Select Analytical Thinking" }));
-    await user.click(screen.getByRole("button", { name: "Select Communication" }));
+    await user.click(screen.getByRole("checkbox", { name: "Analytical Thinking" }));
+    await user.click(screen.getByRole("checkbox", { name: "Communication" }));
 
     await user.click(screen.getByRole("button", { name: "Add 2 traits" }));
 
@@ -100,7 +107,7 @@ describe("TraitPickerModal", () => {
   it("disables already-added traits and shows Added indicator", () => {
     renderModal({ assignedTraitIds: new Set(["trait-3"]) });
 
-    const selectButton = screen.getByRole("button", { name: "Select Communication" });
+    const selectButton = screen.getByRole("checkbox", { name: "Communication (on board)" });
     expect(selectButton.hasAttribute("disabled")).toBe(true);
     expect(screen.getByText("Added")).toBeTruthy();
     expect(screen.getByText("Already on board")).toBeTruthy();

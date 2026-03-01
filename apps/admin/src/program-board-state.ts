@@ -4,6 +4,7 @@ export type BoardTrait = {
   id: string;
   name: string;
   category: string;
+  status?: "DRAFT" | "IN_REVIEW" | "ACTIVE" | "DEPRECATED";
 };
 
 export type ProgramBoardState = Record<ProgramTraitPriorityBucket, BoardTrait[]>;

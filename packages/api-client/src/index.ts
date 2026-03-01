@@ -29,6 +29,7 @@ const scoringSnapshotSchema = z.object({
     z.object({
       traitId: z.string(),
       traitName: z.string(),
+      publicLabel: z.string().optional(),
       score_1_to_5: z.number().nullable(),
       confidence: z.enum(["low", "medium", "high"]).nullable(),
       evidence: z.array(z.string()),
@@ -52,6 +53,7 @@ const programFitSchema = z.object({
             z.object({
               traitId: z.string(),
               traitName: z.string(),
+              publicLabel: z.string().optional(),
               contribution: z.number()
             })
           ),
@@ -146,11 +148,69 @@ const programQuestionSchema = z.object({
   id: z.string(),
   traitId: z.string(),
   prompt: z.string(),
+  narrativeIntro: z.string().nullable().optional(),
+  answerStyle: z.enum(["RADIO", "CARD_GRID", "SLIDER", "CHAT"]).nullable().optional(),
+  answerOptionsMeta: z.array(z.any()).optional(),
   type: z.enum(["chat", "quiz"]),
   options: z.array(z.string()),
   traitName: z.string(),
+  publicLabel: z.string().optional(),
+  oneLineHook: z.string().nullable().optional(),
+  archetypeTag: z.string().nullable().optional(),
+  displayIcon: z.string().nullable().optional(),
+  visualMood: z.string().nullable().optional(),
   bucket: bucketSchema,
   traitSortOrder: z.number().int()
+});
+
+const quizExperienceConfigSchema = z.object({
+  id: z.string(),
+  headline: z.string(),
+  subheadline: z.string(),
+  estimatedTimeLabel: z.string(),
+  tonePreset: z.string(),
+  gradientSet: z.string(),
+  motionIntensity: z.enum(["LOW", "MEDIUM", "HIGH"]),
+  rankingMotionStyle: z.string(),
+  revealStyle: z.string(),
+  introMediaPrompt: z.string().nullable(),
+  revealMediaPrompt: z.string().nullable()
+});
+
+const widgetThemeTokensSchema = z.object({
+  fontFamily: z.string(),
+  headingFontFamily: z.string().optional(),
+  colors: z.object({
+    primary: z.string(),
+    primaryHover: z.string(),
+    background: z.string(),
+    surface: z.string(),
+    text: z.string(),
+    mutedText: z.string(),
+    border: z.string()
+  }),
+  radii: z.object({
+    sm: z.number(),
+    md: z.number(),
+    lg: z.number()
+  }),
+  shadows: z
+    .object({
+      card: z.string().optional()
+    })
+    .optional(),
+  logoUrl: z.string().optional()
+});
+
+const widgetThemeSchema = z.object({
+  id: z.string().nullable(),
+  name: z.string(),
+  status: z.enum(["DRAFT", "ACTIVE"]),
+  source: z.enum(["MANUAL", "URL_SCRAPE", "PRESET"]),
+  sourceUrl: z.string().nullable(),
+  tokens: widgetThemeTokensSchema,
+  createdAt: z.string().nullable(),
+  updatedAt: z.string().nullable()
 });
 
 const scorecardSchema = z.object({
@@ -379,6 +439,7 @@ export type ProgramFit = z.infer<typeof programFitSchema>;
 export type LeadStatus = z.infer<typeof leadStatusSchema>;
 export type AdvisorLeadListItem = z.infer<typeof advisorLeadListItemSchema>;
 export type AdvisorLeadDetail = z.infer<typeof advisorLeadDetailSchema>;
+export type WidgetTheme = z.infer<typeof widgetThemeSchema>;
 
 export type ApiClientConfig = {
   baseUrl: string;
@@ -388,7 +449,11 @@ const interviewQuestionSchema = z.object({
   id: z.string(),
   traitId: z.string(),
   traitName: z.string(),
+  publicLabel: z.string().optional(),
   prompt: z.string(),
+  narrativeIntro: z.string().nullable().optional(),
+  answerStyle: z.enum(["RADIO", "CARD_GRID", "SLIDER", "CHAT"]).nullable().optional(),
+  answerOptionsMeta: z.array(z.any()).optional(),
   type: z.enum(["chat", "quiz"]),
   options: z.array(z.string())
 });
@@ -407,6 +472,7 @@ const interviewSessionSchema = z.object({
   brandVoiceId: z.string().nullable().optional(),
   realtimeVoiceName: z.string().optional(),
   language: z.string().optional(),
+  languageTag: z.string().optional(),
   systemPrompt: z.string().optional(),
   initialPrompt: z.string(),
   scoring_snapshot: scoringSnapshotSchema,
@@ -514,6 +580,7 @@ export const createApiClient = ({ baseUrl }: ApiClientConfig) => {
         `/api/interview/sessions/${sessionId}/turns`,
         input,
         z.object({
+          languageTag: z.string().optional(),
           scoring_snapshot: scoringSnapshotSchema,
           program_fit: programFitSchema,
           nextQuestion: interviewQuestionSchema.nullable(),
@@ -527,6 +594,7 @@ export const createApiClient = ({ baseUrl }: ApiClientConfig) => {
       input: {
         mode: "voice" | "chat" | "quiz";
         action: "stop" | "continue" | "focus";
+        language?: string;
         focusTraitIds?: string[];
         askedTraitIds?: string[];
         askedQuestionIds?: string[];
@@ -537,6 +605,7 @@ export const createApiClient = ({ baseUrl }: ApiClientConfig) => {
         `/api/interview/sessions/${sessionId}/checkpoint`,
         input,
         z.object({
+          languageTag: z.string().optional(),
           nextQuestion: interviewQuestionSchema.nullable(),
           scoring_snapshot: scoringSnapshotSchema,
           program_fit: programFitSchema
@@ -544,12 +613,20 @@ export const createApiClient = ({ baseUrl }: ApiClientConfig) => {
       ),
     appendTranscript: (sessionId: string, turns: TranscriptTurnInput[]) => post(`/api/sessions/${sessionId}/transcript`, { turns }),
     completeSession: (sessionId: string) => post(`/api/sessions/${sessionId}/complete`, undefined, completeSessionSchema),
-    getRealtimeToken: (input?: { brandVoiceId?: string; voiceName?: string; language?: string }) =>
+    getRealtimeToken: (input?: { brandVoiceId?: string; voiceName?: string; language?: string; debug?: boolean }) =>
       post(
         "/api/realtime/token",
         input,
         z.object({
-          client_secret: z.object({ value: z.string(), expires_at: z.number().optional() })
+          client_secret: z.object({ value: z.string(), expires_at: z.number().optional() }),
+          debug: z
+            .object({
+              selectedVoice: z.string().optional(),
+              brandVoiceId: z.string().nullable().optional(),
+              language: z.string().optional(),
+              brandVoiceName: z.string().nullable().optional()
+            })
+            .optional()
         })
       ),
     getPublicPrograms: () => get("/api/public/programs", z.object({ data: z.array(publicProgramSchema) })),
@@ -590,6 +667,11 @@ export const createApiClient = ({ baseUrl }: ApiClientConfig) => {
               z.object({
                 traitId: z.string(),
                 traitName: z.string(),
+                publicLabel: z.string().optional(),
+                oneLineHook: z.string().nullable().optional(),
+                archetypeTag: z.string().nullable().optional(),
+                displayIcon: z.string().nullable().optional(),
+                visualMood: z.string().nullable().optional(),
                 bucket: bucketSchema,
                 sortOrder: z.number().int(),
                 questions: z.array(
@@ -597,6 +679,9 @@ export const createApiClient = ({ baseUrl }: ApiClientConfig) => {
                     id: z.string(),
                     traitId: z.string(),
                     prompt: z.string(),
+                    narrativeIntro: z.string().nullable().optional(),
+                    answerStyle: z.enum(["RADIO", "CARD_GRID", "SLIDER", "CHAT"]).nullable().optional(),
+                    answerOptionsMeta: z.array(z.any()).optional(),
                     type: z.enum(["chat", "quiz"]),
                     options: z.array(z.string())
                   })
@@ -607,6 +692,9 @@ export const createApiClient = ({ baseUrl }: ApiClientConfig) => {
           })
         })
       ),
+    getQuizExperienceConfig: () => get("/api/public/quiz-experience", z.object({ data: quizExperienceConfigSchema })),
+    getPublicWidgetTheme: (theme?: "active" | "draft") =>
+      get(`/api/public/widget-theme${encodeQuery({ theme })}`, z.object({ data: widgetThemeSchema })),
     createPublicLead: (input: {
       firstName?: string;
       lastName?: string;

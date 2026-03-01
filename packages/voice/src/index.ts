@@ -11,6 +11,9 @@ export type RealtimeSessionConfig = {
   model?: string;
   onTranscriptTurn?: (turn: TranscriptTurn) => void;
   onStateChange?: (state: ConnectionState) => void;
+  onDetectedLanguage?: (languageTag: string) => void;
+  onAssistantDone?: () => void;
+  onAssistantAudioStart?: () => void;
 };
 
 export class RealtimeSession {
@@ -19,6 +22,8 @@ export class RealtimeSession {
   private audioTrack: MediaStreamTrack | null = null;
   private localStream: MediaStream | null = null;
   private state: ConnectionState = "idle";
+  private peerConnected = false;
+  private dataChannelOpened = false;
 
   constructor(private readonly config: RealtimeSessionConfig = {}) {}
 
@@ -39,6 +44,8 @@ export class RealtimeSession {
 
   async connect(ephemeralKey: string) {
     this.setState("connecting");
+    this.peerConnected = false;
+    this.dataChannelOpened = false;
 
     this.peerConnection = new RTCPeerConnection();
     this.localStream = new MediaStream();
@@ -56,17 +63,37 @@ export class RealtimeSession {
     };
 
     this.dataChannel = this.peerConnection.createDataChannel("oai-events");
-    this.dataChannel.onmessage = (event) => this.handleServerEvent(event.data);
+    const channelReady = new Promise<void>((resolve) => {
+      if (!this.dataChannel) {
+        resolve();
+        return;
+      }
+      this.dataChannel.onopen = () => {
+        this.dataChannelOpened = true;
+        this.maybeSetConnected();
+        resolve();
+      };
+      this.dataChannel.onclose = () => {
+        this.dataChannelOpened = false;
+      };
+      this.dataChannel.onerror = () => {
+        this.dataChannelOpened = false;
+      };
+      this.dataChannel.onmessage = (event) => this.handleServerEvent(event.data);
+    });
 
     this.peerConnection.onconnectionstatechange = () => {
       if (!this.peerConnection) return;
       switch (this.peerConnection.connectionState) {
         case "connected":
-          this.setState("connected");
+          this.peerConnected = true;
+          this.maybeSetConnected();
           break;
         case "disconnected":
         case "failed":
         case "closed":
+          this.peerConnected = false;
+          this.dataChannelOpened = false;
           this.setState("disconnected");
           break;
         default:
@@ -94,8 +121,11 @@ export class RealtimeSession {
 
     const answer = await response.text();
     await this.peerConnection.setRemoteDescription({ type: "answer", sdp: answer });
-
-    this.setState("connected");
+    await Promise.race([
+      channelReady,
+      new Promise<void>((resolve) => window.setTimeout(resolve, 4000))
+    ]);
+    this.maybeSetConnected();
   }
 
   updateInstructions(instructions: string) {
@@ -103,6 +133,23 @@ export class RealtimeSession {
       type: "session.update",
       session: {
         instructions
+      }
+    });
+  }
+
+  updateSession(input: { instructions?: string; inputAudioLanguage?: string }) {
+    this.sendEvent({
+      type: "session.update",
+      session: {
+        ...(input.instructions ? { instructions: input.instructions } : {}),
+        ...(input.inputAudioLanguage
+          ? {
+              input_audio_transcription: {
+                model: "gpt-4o-mini-transcribe",
+                language: input.inputAudioLanguage
+              }
+            }
+          : {})
       }
     });
   }
@@ -124,11 +171,19 @@ export class RealtimeSession {
         transcript?: string;
         delta?: string;
         item_id?: string;
+        language?: string;
       };
 
       if (!event.type) return;
 
+      if (event.type.includes("response.audio") || event.type.includes("response.output_audio")) {
+        this.config.onAssistantAudioStart?.();
+      }
+
       if (event.type.includes("input_audio_transcription") && event.transcript) {
+        if (typeof event.language === "string" && event.language.length > 0) {
+          this.config.onDetectedLanguage?.(event.language);
+        }
         this.config.onTranscriptTurn?.({
           id: event.item_id ?? crypto.randomUUID(),
           ts: new Date().toISOString(),
@@ -144,6 +199,14 @@ export class RealtimeSession {
           speaker: "assistant",
           text: event.delta
         });
+      }
+
+      if (
+        event.type === "response.done" ||
+        event.type.includes("response.audio.done") ||
+        event.type.includes("response.output_audio.done")
+      ) {
+        this.config.onAssistantDone?.();
       }
     } catch {
       // Ignore malformed events from the wire.
@@ -164,6 +227,12 @@ export class RealtimeSession {
   private setState(state: ConnectionState) {
     this.state = state;
     this.config.onStateChange?.(state);
+  }
+
+  private maybeSetConnected() {
+    if (this.peerConnected && this.dataChannelOpened && this.state !== "connected") {
+      this.setState("connected");
+    }
   }
 
   private sendEvent(payload: unknown) {

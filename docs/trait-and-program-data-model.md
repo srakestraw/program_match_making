@@ -12,8 +12,37 @@ Traits are reusable scoring dimensions (e.g. Communication, Leadership). Program
 | **TraitCategory** | `ACADEMIC`, `INTERPERSONAL`, `MOTIVATION`, `EXPERIENCE`, `LEADERSHIP`, `PROBLEM_SOLVING` | Grouping and question diversity (e.g. avoid too many same-category questions in a row). |
 | **ProgramTraitPriorityBucket** | `CRITICAL`, `VERY_IMPORTANT`, `IMPORTANT`, `NICE_TO_HAVE` | How important a trait is for a program; used for weighted scoring and explainability. |
 | **TraitQuestionType** | `CHAT`, `QUIZ` | Elicitation style: open-ended (chat) vs structured options (quiz). |
+| **TraitStatus** | `DRAFT`, `IN_REVIEW`, `ACTIVE`, `DEPRECATED` | Lifecycle state; only `ACTIVE` traits are used in scoring. See [Trait status](#trait-status) below. |
 
-Domain constants: `traitCategories`, `programTraitPriorityBuckets`, `traitQuestionTypes`.
+Domain constants: `traitCategories`, `programTraitPriorityBuckets`, `traitQuestionTypes`, `traitStatuses`.
+
+---
+
+## Trait status
+
+**TraitStatus** controls whether a trait is ready for use and whether it is included in scoring.
+
+| Value | Meaning |
+|-------|--------|
+| **DRAFT** | Default. Trait is being edited; may be incomplete. Not used in scoring. |
+| **IN_REVIEW** | Ready for review; may be complete. Not used in scoring. |
+| **ACTIVE** | Complete and approved. **Only ACTIVE traits are included in scoring.** |
+| **DEPRECATED** | No longer used; left unchanged by status scripts. Not used in scoring. |
+
+**Schema:** `Trait.status` in `server/prisma/schema.prisma` (enum `TraitStatus`, default `DRAFT`).  
+**Domain type:** `TraitStatus` in `packages/domain/src/index.ts`; constant list `traitStatuses`.
+
+### Completeness and activation
+
+A trait is **complete** when it has: non-empty `name`, valid `category`, non-empty `definition`, at least 3 positive rubric signals, at least 2 negative rubric signals, and at least 1 trait question. Only complete traits can be set to `ACTIVE`. Server validation on status change returns `code: "TRAIT_INCOMPLETE"` with `missing` and `details` when the trait is incomplete. See `docs/trait-lifecycle-and-completeness.md` and `server/src/domain/traits/completeness.ts`.
+
+### Scoring and program boards
+
+Only **ACTIVE** traits are included in session scoring. If a program’s trait list references a non-active trait, that trait is excluded from scoring and a warning is returned (trait id, name, status, reason). Admin UI and “Add Trait” flows can show non-active traits with warnings.
+
+### Status script
+
+`pnpm --filter @pmm/server update-trait-status` (optionally `--dry-run`) sets status from completeness: complete → `ACTIVE`, incomplete → `DRAFT`. **DEPRECATED** traits are never changed. See `server/src/scripts/update-trait-status.ts`.
 
 ---
 
@@ -30,6 +59,7 @@ A **Trait** is a single dimension used to evaluate candidates. It has a name, ca
 | `id` | `String` | cuid | Primary key. |
 | `name` | `String` | — | Unique display name. |
 | `category` | `TraitCategory` | — | Category enum. |
+| `status` | `TraitStatus` | DRAFT | Lifecycle state; only ACTIVE traits are used in scoring. |
 | `definition` | `String?` | — | Human-readable definition for prompts and scoring. |
 | `rubricScaleMin` | `Int` | 0 | Minimum of scoring scale (e.g. 0). |
 | `rubricScaleMax` | `Int` | 5 | Maximum of scoring scale (e.g. 5). |
@@ -55,6 +85,7 @@ type Trait = {
   id: string;
   name: string;
   category: TraitCategory;
+  status: TraitStatus;
   definition: string | null;
   rubricScaleMin: number;
   rubricScaleMax: number;
@@ -200,8 +231,17 @@ type ProgramTrait = {
 
 | Area | Endpoints |
 |------|-----------|
-| Admin traits | `GET/POST /api/admin/traits`, `GET/PUT/DELETE /api/admin/traits/:id`, `GET/POST /api/admin/traits/:id/questions`, `PUT/DELETE /api/admin/questions/:questionId` |
+| Admin traits | `GET/POST /api/admin/traits`, `GET/PUT/DELETE /api/admin/traits/:id`, `POST /api/admin/traits/:id/generate-signals`, `POST /api/admin/traits/:id/generate-questions`, `GET/POST /api/admin/traits/:id/questions`, `PUT/DELETE /api/admin/questions/:questionId` |
 | Admin programs | `GET/POST /api/admin/programs`, `GET/PUT/DELETE /api/admin/programs/:id`, `GET/PUT /api/admin/programs/:id/traits` |
 | Public | `GET /api/public/programs`, `GET /api/public/programs/:id`, `GET /api/public/programs/:id/questions?type=chat|quiz` |
 
 Schema and migrations: `server/prisma/schema.prisma`; generate with `pnpm db:generate`, apply with `pnpm db:migrate`.
+
+---
+
+## AI-generated trait content
+
+Trait rubric signals (positive, negative, follow-ups) and trait questions can be generated with OpenAI:
+
+- **Admin UI:** When editing a trait, use “Generate rubric with AI” to fill positive/negative signals and follow-ups, and “Generate questions with AI” to add one CHAT and one QUIZ question. Both require `OPENAI_API_KEY` to be set on the server.
+- **Bulk backfill:** Run `pnpm --filter @pmm/server backfill-trait-content` to fill missing signals and questions for all traits in the database. Use `--dry-run` to log what would be updated without writing. Requires `OPENAI_API_KEY`.

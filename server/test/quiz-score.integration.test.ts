@@ -31,6 +31,7 @@ describe("quiz scoring integration", () => {
         data: {
           name: `Quiz Trait A ${suffix}`,
           category: "MOTIVATION",
+          status: "ACTIVE",
           rubricScaleMin: 0,
           rubricScaleMax: 5
         }
@@ -39,6 +40,7 @@ describe("quiz scoring integration", () => {
         data: {
           name: `Quiz Trait B ${suffix}`,
           category: "INTERPERSONAL",
+          status: "ACTIVE",
           rubricScaleMin: 0,
           rubricScaleMax: 5
         }
@@ -47,7 +49,8 @@ describe("quiz scoring integration", () => {
 
     const program = await prisma.program.create({
       data: {
-        name: `Quiz Program ${suffix}`
+        name: `Quiz Program ${suffix}`,
+        isActive: true
       }
     });
 

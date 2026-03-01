@@ -1,10 +1,11 @@
-import { PreferredChannel, ProgramTraitPriorityBucket, TraitQuestionType } from "@prisma/client";
+import { PreferredChannel, Prisma, ProgramTraitPriorityBucket, TraitQuestionType } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { upsertCandidate } from "../lib/candidates.js";
 import { sendError, sendValidationError } from "../lib/http.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
+import { defaultWidgetThemeTokens, normalizeWidgetThemeTokens } from "../lib/widgetTheme.js";
 
 const bucketRank: Record<ProgramTraitPriorityBucket, number> = {
   CRITICAL: 0,
@@ -15,6 +16,9 @@ const bucketRank: Record<ProgramTraitPriorityBucket, number> = {
 
 const querySchema = z.object({
   type: z.enum(["chat", "quiz"]).optional()
+});
+const widgetThemeQuerySchema = z.object({
+  theme: z.enum(["active", "draft"]).optional()
 });
 
 const idParamSchema = z.object({ id: z.string().min(1) });
@@ -47,6 +51,22 @@ const parseOptions = (optionsJson: string | null): string[] => {
 
   return [];
 };
+
+const parseOptionMeta = (raw: string | null) => {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const isMissingWidgetThemeTableError = (error: unknown) =>
+  error instanceof Prisma.PrismaClientKnownRequestError &&
+  error.code === "P2021" &&
+  typeof error.meta?.table === "string" &&
+  String(error.meta.table).includes("WidgetTheme");
 
 export const publicRouter = Router();
 const leadRateLimit = createRateLimiter({
@@ -100,6 +120,21 @@ publicRouter.post("/leads", leadRateLimit, async (req, res) => {
       leadId: savedLead.id
     });
   } catch (error) {
+    if (isMissingWidgetThemeTableError(error)) {
+      res.json({
+        data: {
+          id: null,
+          name: "Default Theme",
+          status: "ACTIVE",
+          source: "PRESET",
+          sourceUrl: null,
+          tokens: defaultWidgetThemeTokens,
+          createdAt: null,
+          updatedAt: null
+        }
+      });
+      return;
+    }
     if (error instanceof z.ZodError) {
       sendValidationError(res, error);
       return;
@@ -111,6 +146,7 @@ publicRouter.post("/leads", leadRateLimit, async (req, res) => {
 publicRouter.get("/programs", async (_req, res) => {
   try {
     const programs = await prisma.program.findMany({
+      where: { isActive: true },
       orderBy: { name: "asc" }
     });
 
@@ -145,7 +181,7 @@ publicRouter.get("/programs/:id", async (req, res) => {
       }
     });
 
-    if (!program) {
+    if (!program || !program.isActive) {
       sendError(res, 404, "Program not found");
       return;
     }
@@ -191,7 +227,7 @@ publicRouter.get("/programs/:id/questions", async (req, res) => {
     const { type } = querySchema.parse(req.query);
 
     const program = await prisma.program.findUnique({ where: { id } });
-    if (!program) {
+    if (!program || !program.isActive) {
       sendError(res, 404, "Program not found");
       return;
     }
@@ -223,12 +259,20 @@ publicRouter.get("/programs/:id/questions", async (req, res) => {
     const grouped = orderedTraits.map((row) => ({
       traitId: row.traitId,
       traitName: row.trait.name,
+      publicLabel: row.trait.publicLabel ?? row.trait.name,
+      oneLineHook: row.trait.oneLineHook,
+      archetypeTag: row.trait.archetypeTag,
+      displayIcon: row.trait.displayIcon,
+      visualMood: row.trait.visualMood,
       bucket: row.bucket,
       sortOrder: row.sortOrder,
       questions: row.trait.questions.map((question) => ({
         id: question.id,
         traitId: question.traitId,
         prompt: question.prompt,
+        narrativeIntro: question.narrativeIntro,
+        answerStyle: question.answerStyle,
+        answerOptionsMeta: parseOptionMeta(question.answerOptionsMetaJson),
         type: question.type === TraitQuestionType.CHAT ? "chat" : "quiz",
         options: parseOptions(question.optionsJson)
       }))
@@ -257,5 +301,65 @@ publicRouter.get("/programs/:id/questions", async (req, res) => {
       return;
     }
     sendError(res, 400, error instanceof Error ? error.message : "Could not fetch questions");
+  }
+});
+
+publicRouter.get("/quiz-experience", async (_req, res) => {
+  try {
+    const config =
+      (await prisma.quizExperienceConfig.findUnique({ where: { id: "default" } })) ??
+      (await prisma.quizExperienceConfig.create({ data: { id: "default" } }));
+    res.json({ data: config });
+  } catch (error) {
+    sendError(res, 400, error instanceof Error ? error.message : "Could not fetch quiz experience");
+  }
+});
+
+publicRouter.get("/widget-theme", async (req, res) => {
+  try {
+    const { theme } = widgetThemeQuerySchema.parse(req.query);
+    const targetStatus = theme === "draft" ? "DRAFT" : "ACTIVE";
+
+    const selected =
+      (await prisma.widgetTheme.findFirst({
+        where: { status: targetStatus },
+        orderBy: { updatedAt: "desc" }
+      })) ??
+      (theme === "draft"
+        ? await prisma.widgetTheme.findFirst({
+            where: { status: "ACTIVE" },
+            orderBy: { updatedAt: "desc" }
+          })
+        : null);
+
+    res.json({
+      data: selected
+        ? {
+            id: selected.id,
+            name: selected.name,
+            status: selected.status,
+            source: selected.source,
+            sourceUrl: selected.sourceUrl,
+            tokens: normalizeWidgetThemeTokens(selected.tokens),
+            createdAt: selected.createdAt.toISOString(),
+            updatedAt: selected.updatedAt.toISOString()
+          }
+        : {
+            id: null,
+            name: "Default Theme",
+            status: "ACTIVE",
+            source: "PRESET",
+            sourceUrl: null,
+            tokens: defaultWidgetThemeTokens,
+            createdAt: null,
+            updatedAt: null
+          }
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      sendValidationError(res, error);
+      return;
+    }
+    sendError(res, 400, error instanceof Error ? error.message : "Could not fetch widget theme");
   }
 });

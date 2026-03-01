@@ -25,7 +25,7 @@ describe("TraitProgramsPanel", () => {
       />
     );
 
-    expect(screen.getByText("Programs using this trait")).toBeTruthy();
+    expect(screen.getByText("Used In Programs")).toBeTruthy();
     expect(screen.getByText("2 programs")).toBeTruthy();
     expect(screen.getByText("Program One")).toBeTruthy();
     expect(screen.getByText("Program Two")).toBeTruthy();

@@ -1,5 +1,6 @@
 import { ProgramTraitPriorityBucket } from "@prisma/client";
 import { prisma } from "./prisma.js";
+import { filterActivePrograms } from "./program-activity.js";
 
 export type SnapshotConfidence = "low" | "medium" | "high" | null;
 
@@ -141,26 +142,36 @@ export const computeProgramFit = async (sessionId: string, snapshot: ScoringSnap
     take: 24
   });
 
-  const programs = scopedPrograms.length > 0
-    ? scopedPrograms
-    : await prisma.program.findMany({
-        include: {
-          traits: {
+  const scopedActivePrograms = filterActivePrograms(scopedPrograms, {
+    context: `computeProgramFit:session:${sessionId}:department-scope`
+  });
+
+  const allPrograms =
+    scopedActivePrograms.length > 0
+      ? scopedActivePrograms
+      : filterActivePrograms(
+          await prisma.program.findMany({
             include: {
-              trait: {
-                select: {
-                  name: true
+              traits: {
+                include: {
+                  trait: {
+                    select: {
+                      name: true
+                    }
+                  }
                 }
               }
-            }
-          }
-        },
-        orderBy: [{ updatedAt: "desc" }, { name: "asc" }],
-        take: 24
-      });
+            },
+            orderBy: [{ updatedAt: "desc" }, { name: "asc" }],
+            take: 24
+          }),
+          { context: `computeProgramFit:session:${sessionId}:global-scope` }
+        );
+
+  const selectedProgramId = allPrograms.some((program) => program.id === session.programId) ? session.programId : null;
 
   return computeProgramFitFromData({
-    programs: programs.map((program) => ({
+    programs: allPrograms.map((program) => ({
       id: program.id,
       name: program.name,
       traits: program.traits.map((trait) => ({
@@ -170,6 +181,6 @@ export const computeProgramFit = async (sessionId: string, snapshot: ScoringSnap
       }))
     })),
     snapshot,
-    selectedProgramId: session.programId ?? null
+    selectedProgramId
   });
 };

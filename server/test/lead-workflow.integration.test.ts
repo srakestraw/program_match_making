@@ -37,7 +37,8 @@ describe("lead capture and advisor workflow integration", () => {
 
     const program = await prisma.program.create({
       data: {
-        name: `Lead Program ${suffix}`
+        name: `Lead Program ${suffix}`,
+        isActive: true
       }
     });
 

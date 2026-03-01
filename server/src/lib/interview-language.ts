@@ -28,5 +28,7 @@ export const buildInterviewSystemPrompt = (input: {
   const basePrompt =
     input.brandVoicePrompt?.trim() ||
     "You are a warm, concise admissions interviewer. Ask one question at a time and keep guidance practical.";
-  return `${basePrompt}\n\n${languageGuardrailForTag(language)}`;
+  const rotationGuardrails =
+    "Keep trait coverage broad: ask at most one brief follow-up for the same trait, then move to a different trait unless the candidate asks to stay on it.";
+  return `${basePrompt}\n\n${rotationGuardrails}\n\n${languageGuardrailForTag(language)}`;
 };

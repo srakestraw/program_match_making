@@ -18,9 +18,15 @@
     "delete-all-traits": "tsx src/scripts/delete-all-traits.ts",
     "delete-programs-except-data-science": "tsx src/scripts/delete-programs-except-data-science.ts",
     "cleanup:mock": "tsx src/scripts/cleanup-mock-data.ts",
+    "clean-traits-programs-candidates": "tsx src/scripts/clean-traits-programs-candidates.ts",
+    "delete-integration-test-data": "tsx src/scripts/delete-integration-test-data.ts",
+    "cleanup-non-seed-traits-programs": "tsx src/scripts/cleanup-non-seed-traits-programs.ts",
     "seed:gsu-voice": "tsx src/scripts/seed-gsu-brand-voice.ts",
     "seed:validate": "tsx src/scripts/validate-seed-payloads.ts",
-    "seed:gsu-programs": "tsx src/scripts/seed-gsu-programs.ts"
+    "seed:generate": "tsx src/scripts/seed-generate.ts",
+    "seed:gsu-programs": "tsx src/scripts/seed-gsu-programs.ts",
+    "backfill-trait-content": "tsx src/scripts/backfill-trait-content.ts",
+    "update-trait-status": "tsx src/scripts/update-trait-status.ts"
   },
   "dependencies": {
     "@pmm/domain": "workspace:*",
@@ -28,6 +34,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "playwright": "^1.52.0",
     "ws": "^8.19.0",
     "zod": "^3.24.1"
   },

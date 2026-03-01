@@ -48,7 +48,8 @@ export const programsSeed = [
   { name: "MBA/Master of Health Administration", description: "Integrated business and healthcare leadership graduate pathway.", degreeLevel: "Dual Master's", department: "J. Mack Robinson College of Business" },
   { name: "Professional Accountancy, Master of (Cohort)", description: "Cohort-based professional accountancy graduate training.", degreeLevel: "Master's", department: "J. Mack Robinson College of Business" },
   { name: "Quantitative Risk Analysis & Management, M.S.", description: "Quantitative graduate program focused on risk analytics and decision support.", degreeLevel: "M.S.", department: "J. Mack Robinson College of Business" },
-  { name: "Supply Chain Management, M.S.", description: "Graduate program in operations, logistics, and supply chain strategy.", degreeLevel: "M.S.", department: "J. Mack Robinson College of Business" }
+  { name: "Supply Chain Management, M.S.", description: "Graduate program in operations, logistics, and supply chain strategy.", degreeLevel: "M.S.", department: "J. Mack Robinson College of Business" },
+  { name: "Data Science and Analytics, M.S.A.", description: "STEM-designated analytics program with Data Scientist and Citizen Data Scientist tracks, covering data programming, machine learning, deep learning, generative AI, model evaluation, and data storytelling through applied industry projects.", degreeLevel: "M.S.A.", department: "J. Mack Robinson College of Business" }
 ];
 
 export type ProgramTraitPlanRow = {
@@ -154,5 +155,70 @@ export const programTraitPlan: ProgramTraitPlanRow[] = [
   { programName: "Supply Chain Management, M.S.", traitName: "Analytical & Quantitative Reasoning", bucket: "CRITICAL", sortOrder: 2, notes: null },
   { programName: "Supply Chain Management, M.S.", traitName: "Technology Systems Thinking", bucket: "VERY_IMPORTANT", sortOrder: 1, notes: null },
   { programName: "Supply Chain Management, M.S.", traitName: "Stakeholder Communication", bucket: "IMPORTANT", sortOrder: 1, notes: null },
-  { programName: "Supply Chain Management, M.S.", traitName: "Strategic Business Acumen", bucket: "NICE_TO_HAVE", sortOrder: 1, notes: null }
+  { programName: "Supply Chain Management, M.S.", traitName: "Strategic Business Acumen", bucket: "NICE_TO_HAVE", sortOrder: 1, notes: null },
+  { programName: "Data Science and Analytics, M.S.A.", traitName: "Data Analytics & Visualization", bucket: "CRITICAL", sortOrder: 1, notes: null },
+  { programName: "Data Science and Analytics, M.S.A.", traitName: "Applied AI & Automation", bucket: "CRITICAL", sortOrder: 2, notes: null },
+  { programName: "Data Science and Analytics, M.S.A.", traitName: "Statistical Modeling", bucket: "VERY_IMPORTANT", sortOrder: 1, notes: null },
+  { programName: "Data Science and Analytics, M.S.A.", traitName: "Technology Systems Thinking", bucket: "IMPORTANT", sortOrder: 1, notes: null },
+  { programName: "Data Science and Analytics, M.S.A.", traitName: "Stakeholder Communication", bucket: "NICE_TO_HAVE", sortOrder: 1, notes: null }
 ];
+
+/** QUIZ options per doc: exactly ["Beginner","Developing","Proficient","Advanced"] */
+export const QUIZ_OPTIONS_JSON = '["Beginner","Developing","Proficient","Advanced"]';
+
+export type TraitQuestionSeedRow = {
+  traitName: string;
+  type: "CHAT" | "QUIZ";
+  prompt: string;
+  optionsJson?: string;
+};
+
+/** Build traitQuestionsSeed: 2 CHAT + 1 QUIZ per trait with required optionsJson for QUIZ. */
+export function buildTraitQuestionsSeed(): TraitQuestionSeedRow[] {
+  const rows: TraitQuestionSeedRow[] = [];
+  for (const t of traitsSeed) {
+    rows.push(
+      {
+        traitName: t.name,
+        type: "CHAT",
+        prompt: `Describe a situation that demonstrates your ability in ${t.name}.`
+      },
+      {
+        traitName: t.name,
+        type: "CHAT",
+        prompt: `Give an example of how you have applied ${t.definition}.`
+      },
+      {
+        traitName: t.name,
+        type: "QUIZ",
+        prompt: `How would you rate your current level in this area?`,
+        optionsJson: QUIZ_OPTIONS_JSON
+      }
+    );
+  }
+  return rows;
+}
+
+/** Default rubric lines (3 positive, 3 negative, 2 follow-ups) derived from definition for completeness. */
+export function defaultRubricForTrait(definition: string): {
+  rubricPositiveSignals: string;
+  rubricNegativeSignals: string;
+  rubricFollowUps: string;
+} {
+  return {
+    rubricPositiveSignals: [
+      `Demonstrates or applies: ${definition}`,
+      "Provides clear evidence or examples.",
+      "Shows consistency with the competency."
+    ].join("\n"),
+    rubricNegativeSignals: [
+      "Little or no relevant evidence provided.",
+      "Examples are vague or off-topic.",
+      "Does not align with the competency."
+    ].join("\n"),
+    rubricFollowUps: [
+      "Ask for a concrete example if none given.",
+      "Probe for depth if answer is superficial."
+    ].join("\n")
+  };
+}

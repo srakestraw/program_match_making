@@ -11,7 +11,8 @@ const tokenBodySchema = z
   .object({
     brandVoiceId: z.string().min(1).optional(),
     voiceName: z.string().trim().min(1).max(80).optional(),
-    language: z.string().trim().min(2).max(8).optional()
+    language: z.string().trim().min(2).max(8).optional(),
+    debug: z.boolean().optional()
   })
   .optional();
 
@@ -78,6 +79,19 @@ realtimeRouter.post("/token", tokenRateLimit, async (req, res) => {
     }
 
     incrementMetric("realtime.token.success");
+    const debugEnabled = body?.debug || process.env.DEBUG_VOICE === "1";
+    if (debugEnabled) {
+      res.json({
+        ...payload,
+        debug: {
+          selectedVoice,
+          brandVoiceId: brandVoice?.id ?? null,
+          language,
+          brandVoiceName: brandVoice?.primaryTone ?? null
+        }
+      });
+      return;
+    }
     res.json(payload);
   } catch (error) {
     if (error instanceof z.ZodError) {

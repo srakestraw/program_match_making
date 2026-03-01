@@ -21,6 +21,28 @@ enum TraitQuestionType {
   QUIZ
 }
 
+enum TraitAnswerStyle {
+  RADIO
+  CARD_GRID
+  SLIDER
+  CHAT
+}
+
+enum TraitVisualMood {
+  NEUTRAL
+  ASPIRATIONAL
+  PLAYFUL
+  BOLD
+  SERIOUS
+}
+
+enum TraitStatus {
+  DRAFT
+  IN_REVIEW
+  ACTIVE
+  DEPRECATED
+}
+
 enum ProgramTraitPriorityBucket {
   CRITICAL
   VERY_IMPORTANT
@@ -105,6 +127,17 @@ enum ConversationTurnRole {
   SYSTEM
 }
 
+enum WidgetThemeStatus {
+  DRAFT
+  ACTIVE
+}
+
+enum WidgetThemeSource {
+  MANUAL
+  URL_SCRAPE
+  PRESET
+}
+
 model Candidate {
   id               String            @id @default(cuid())
   firstName        String?
@@ -176,7 +209,14 @@ model Trait {
   id                    String         @id @default(cuid())
   name                  String         @unique
   category              TraitCategory
+  status                TraitStatus    @default(DRAFT)
   definition            String?
+  publicLabel           String?
+  oneLineHook           String?
+  archetypeTag          String?
+  displayIcon           String?
+  visualMood            TraitVisualMood?
+  experienceDraftJson   String?
   rubricScaleMin        Int            @default(0)
   rubricScaleMax        Int            @default(5)
   rubricPositiveSignals String?
@@ -195,6 +235,9 @@ model TraitQuestion {
   traitId      String
   type         TraitQuestionType
   prompt       String
+  narrativeIntro String?
+  answerStyle  TraitAnswerStyle?
+  answerOptionsMetaJson String?
   optionsJson  String?
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
@@ -210,12 +253,43 @@ model Program {
   description String?
   degreeLevel String?
   department  String?
+  isActive    Boolean        @default(false)
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
   traits      ProgramTrait[]
   scorecards  Scorecard[]
   sessions    CandidateSession[]
   leads       Lead[]
+}
+
+model QuizExperienceConfig {
+  id                 String   @id
+  headline           String   @default("Discover your best-fit graduate path")
+  subheadline        String   @default("A quick, personality-first quiz to see where you thrive.")
+  estimatedTimeLabel String   @default("3-5 min")
+  tonePreset         String   @default("GEN_Z_FRIENDLY")
+  gradientSet        String   @default("SUNRISE")
+  motionIntensity    String   @default("MEDIUM")
+  rankingMotionStyle String   @default("SPRING")
+  revealStyle        String   @default("IDENTITY")
+  introMediaPrompt   String?
+  revealMediaPrompt  String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model WidgetTheme {
+  id        String            @id @default(cuid())
+  name      String
+  status    WidgetThemeStatus @default(DRAFT)
+  source    WidgetThemeSource @default(MANUAL)
+  sourceUrl String?
+  tokens    Json
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  @@index([status, updatedAt])
+  @@index([source, updatedAt])
 }
 
 model ProgramTrait {

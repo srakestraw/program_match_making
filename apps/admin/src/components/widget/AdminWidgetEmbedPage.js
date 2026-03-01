@@ -20,6 +20,7 @@ export function AdminWidgetEmbedPage() {
   width="100%"
   height="600"
   title="Program Match Interview"
+  allow="microphone"
 ></iframe>`, [embedUrl]);
     const scriptSnippet = useMemo(() => `<script>
 (function() {
@@ -28,6 +29,7 @@ export function AdminWidgetEmbedPage() {
   iframe.width = '100%';
   iframe.height = '600';
   iframe.title = 'Program Match Interview';
+  iframe.allow = 'microphone';
   iframe.style.border = 'none';
   document.getElementById('pmm-widget-container').appendChild(iframe);
 })();

@@ -29,7 +29,9 @@ import { ToneSliders } from "./components/brand-voice/ToneSliders";
 import { TraitProgramsAccordion, TraitProgramsPanel } from "./components/trait-detail/TraitProgramsPanel";
 import { TraitPickerModal } from "./components/trait-picker/TraitPickerModal";
 import { AdminWidgetEmbedPage } from "./components/widget/AdminWidgetEmbedPage";
+import { WidgetBrandingPage } from "./components/widget/WidgetBrandingPage";
 import { AdminWidgetPreviewPage } from "./components/widget/AdminWidgetPreviewPage";
+import { AdminWidgetOrchestrationPage } from "./components/widget/AdminWidgetOrchestrationPage";
 import { WidgetDropdown } from "./components/widget/WidgetDropdown";
 import {
   BoardTrait,
@@ -51,6 +53,12 @@ type Trait = {
   category: TraitCategory;
   status: TraitStatus;
   definition: string | null;
+  publicLabel?: string | null;
+  oneLineHook?: string | null;
+  archetypeTag?: ArchetypeTag | null;
+  displayIcon?: string | null;
+  visualMood?: TraitVisualMood | null;
+  experienceDraftJson?: string | null;
   rubricScaleMin: number;
   rubricScaleMax: number;
   rubricPositiveSignals: string | null;
@@ -88,16 +96,34 @@ type TraitQuestion = {
   traitId: string;
   type: "chat" | "quiz";
   prompt: string;
+  questionText?: string;
+  narrativeIntro?: string | null;
+  answerStyle?: "RADIO" | "CARD_GRID" | "SLIDER" | "CHAT" | null;
+  answerOptionsMeta?: Array<{
+    label: string;
+    microCopy?: string;
+    iconToken?: string;
+    traitScore?: number;
+  }>;
   options: string[];
   createdAt: string;
   updatedAt: string;
 };
+
+type ArchetypeTag = "ANALYST" | "BUILDER" | "STRATEGIST" | "OPERATOR" | "VISIONARY" | "LEADER" | "COMMUNICATOR";
+type TraitVisualMood = "NEUTRAL" | "ASPIRATIONAL" | "PLAYFUL" | "BOLD" | "SERIOUS";
 
 type TraitFormState = {
   name: string;
   category: TraitCategory;
   status: TraitStatus;
   definition: string;
+  publicLabel: string;
+  oneLineHook: string;
+  archetypeTag: ArchetypeTag;
+  displayIcon: string;
+  visualMood: TraitVisualMood;
+  experienceDraftJson: string;
   rubricPositiveSignals: string;
   rubricNegativeSignals: string;
   rubricFollowUps: string;
@@ -149,6 +175,9 @@ const labelClass = "mb-1 block text-xs font-medium uppercase tracking-wide text-
 const subtleButtonClass = "rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50";
 const openAiVoiceOptions = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
 const traitStatusOptions: TraitStatus[] = ["DRAFT", "IN_REVIEW", "ACTIVE", "DEPRECATED"];
+const archetypeTagOptions: ArchetypeTag[] = ["ANALYST", "BUILDER", "STRATEGIST", "OPERATOR", "VISIONARY", "LEADER", "COMMUNICATOR"];
+const visualMoodOptions: TraitVisualMood[] = ["NEUTRAL", "ASPIRATIONAL", "PLAYFUL", "BOLD", "SERIOUS"];
+const canonicalQuizOptions = ["Beginner", "Developing", "Proficient", "Advanced"];
 const traitStatusRank: Record<TraitStatus, number> = {
   ACTIVE: 0,
   IN_REVIEW: 1,
@@ -179,10 +208,15 @@ class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...init
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl}${path}`, {
+      headers: { "Content-Type": "application/json" },
+      ...init
+    });
+  } catch {
+    throw new Error(`Unable to reach API at ${apiBaseUrl}. Start the server and retry.`);
+  }
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
@@ -275,6 +309,12 @@ const emptyTraitForm: TraitFormState = {
   category: "ACADEMIC",
   status: "DRAFT",
   definition: "",
+  publicLabel: "",
+  oneLineHook: "",
+  archetypeTag: "ANALYST",
+  displayIcon: "spark",
+  visualMood: "ASPIRATIONAL",
+  experienceDraftJson: "",
   rubricPositiveSignals: "",
   rubricNegativeSignals: "",
   rubricFollowUps: ""
@@ -286,6 +326,12 @@ function toTraitFormState(trait: Trait): TraitFormState {
     category: trait.category,
     status: trait.status,
     definition: trait.definition ?? "",
+    publicLabel: trait.publicLabel ?? "",
+    oneLineHook: trait.oneLineHook ?? "",
+    archetypeTag: trait.archetypeTag ?? "ANALYST",
+    displayIcon: trait.displayIcon ?? "spark",
+    visualMood: trait.visualMood ?? "ASPIRATIONAL",
+    experienceDraftJson: trait.experienceDraftJson ?? "",
     rubricPositiveSignals: trait.rubricPositiveSignals ?? "",
     rubricNegativeSignals: trait.rubricNegativeSignals ?? "",
     rubricFollowUps: trait.rubricFollowUps ?? ""
@@ -302,6 +348,12 @@ function normalizeTrait(trait: Partial<Trait> & { id: string; name: string; cate
         category: trait.category,
         status,
         definition: trait.definition ?? "",
+        publicLabel: trait.publicLabel ?? "",
+        oneLineHook: trait.oneLineHook ?? "",
+        archetypeTag: (trait.archetypeTag as ArchetypeTag | undefined) ?? "ANALYST",
+        displayIcon: trait.displayIcon ?? "",
+        visualMood: (trait.visualMood as TraitVisualMood | undefined) ?? "ASPIRATIONAL",
+        experienceDraftJson: trait.experienceDraftJson ?? "",
         rubricPositiveSignals: trait.rubricPositiveSignals ?? "",
         rubricNegativeSignals: trait.rubricNegativeSignals ?? "",
         rubricFollowUps: trait.rubricFollowUps ?? ""
@@ -314,6 +366,12 @@ function normalizeTrait(trait: Partial<Trait> & { id: string; name: string; cate
     category: trait.category,
     status,
     definition: trait.definition ?? null,
+    publicLabel: trait.publicLabel ?? null,
+    oneLineHook: trait.oneLineHook ?? null,
+    archetypeTag: trait.archetypeTag ?? null,
+    displayIcon: trait.displayIcon ?? null,
+    visualMood: trait.visualMood ?? null,
+    experienceDraftJson: trait.experienceDraftJson ?? null,
     rubricScaleMin: trait.rubricScaleMin ?? 0,
     rubricScaleMax: trait.rubricScaleMax ?? 5,
     rubricPositiveSignals: trait.rubricPositiveSignals ?? null,
@@ -587,13 +645,31 @@ function TraitDefinitionSection({
   setForm,
   titleInputRef,
   actionableMissing,
-  showActivationNotice
+  showActivationNotice,
+  isEditing,
+  experienceDraft,
+  generatingExperienceDraft,
+  onGenerateExperienceDraft,
+  onApplyExperienceDraft,
+  onDiscardExperienceDraft
 }: {
   form: TraitFormState;
   setForm: React.Dispatch<React.SetStateAction<TraitFormState>>;
   titleInputRef: React.MutableRefObject<HTMLInputElement | null>;
   actionableMissing: string[];
   showActivationNotice: boolean;
+  isEditing: boolean;
+  experienceDraft: {
+    publicLabel: string;
+    oneLineHook: string;
+    archetypeTag: ArchetypeTag;
+    displayIcon: string;
+    visualMood: TraitVisualMood;
+  } | null;
+  generatingExperienceDraft: boolean;
+  onGenerateExperienceDraft: (action: "generate" | "gen_z" | "simplify" | "aspirational") => void;
+  onApplyExperienceDraft: () => void;
+  onDiscardExperienceDraft: () => void;
 }) {
   return (
     <section className="space-y-4 rounded-md border border-slate-200 bg-white p-5">
@@ -669,6 +745,77 @@ function TraitDefinitionSection({
         </div>
       </div>
 
+      <details className="rounded-md border border-slate-200 bg-slate-50/50 p-3">
+        <summary className="cursor-pointer text-sm font-semibold text-slate-800">Student-Facing Label</summary>
+        <div className="mt-3 space-y-4">
+          <p className="text-xs text-slate-600">Used in the quiz UI and results. Does not affect scoring.</p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={subtleButtonClass} disabled={!isEditing || generatingExperienceDraft} onClick={() => onGenerateExperienceDraft("generate")}>
+              {generatingExperienceDraft ? "Generating..." : "Generate with AI"}
+            </button>
+            <button type="button" className={subtleButtonClass} disabled={!isEditing || generatingExperienceDraft} onClick={() => onGenerateExperienceDraft("gen_z")}>
+              Rewrite for Gen Z
+            </button>
+            <button type="button" className={subtleButtonClass} disabled={!isEditing || generatingExperienceDraft} onClick={() => onGenerateExperienceDraft("simplify")}>
+              Simplify
+            </button>
+            <button type="button" className={subtleButtonClass} disabled={!isEditing || generatingExperienceDraft} onClick={() => onGenerateExperienceDraft("aspirational")}>
+              Make more aspirational
+            </button>
+          </div>
+
+          {experienceDraft && (
+            <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm">
+              <p className="font-semibold text-slate-900">AI Draft Ready</p>
+              <p className="mt-1 text-xs text-slate-700">{experienceDraft.publicLabel || form.name} · {experienceDraft.archetypeTag} · {experienceDraft.visualMood}</p>
+              <p className="mt-1 text-xs text-slate-700">{experienceDraft.oneLineHook}</p>
+              <div className="mt-2 flex gap-2">
+                <button type="button" className={subtleButtonClass} onClick={onApplyExperienceDraft}>Apply</button>
+                <button type="button" className={subtleButtonClass} onClick={onDiscardExperienceDraft}>Discard</button>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <label className={labelClass}>Display Name</label>
+            <input className={inputClass} value={form.publicLabel} onChange={(event) => setForm((prev) => ({ ...prev, publicLabel: event.target.value }))} />
+            <p className="mt-1 text-xs text-slate-500">
+              Preview label: <span className="font-medium text-slate-700">{form.publicLabel.trim() || form.name.trim() || "Untitled trait"}</span>
+            </p>
+          </div>
+          <div>
+            <label className={labelClass}>Short Description</label>
+            <textarea className={inputClass} value={form.oneLineHook} onChange={(event) => setForm((prev) => ({ ...prev, oneLineHook: event.target.value }))} />
+          </div>
+
+          <details className="rounded-md border border-slate-200 bg-white p-3">
+            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-600">Advanced</summary>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <div>
+                <label className={labelClass}>Archetype Tag</label>
+                <select className={inputClass} value={form.archetypeTag} onChange={(event) => setForm((prev) => ({ ...prev, archetypeTag: event.target.value as ArchetypeTag }))}>
+                  {archetypeTagOptions.map((option) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className={labelClass}>Display Icon</label>
+                <input className={inputClass} value={form.displayIcon} onChange={(event) => setForm((prev) => ({ ...prev, displayIcon: event.target.value }))} />
+              </div>
+              <div>
+                <label className={labelClass}>Visual Mood</label>
+                <select className={inputClass} value={form.visualMood} onChange={(event) => setForm((prev) => ({ ...prev, visualMood: event.target.value as TraitVisualMood }))}>
+                  {visualMoodOptions.map((option) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </details>
+        </div>
+      </details>
+
       {showActivationNotice && (
         <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
           <p className="font-medium">This trait won&apos;t affect scoring until Active.</p>
@@ -689,15 +836,23 @@ function TraitRubricEditor({
   isEditing,
   generatingRubric,
   onGenerateRubricWithAi,
+  rubricDraft,
+  onApplyRubricDraft,
+  onDiscardRubricDraft,
   positiveSignals,
   negativeSignals,
+  followUps,
   setForm
 }: {
   isEditing: boolean;
   generatingRubric: boolean;
   onGenerateRubricWithAi: () => void;
+  rubricDraft: { positiveSignals: string[]; negativeSignals: string[]; followUps: string[] } | null;
+  onApplyRubricDraft: () => void;
+  onDiscardRubricDraft: () => void;
   positiveSignals: string[];
   negativeSignals: string[];
+  followUps: string[];
   setForm: React.Dispatch<React.SetStateAction<TraitFormState>>;
 }) {
   return (
@@ -716,6 +871,18 @@ function TraitRubricEditor({
         )}
       </div>
       {!isEditing && <p className="text-xs text-slate-500">Save the trait first to use &quot;Generate with AI&quot;.</p>}
+      {rubricDraft && (
+        <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm">
+          <p className="font-semibold text-slate-900">Draft rubric ready</p>
+          <p className="mt-1 text-xs text-slate-700">
+            {rubricDraft.positiveSignals.length} positive · {rubricDraft.negativeSignals.length} negative · {rubricDraft.followUps.length} follow-ups
+          </p>
+          <div className="mt-2 flex gap-2">
+            <button type="button" className={subtleButtonClass} onClick={onApplyRubricDraft}>Apply</button>
+            <button type="button" className={subtleButtonClass} onClick={onDiscardRubricDraft}>Discard</button>
+          </div>
+        </div>
+      )}
       <ListBuilder
         label="Positive Signals"
         items={positiveSignals}
@@ -746,6 +913,14 @@ function TraitRubricEditor({
         }
         onChange={(items) => setForm((prev) => ({ ...prev, rubricNegativeSignals: joinListText(items) }))}
       />
+      <ListBuilder
+        label="Rubric Follow-Ups"
+        items={followUps}
+        placeholder="Add an optional follow-up"
+        emptyText="No follow-up prompts yet."
+        addButtonLabel="+ Add follow-up"
+        onChange={(items) => setForm((prev) => ({ ...prev, rubricFollowUps: joinListText(items.slice(0, 2)) }))}
+      />
       {positiveSignals.length === 0 && negativeSignals.length === 0 && (
         <p className="text-xs text-slate-500">Add at least 3 positive and 2 negative signals to activate.</p>
       )}
@@ -755,27 +930,84 @@ function TraitRubricEditor({
 
 function TraitQuestionsEditor({
   selectedTrait,
-  generatingQuestions,
-  onGenerateQuestionsWithAi,
-  questionForm,
-  setQuestionForm,
-  submitQuestion,
+  generatingQuestionsDraft,
+  onGenerateQuestionsDraftWithAi,
+  onSaveQuizDesign,
+  onSaveChatDesign,
   questions,
-  deleteQuestion,
-  quizOptions
+  rubricFollowUps
 }: {
   selectedTrait: Trait | null;
-  generatingQuestions: boolean;
-  onGenerateQuestionsWithAi: () => void;
-  questionForm: { id: string; prompt: string; type: "chat" | "quiz"; optionsText: string };
-  setQuestionForm: React.Dispatch<
-    React.SetStateAction<{ id: string; prompt: string; type: "chat" | "quiz"; optionsText: string }>
-  >;
-  submitQuestion: (event: React.FormEvent) => Promise<void>;
+  generatingQuestionsDraft: boolean;
+  onGenerateQuestionsDraftWithAi: () => Promise<{
+    quiz: {
+      narrativeIntro: string;
+      questionText: string;
+      answerStyle: "RADIO" | "CARD_GRID" | "SLIDER";
+      optionMeta: Array<{ label: string; microCopy: string; iconToken: string; traitScore: number }>;
+    };
+    chat: { chatQuestion1: string; chatQuestion2: string; rubricFollowUps: string };
+  }>;
+  onSaveQuizDesign: (input: {
+    narrativeIntro: string;
+    questionText: string;
+    answerStyle: "RADIO" | "CARD_GRID" | "SLIDER";
+    optionMeta: Array<{ label: string; microCopy: string; iconToken: string; traitScore: number }>;
+  }) => Promise<void>;
+  onSaveChatDesign: (input: { chatQuestion1: string; chatQuestion2: string; rubricFollowUps: string }) => Promise<void>;
   questions: TraitQuestion[];
-  deleteQuestion: (id: string) => Promise<void>;
-  quizOptions: string[];
+  rubricFollowUps: string;
 }) {
+  const [tab, setTab] = useState<"quiz" | "chat">("quiz");
+  const [savingQuiz, setSavingQuiz] = useState(false);
+  const [savingChat, setSavingChat] = useState(false);
+  const [quizDraft, setQuizDraft] = useState<{
+    narrativeIntro: string;
+    questionText: string;
+    answerStyle: "RADIO" | "CARD_GRID" | "SLIDER";
+    optionMeta: Array<{ label: string; microCopy: string; iconToken: string; traitScore: number }>;
+  } | null>(null);
+  const [chatDraft, setChatDraft] = useState<{ chatQuestion1: string; chatQuestion2: string; rubricFollowUps: string } | null>(null);
+
+  const savedQuizQuestion = useMemo(() => questions.find((question) => question.type === "quiz") ?? null, [questions]);
+  const savedChatQuestions = useMemo(() => questions.filter((question) => question.type === "chat").slice(0, 2), [questions]);
+  const [quizForm, setQuizForm] = useState({
+    narrativeIntro: "",
+    questionText: "",
+    answerStyle: "CARD_GRID" as "RADIO" | "CARD_GRID" | "SLIDER",
+    optionMeta: canonicalQuizOptions.map((label, index) => ({
+      label,
+      microCopy: "",
+      iconToken: "",
+      traitScore: index + 1
+    }))
+  });
+  const [chatForm, setChatForm] = useState({ chatQuestion1: "", chatQuestion2: "", rubricFollowUps: "" });
+
+  useEffect(() => {
+    const optionMetaFromQuestion = canonicalQuizOptions.map((label, index) => {
+      const savedMeta = savedQuizQuestion?.answerOptionsMeta?.find((item) => item.label === label) ?? savedQuizQuestion?.answerOptionsMeta?.[index];
+      return {
+        label,
+        microCopy: savedMeta?.microCopy ?? "",
+        iconToken: savedMeta?.iconToken ?? "",
+        traitScore: savedMeta?.traitScore ?? index + 1
+      };
+    });
+    setQuizForm({
+      narrativeIntro: savedQuizQuestion?.narrativeIntro ?? "",
+      questionText: savedQuizQuestion?.prompt ?? "",
+      answerStyle:
+        savedQuizQuestion?.answerStyle === "RADIO" || savedQuizQuestion?.answerStyle === "SLIDER" ? savedQuizQuestion.answerStyle : "CARD_GRID",
+      optionMeta: optionMetaFromQuestion
+    });
+    setChatForm({
+      chatQuestion1: savedChatQuestions[0]?.prompt ?? "",
+      chatQuestion2: savedChatQuestions[1]?.prompt ?? "",
+      rubricFollowUps
+    });
+  }, [savedQuizQuestion, savedChatQuestions, rubricFollowUps]);
+
   if (!selectedTrait) {
     return <p className="text-sm text-slate-500">Select a trait to manage interview questions.</p>;
   }
@@ -783,106 +1015,217 @@ function TraitQuestionsEditor({
   return (
     <section className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold text-slate-900">Interview Questions</h3>
-        <button
-          type="button"
-          className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-60"
-          disabled={generatingQuestions}
-          onClick={onGenerateQuestionsWithAi}
-        >
-          {generatingQuestions ? "Generating…" : "Generate with AI"}
-        </button>
-      </div>
-      <p className="text-sm text-slate-500">Questions elicit evidence. Scoring uses rubric signals.</p>
-      <form className="space-y-4" onSubmit={(event) => void submitQuestion(event)}>
-        <div>
-          <div className="mb-1 flex items-center justify-between">
-            <label className={labelClass}>Prompt</label>
-            <button
-              type="button"
-              className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
-              onClick={() =>
-                setQuestionForm((prev) => ({
-                  ...prev,
-                  prompt: buildQuestionPromptDraft(selectedTrait, prev.type)
-                }))
-              }
-            >
-              AI Draft Prompt
-            </button>
-          </div>
-          <textarea
-            required
-            className={inputClass}
-            value={questionForm.prompt}
-            onChange={(event) => setQuestionForm((prev) => ({ ...prev, prompt: event.target.value }))}
-          />
-          <FieldMeta value={questionForm.prompt} />
-        </div>
-        <div>
-          <label className={labelClass}>Type</label>
-          <select
-            className={inputClass}
-            value={questionForm.type}
-            onChange={(event) => setQuestionForm((prev) => ({ ...prev, type: event.target.value as "chat" | "quiz" }))}
-          >
-            <option value="chat">Chat</option>
-            <option value="quiz">Quiz</option>
-          </select>
-        </div>
-        {questionForm.type === "quiz" && (
-          <ListBuilder
-            label="Quiz Options"
-            items={quizOptions}
-            placeholder="Add a quiz option"
-            emptyText="No options yet."
-            addButtonLabel="+ Add option"
-            onChange={(items) => setQuestionForm((prev) => ({ ...prev, optionsText: joinListText(items) }))}
-          />
-        )}
-        <div className="flex items-center gap-3">
-          <Button type="submit">{questionForm.id ? "Save Question" : "Add Question"}</Button>
+        <h3 className="text-lg font-semibold text-slate-900">Interaction Design</h3>
+        <div className="flex gap-2">
           <button
             type="button"
-            className="text-sm text-slate-600 hover:text-slate-800"
-            onClick={() => setQuestionForm({ id: "", prompt: "", type: "chat", optionsText: "" })}
+            className={`rounded-md px-2 py-1 text-xs font-medium ${tab === "quiz" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"}`}
+            onClick={() => setTab("quiz")}
           >
-            Reset
+            Quiz
+          </button>
+          <button
+            type="button"
+            className={`rounded-md px-2 py-1 text-xs font-medium ${tab === "chat" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"}`}
+            onClick={() => setTab("chat")}
+          >
+            Chat
           </button>
         </div>
-      </form>
-
-      <div className="space-y-1 pt-2">
-        {questions.length === 0 && <p className="text-xs text-slate-500">No interview questions yet. Add Question to get started.</p>}
-        {questions.map((question) => (
-          <div key={question.id} className="border-b border-slate-200/80 py-3">
-            <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
-              {question.type.toUpperCase()}
-            </span>
-            <p className="mt-1 text-sm text-slate-900">{question.prompt}</p>
-            {question.options.length > 0 && <p className="mt-1 text-xs text-slate-500">Options: {question.options.join(", ")}</p>}
-            <div className="mt-2 flex items-center gap-3 text-xs">
-              <button
-                type="button"
-                className="text-slate-600 hover:text-slate-900"
-                onClick={() =>
-                  setQuestionForm({
-                    id: question.id,
-                    prompt: question.prompt,
-                    type: question.type,
-                    optionsText: question.options.join("\n")
-                  })
-                }
-              >
-                Edit
-              </button>
-              <button type="button" className="text-red-600 hover:text-red-700" onClick={() => void deleteQuestion(question.id)}>
-                Delete
-              </button>
-            </div>
-          </div>
-        ))}
       </div>
+      <p className="text-sm text-slate-500">Questions elicit evidence. Scoring uses rubric signals.</p>
+
+      {tab === "quiz" && (
+        <div className="space-y-4 rounded-md border border-slate-200/80 p-3">
+          <div className="text-xs text-slate-500">
+            <p className="font-semibold text-slate-700">Current (saved)</p>
+            <p>{savedQuizQuestion?.prompt || "No quiz question saved yet."}</p>
+          </div>
+          <div>
+            <label className={labelClass}>Narrative Intro (optional)</label>
+            <textarea className={inputClass} value={quizForm.narrativeIntro} onChange={(event) => setQuizForm((prev) => ({ ...prev, narrativeIntro: event.target.value }))} />
+          </div>
+          <div>
+            <label className={labelClass}>Question Text</label>
+            <textarea className={inputClass} value={quizForm.questionText} onChange={(event) => setQuizForm((prev) => ({ ...prev, questionText: event.target.value }))} />
+          </div>
+          <div>
+            <label className={labelClass}>Answer Style</label>
+            <select className={inputClass} value={quizForm.answerStyle} onChange={(event) => setQuizForm((prev) => ({ ...prev, answerStyle: event.target.value as "RADIO" | "CARD_GRID" | "SLIDER" }))}>
+              <option value="CARD_GRID">CARD_GRID</option>
+              <option value="RADIO">RADIO</option>
+              <option value="SLIDER">SLIDER</option>
+            </select>
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Option Microcopy (display-only)</p>
+            {quizForm.optionMeta.map((meta, index) => (
+              <div key={`quiz-meta-${meta.label}-${index}`} className="grid gap-2 md:grid-cols-4">
+                <input className={inputClass} value={meta.label} readOnly />
+                <input
+                  className={inputClass}
+                  placeholder="Microcopy"
+                  value={meta.microCopy}
+                  onChange={(event) =>
+                    setQuizForm((prev) => ({
+                      ...prev,
+                      optionMeta: prev.optionMeta.map((item, itemIndex) => (itemIndex === index ? { ...item, microCopy: event.target.value } : item))
+                    }))
+                  }
+                />
+                <input
+                  className={inputClass}
+                  placeholder="Icon token"
+                  value={meta.iconToken}
+                  onChange={(event) =>
+                    setQuizForm((prev) => ({
+                      ...prev,
+                      optionMeta: prev.optionMeta.map((item, itemIndex) => (itemIndex === index ? { ...item, iconToken: event.target.value } : item))
+                    }))
+                  }
+                />
+                <input
+                  className={inputClass}
+                  type="number"
+                  min={0}
+                  max={5}
+                  value={meta.traitScore}
+                  onChange={(event) =>
+                    setQuizForm((prev) => ({
+                      ...prev,
+                      optionMeta: prev.optionMeta.map((item, itemIndex) => (itemIndex === index ? { ...item, traitScore: Number(event.target.value || 0) } : item))
+                    }))
+                  }
+                />
+              </div>
+            ))}
+          </div>
+          {quizDraft && (
+            <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm">
+              <p className="font-semibold text-slate-900">Draft values ready</p>
+              <p className="mt-1 text-xs text-slate-700">{quizDraft.questionText}</p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  className={subtleButtonClass}
+                  onClick={() => {
+                    void onSaveQuizDesign(quizDraft);
+                    setQuizDraft(null);
+                  }}
+                >
+                  Apply
+                </button>
+                <button type="button" className={subtleButtonClass} onClick={() => setQuizDraft(null)}>
+                  Discard
+                </button>
+              </div>
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className={subtleButtonClass}
+              disabled={generatingQuestionsDraft}
+              onClick={() =>
+                void onGenerateQuestionsDraftWithAi().then((draft) => {
+                  setQuizDraft(draft.quiz);
+                })
+              }
+            >
+              {generatingQuestionsDraft ? "Generating..." : "Generate"}
+            </button>
+            <Button
+              type="button"
+              disabled={savingQuiz}
+              onClick={async () => {
+                setSavingQuiz(true);
+                try {
+                  await onSaveQuizDesign(quizForm);
+                } finally {
+                  setSavingQuiz(false);
+                }
+              }}
+            >
+              {savingQuiz ? "Saving..." : "Save Quiz Design"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {tab === "chat" && (
+        <div className="space-y-4 rounded-md border border-slate-200/80 p-3">
+          <div className="text-xs text-slate-500">
+            <p className="font-semibold text-slate-700">Current (saved)</p>
+            <p>{savedChatQuestions[0]?.prompt || "No chat questions saved yet."}</p>
+            {savedChatQuestions[1]?.prompt && <p>{savedChatQuestions[1]?.prompt}</p>}
+          </div>
+          <div>
+            <label className={labelClass}>Chat Question 1</label>
+            <textarea className={inputClass} value={chatForm.chatQuestion1} onChange={(event) => setChatForm((prev) => ({ ...prev, chatQuestion1: event.target.value }))} />
+          </div>
+          <div>
+            <label className={labelClass}>Chat Question 2</label>
+            <textarea className={inputClass} value={chatForm.chatQuestion2} onChange={(event) => setChatForm((prev) => ({ ...prev, chatQuestion2: event.target.value }))} />
+          </div>
+          <div>
+            <label className={labelClass}>Rubric Follow-Ups (0-2 lines)</label>
+            <textarea className={inputClass} value={chatForm.rubricFollowUps} onChange={(event) => setChatForm((prev) => ({ ...prev, rubricFollowUps: event.target.value }))} />
+          </div>
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+            Chat scoring uses rubric signals (3 positive, 3 negative) to derive a 0-5 score.
+          </div>
+          {chatDraft && (
+            <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm">
+              <p className="font-semibold text-slate-900">Draft values ready</p>
+              <p className="mt-1 text-xs text-slate-700">{chatDraft.chatQuestion1}</p>
+              <p className="mt-1 text-xs text-slate-700">{chatDraft.chatQuestion2}</p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  className={subtleButtonClass}
+                  onClick={() => {
+                    void onSaveChatDesign(chatDraft);
+                    setChatDraft(null);
+                  }}
+                >
+                  Apply
+                </button>
+                <button type="button" className={subtleButtonClass} onClick={() => setChatDraft(null)}>
+                  Discard
+                </button>
+              </div>
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className={subtleButtonClass}
+              disabled={generatingQuestionsDraft}
+              onClick={() =>
+                void onGenerateQuestionsDraftWithAi().then((draft) => {
+                  setChatDraft(draft.chat);
+                })
+              }
+            >
+              {generatingQuestionsDraft ? "Generating..." : "Generate"}
+            </button>
+            <Button
+              type="button"
+              disabled={savingChat}
+              onClick={async () => {
+                setSavingChat(true);
+                try {
+                  await onSaveChatDesign(chatForm);
+                } finally {
+                  setSavingChat(false);
+                }
+              }}
+            >
+              {savingChat ? "Saving..." : "Save Chat Design"}
+            </Button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -947,6 +1290,12 @@ function ShellLayout({ children }: { children: React.ReactNode }) {
             <Link className={navLinkClass} to="/brand-voice">
               Brand Voice
             </Link>
+            <Link className={navLinkClass} to="/quiz-experience">
+              Quiz Experience
+            </Link>
+            <Link className={navLinkClass} to="/widget/branding">
+              Widget Branding
+            </Link>
             <WidgetDropdown />
           </nav>
         </div>
@@ -966,17 +1315,20 @@ export function TraitsPage() {
   const [selectedTraitId, setSelectedTraitId] = useState<string | null>(null);
   const [form, setForm] = useState<TraitFormState>({ ...emptyTraitForm });
   const [baselineForm, setBaselineForm] = useState<TraitFormState>({ ...emptyTraitForm });
-  const [questionForm, setQuestionForm] = useState({
-    id: "",
-    prompt: "",
-    type: "chat" as "chat" | "quiz",
-    optionsText: ""
-  });
+  const [experienceDraft, setExperienceDraft] = useState<{
+    publicLabel: string;
+    oneLineHook: string;
+    archetypeTag: ArchetypeTag;
+    displayIcon: string;
+    visualMood: TraitVisualMood;
+  } | null>(null);
+  const [generatingExperienceDraft, setGeneratingExperienceDraft] = useState(false);
   const [traitNotice, setTraitNotice] = useState<string | null>(null);
   const [traitError, setTraitError] = useState<string | null>(null);
   const [activationMissing, setActivationMissing] = useState<string[]>([]);
+  const [rubricDraft, setRubricDraft] = useState<{ positiveSignals: string[]; negativeSignals: string[]; followUps: string[] } | null>(null);
   const [generatingRubric, setGeneratingRubric] = useState(false);
-  const [generatingQuestions, setGeneratingQuestions] = useState(false);
+  const [generatingQuestionsDraft, setGeneratingQuestionsDraft] = useState(false);
   const [programDrawerTraitId, setProgramDrawerTraitId] = useState<string | null>(null);
   const [selectedTraitPrograms, setSelectedTraitPrograms] = useState<TraitProgramAssociation[]>([]);
   const [selectedTraitProgramsLoading, setSelectedTraitProgramsLoading] = useState(false);
@@ -989,7 +1341,7 @@ export function TraitsPage() {
   const isMountedRef = useRef(true);
   const positiveSignals = useMemo(() => splitListText(form.rubricPositiveSignals), [form.rubricPositiveSignals]);
   const negativeSignals = useMemo(() => splitListText(form.rubricNegativeSignals), [form.rubricNegativeSignals]);
-  const quizOptions = useMemo(() => splitListText(questionForm.optionsText), [questionForm.optionsText]);
+  const followUps = useMemo(() => splitListText(form.rubricFollowUps), [form.rubricFollowUps]);
   const traitFormDirty = useMemo(() => JSON.stringify(form) !== JSON.stringify(baselineForm), [form, baselineForm]);
   const draftCompleteness = useMemo(() => computeDraftCompleteness(form, questions.length), [form, questions.length]);
   const editorStatusLabel = useMemo(() => {
@@ -1019,6 +1371,7 @@ export function TraitsPage() {
 
   const loadTraits = async () => {
     setLoading(true);
+    setTraitError(null);
     try {
       const query = new URLSearchParams();
       if (search.trim()) {
@@ -1036,6 +1389,8 @@ export function TraitsPage() {
       } else if (selectedTraitId && !payload.data.some((trait) => trait.id === selectedTraitId)) {
         setSelectedTraitId(payload.data[0]?.id ?? null);
       }
+    } catch (error) {
+      setTraitError(error instanceof Error ? error.message : "Failed to load traits.");
     } finally {
       setLoading(false);
     }
@@ -1080,7 +1435,9 @@ export function TraitsPage() {
       setSelectedTraitProgramsLoading(false);
       return;
     }
-    void loadQuestions(selectedTraitId);
+    void loadQuestions(selectedTraitId).catch((error) => {
+      setTraitError(error instanceof Error ? error.message : "Failed to load questions.");
+    });
     void loadTraitPrograms(selectedTraitId);
   }, [selectedTraitId]);
 
@@ -1129,7 +1486,8 @@ export function TraitsPage() {
       setSelectedTraitId(normalized.id);
       setForm(nextForm);
       setBaselineForm(nextForm);
-      setQuestionForm({ id: "", prompt: "", type: "chat", optionsText: "" });
+      setExperienceDraft(null);
+      setRubricDraft(null);
       setActivationMissing([]);
       setTraitNotice("Saved");
       setEditorSaveStatus("saved");
@@ -1162,6 +1520,7 @@ export function TraitsPage() {
     setBaselineForm(nextForm);
     setTraitNotice(null);
     setTraitError(null);
+    setExperienceDraft(null);
     setActivationMissing([]);
     setEditorSaveStatus("idle");
   };
@@ -1229,50 +1588,30 @@ export function TraitsPage() {
     await loadTraits();
   };
 
-  const submitQuestion = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!selectedTraitId) {
-      return;
+  const upsertQuestion = async (
+    existingQuestionId: string | null,
+    body: {
+      prompt: string;
+      questionText?: string;
+      narrativeIntro?: string | null;
+      answerStyle?: "RADIO" | "CARD_GRID" | "SLIDER" | "CHAT";
+      answerOptionsMeta?: Array<{ label: string; microCopy?: string; iconToken?: string; traitScore?: number }>;
+      type: "chat" | "quiz";
+      options?: string[];
     }
-
-    const body = {
-      prompt: questionForm.prompt,
-      type: questionForm.type,
-      options:
-        questionForm.type === "quiz"
-          ? questionForm.optionsText
-              .split("\n")
-              .map((line) => line.trim())
-              .filter(Boolean)
-          : undefined
-    };
-
-    if (questionForm.id) {
-      await request<{ data: TraitQuestion }>(`/api/admin/questions/${questionForm.id}`, {
+  ) => {
+    if (!selectedTraitId) return;
+    if (existingQuestionId) {
+      await request<{ data: TraitQuestion }>(`/api/admin/questions/${existingQuestionId}`, {
         method: "PUT",
         body: JSON.stringify(body)
       });
-    } else {
-      await request<{ data: TraitQuestion }>(`/api/admin/traits/${selectedTraitId}/questions`, {
-        method: "POST",
-        body: JSON.stringify(body)
-      });
+      return;
     }
-
-    setQuestionForm({
-      id: "",
-      prompt: "",
-      type: "chat",
-      optionsText: ""
+    await request<{ data: TraitQuestion }>(`/api/admin/traits/${selectedTraitId}/questions`, {
+      method: "POST",
+      body: JSON.stringify(body)
     });
-    await loadQuestions(selectedTraitId);
-  };
-
-  const deleteQuestion = async (id: string) => {
-    await request<{ ok: boolean }>(`/api/admin/questions/${id}`, { method: "DELETE" });
-    if (selectedTraitId) {
-      await loadQuestions(selectedTraitId);
-    }
   };
 
   const generateRubricWithAi = async () => {
@@ -1286,12 +1625,11 @@ export function TraitsPage() {
         data: { positiveSignals: string[]; negativeSignals: string[]; followUps: string[] };
       }>(`/api/admin/traits/${selectedTraitId}/generate-signals`, { method: "POST" });
       const { positiveSignals: pos, negativeSignals: neg, followUps: follow } = payload.data;
-      setForm((prev) => ({
-        ...prev,
-        rubricPositiveSignals: joinListText(pos ?? []),
-        rubricNegativeSignals: joinListText(neg ?? []),
-        rubricFollowUps: joinListText(follow ?? [])
-      }));
+      setRubricDraft({
+        positiveSignals: (pos ?? []).slice(0, 3),
+        negativeSignals: (neg ?? []).slice(0, 3),
+        followUps: (follow ?? []).slice(0, 2)
+      });
     } catch (error) {
       setTraitError(error instanceof Error ? error.message : "Failed to generate rubric with AI.");
     } finally {
@@ -1299,32 +1637,137 @@ export function TraitsPage() {
     }
   };
 
-  const generateQuestionsWithAi = async () => {
+  const applyRubricDraft = () => {
+    if (!rubricDraft) return;
+    setForm((prev) => ({
+      ...prev,
+      rubricPositiveSignals: joinListText(rubricDraft.positiveSignals),
+      rubricNegativeSignals: joinListText(rubricDraft.negativeSignals),
+      rubricFollowUps: joinListText(rubricDraft.followUps)
+    }));
+    setRubricDraft(null);
+  };
+
+  const discardRubricDraft = () => setRubricDraft(null);
+
+  const generateQuestionsDraftWithAi = async () => {
     if (!selectedTraitId) {
-      return;
+      throw new Error("Select a trait first.");
     }
-    setGeneratingQuestions(true);
+    setGeneratingQuestionsDraft(true);
     setTraitError(null);
     try {
       const payload = await request<{
         data: { chatPrompt: string; quizPrompt: string; quizOptions: string[] };
       }>(`/api/admin/traits/${selectedTraitId}/generate-questions`, { method: "POST" });
-      const { chatPrompt, quizPrompt, quizOptions } = payload.data;
-      await request<{ data: TraitQuestion }>(`/api/admin/traits/${selectedTraitId}/questions`, {
-        method: "POST",
-        body: JSON.stringify({ prompt: chatPrompt, type: "chat" })
-      });
-      await request<{ data: TraitQuestion }>(`/api/admin/traits/${selectedTraitId}/questions`, {
-        method: "POST",
-        body: JSON.stringify({ prompt: quizPrompt, type: "quiz", options: quizOptions ?? [] })
-      });
-      await loadQuestions(selectedTraitId);
+      const quizDraftMeta = canonicalQuizOptions.map((label, index) => ({
+        label,
+        microCopy:
+          index === 0 ? "Just getting started" : index === 1 ? "Building consistency" : index === 2 ? "Strong in practice" : "Clear standout",
+        iconToken: ["seedling", "wrench", "target", "crown"][index] ?? "spark",
+        traitScore: index + 1
+      }));
+      return {
+        quiz: {
+          narrativeIntro: selectedTrait?.definition ?? "",
+          questionText: payload.data.quizPrompt,
+          answerStyle: "CARD_GRID" as const,
+          optionMeta: quizDraftMeta
+        },
+        chat: {
+          chatQuestion1: payload.data.chatPrompt,
+          chatQuestion2: `Tell me about another example where you showed ${selectedTrait?.name.toLowerCase() ?? "this trait"}.`,
+          rubricFollowUps: form.rubricFollowUps
+        }
+      };
     } catch (error) {
       setTraitError(error instanceof Error ? error.message : "Failed to generate questions with AI.");
+      throw error;
     } finally {
-      setGeneratingQuestions(false);
+      setGeneratingQuestionsDraft(false);
     }
   };
+
+  const saveQuizDesign = async (input: {
+    narrativeIntro: string;
+    questionText: string;
+    answerStyle: "RADIO" | "CARD_GRID" | "SLIDER";
+    optionMeta: Array<{ label: string; microCopy: string; iconToken: string; traitScore: number }>;
+  }) => {
+    if (!selectedTraitId) return;
+    const existingQuiz = questions.find((question) => question.type === "quiz") ?? null;
+    await upsertQuestion(existingQuiz?.id ?? null, {
+      prompt: input.questionText,
+      questionText: input.questionText,
+      narrativeIntro: input.narrativeIntro || null,
+      answerStyle: input.answerStyle,
+      answerOptionsMeta: input.optionMeta,
+      type: "quiz",
+      options: canonicalQuizOptions
+    });
+    await loadQuestions(selectedTraitId);
+    setTraitNotice("Saved");
+  };
+
+  const saveChatDesign = async (input: { chatQuestion1: string; chatQuestion2: string; rubricFollowUps: string }) => {
+    if (!selectedTraitId) return;
+    const existingChat = questions.filter((question) => question.type === "chat").slice(0, 2);
+    await upsertQuestion(existingChat[0]?.id ?? null, {
+      prompt: input.chatQuestion1,
+      questionText: input.chatQuestion1,
+      answerStyle: "CHAT",
+      type: "chat"
+    });
+    await upsertQuestion(existingChat[1]?.id ?? null, {
+      prompt: input.chatQuestion2,
+      questionText: input.chatQuestion2,
+      answerStyle: "CHAT",
+      type: "chat"
+    });
+    setForm((prev) => ({ ...prev, rubricFollowUps: input.rubricFollowUps }));
+    await loadQuestions(selectedTraitId);
+    setTraitNotice("Saved");
+  };
+
+  const generateExperienceDraftWithAi = async (action: "generate" | "gen_z" | "simplify" | "aspirational") => {
+    if (!selectedTraitId) return;
+    setGeneratingExperienceDraft(true);
+    setTraitError(null);
+    try {
+      const payload = await request<{
+        data: {
+          publicLabel: string;
+          oneLineHook: string;
+          archetypeTag: ArchetypeTag;
+          displayIcon: string;
+          visualMood: TraitVisualMood;
+        };
+      }>(`/api/admin/traits/${selectedTraitId}/experience-draft`, {
+        method: "POST",
+        body: JSON.stringify({ action })
+      });
+      setExperienceDraft(payload.data);
+    } catch (error) {
+      setTraitError(error instanceof Error ? error.message : "Failed to generate experience draft with AI.");
+    } finally {
+      setGeneratingExperienceDraft(false);
+    }
+  };
+
+  const applyExperienceDraft = () => {
+    if (!experienceDraft) return;
+    setForm((prev) => ({
+      ...prev,
+      publicLabel: experienceDraft.publicLabel,
+      oneLineHook: experienceDraft.oneLineHook,
+      archetypeTag: experienceDraft.archetypeTag,
+      displayIcon: experienceDraft.displayIcon,
+      visualMood: experienceDraft.visualMood
+    }));
+    setExperienceDraft(null);
+  };
+
+  const discardExperienceDraft = () => setExperienceDraft(null);
 
   const actionableMissing = Array.from(new Set(activationMissing.length > 0 ? activationMissing : draftCompleteness.missing));
   const showActivationNotice = form.status !== "ACTIVE" || actionableMissing.length > 0;
@@ -1416,6 +1859,12 @@ export function TraitsPage() {
                 titleInputRef={titleInputRef}
                 actionableMissing={actionableMissing}
                 showActivationNotice={showActivationNotice}
+                isEditing={isEditing}
+                experienceDraft={experienceDraft}
+                generatingExperienceDraft={generatingExperienceDraft}
+                onGenerateExperienceDraft={(action) => void generateExperienceDraftWithAi(action)}
+                onApplyExperienceDraft={applyExperienceDraft}
+                onDiscardExperienceDraft={discardExperienceDraft}
               />
 
               <TraitScoringInterviewSection>
@@ -1423,20 +1872,22 @@ export function TraitsPage() {
                   isEditing={isEditing}
                   generatingRubric={generatingRubric}
                   onGenerateRubricWithAi={() => void generateRubricWithAi()}
+                  rubricDraft={rubricDraft}
+                  onApplyRubricDraft={applyRubricDraft}
+                  onDiscardRubricDraft={discardRubricDraft}
                   positiveSignals={positiveSignals}
                   negativeSignals={negativeSignals}
+                  followUps={followUps}
                   setForm={setForm}
                 />
                 <TraitQuestionsEditor
                   selectedTrait={selectedTrait}
-                  generatingQuestions={generatingQuestions}
-                  onGenerateQuestionsWithAi={() => void generateQuestionsWithAi()}
-                  questionForm={questionForm}
-                  setQuestionForm={setQuestionForm}
-                  submitQuestion={submitQuestion}
+                  generatingQuestionsDraft={generatingQuestionsDraft}
+                  onGenerateQuestionsDraftWithAi={generateQuestionsDraftWithAi}
+                  onSaveQuizDesign={saveQuizDesign}
+                  onSaveChatDesign={saveChatDesign}
                   questions={questions}
-                  deleteQuestion={deleteQuestion}
-                  quizOptions={quizOptions}
+                  rubricFollowUps={form.rubricFollowUps}
                 />
               </TraitScoringInterviewSection>
 
@@ -3192,21 +3643,182 @@ export function BrandVoicePage() {
   );
 }
 
+type QuizExperienceConfig = {
+  id: string;
+  headline: string;
+  subheadline: string;
+  estimatedTimeLabel: string;
+  tonePreset: string;
+  gradientSet: string;
+  motionIntensity: "LOW" | "MEDIUM" | "HIGH";
+  rankingMotionStyle: string;
+  revealStyle: string;
+  introMediaPrompt: string | null;
+  revealMediaPrompt: string | null;
+};
+
+export function QuizExperiencePage() {
+  const [form, setForm] = useState<QuizExperienceConfig>({
+    id: "default",
+    headline: "Discover your best-fit graduate path",
+    subheadline: "A quick, personality-first quiz to see where you thrive.",
+    estimatedTimeLabel: "3-5 min",
+    tonePreset: "GEN_Z_FRIENDLY",
+    gradientSet: "SUNRISE",
+    motionIntensity: "MEDIUM",
+    rankingMotionStyle: "SPRING",
+    revealStyle: "IDENTITY",
+    introMediaPrompt: "",
+    revealMediaPrompt: ""
+  });
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadConfig = async () => {
+    setLoading(true);
+    try {
+      const payload = await request<{ data: QuizExperienceConfig }>("/api/admin/quiz-experience");
+      setForm(payload.data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load quiz experience config.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadConfig();
+  }, []);
+
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setSaving(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const payload = await request<{ data: QuizExperienceConfig }>("/api/admin/quiz-experience", {
+        method: "PUT",
+        body: JSON.stringify(form)
+      });
+      setForm(payload.data);
+      setNotice("Saved");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save quiz experience config.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <Card>
+        <h2 className="mb-4 text-lg font-semibold">Quiz Experience</h2>
+        {loading && <p className="mb-2 text-sm text-slate-500">Loading...</p>}
+        <form className="space-y-3" onSubmit={(event) => void save(event)}>
+          <div>
+            <label className={labelClass}>Hook Headline</label>
+            <input className={inputClass} value={form.headline} onChange={(event) => setForm((prev) => ({ ...prev, headline: event.target.value }))} />
+          </div>
+          <div>
+            <label className={labelClass}>Hook Subheadline</label>
+            <textarea className={inputClass} value={form.subheadline} onChange={(event) => setForm((prev) => ({ ...prev, subheadline: event.target.value }))} />
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <label className={labelClass}>Estimated Time</label>
+              <input className={inputClass} value={form.estimatedTimeLabel} onChange={(event) => setForm((prev) => ({ ...prev, estimatedTimeLabel: event.target.value }))} />
+            </div>
+            <div>
+              <label className={labelClass}>Tone Preset</label>
+              <input className={inputClass} value={form.tonePreset} onChange={(event) => setForm((prev) => ({ ...prev, tonePreset: event.target.value }))} />
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <label className={labelClass}>Gradient Set</label>
+              <input className={inputClass} value={form.gradientSet} onChange={(event) => setForm((prev) => ({ ...prev, gradientSet: event.target.value }))} />
+            </div>
+            <div>
+              <label className={labelClass}>Motion Intensity</label>
+              <select className={inputClass} value={form.motionIntensity} onChange={(event) => setForm((prev) => ({ ...prev, motionIntensity: event.target.value as "LOW" | "MEDIUM" | "HIGH" }))}>
+                <option value="LOW">LOW</option>
+                <option value="MEDIUM">MEDIUM</option>
+                <option value="HIGH">HIGH</option>
+              </select>
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <label className={labelClass}>Ranking Motion Style</label>
+              <input className={inputClass} value={form.rankingMotionStyle} onChange={(event) => setForm((prev) => ({ ...prev, rankingMotionStyle: event.target.value }))} />
+            </div>
+            <div>
+              <label className={labelClass}>Reveal Style</label>
+              <input className={inputClass} value={form.revealStyle} onChange={(event) => setForm((prev) => ({ ...prev, revealStyle: event.target.value }))} />
+            </div>
+          </div>
+          <div>
+            <label className={labelClass}>Intro Media Prompt (optional)</label>
+            <textarea className={inputClass} value={form.introMediaPrompt ?? ""} onChange={(event) => setForm((prev) => ({ ...prev, introMediaPrompt: event.target.value }))} />
+          </div>
+          <div>
+            <label className={labelClass}>Reveal Media Prompt (optional)</label>
+            <textarea className={inputClass} value={form.revealMediaPrompt ?? ""} onChange={(event) => setForm((prev) => ({ ...prev, revealMediaPrompt: event.target.value }))} />
+          </div>
+          <div className="flex items-center gap-3">
+            <Button type="submit" disabled={saving}>{saving ? "Saving..." : "Save Quiz Experience"}</Button>
+            {notice && <span className="text-sm text-emerald-700">{notice}</span>}
+            {error && <span className="text-sm text-red-700">{error}</span>}
+          </div>
+        </form>
+      </Card>
+
+      <Card>
+        <h3 className="mb-3 text-lg font-semibold">Live Preview</h3>
+        <div className="rounded-xl bg-gradient-to-br from-orange-200 via-amber-100 to-rose-100 p-4">
+          <p className="text-xs uppercase tracking-wide text-slate-700">{form.estimatedTimeLabel}</p>
+          <h4 className="mt-2 text-xl font-semibold text-slate-900">{form.headline}</h4>
+          <p className="mt-2 text-sm text-slate-700">{form.subheadline}</p>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-700">
+            <span className="rounded-full bg-white/80 px-2 py-1">Tone: {form.tonePreset}</span>
+            <span className="rounded-full bg-white/80 px-2 py-1">Motion: {form.motionIntensity}</span>
+            <span className="rounded-full bg-white/80 px-2 py-1">Reveal: {form.revealStyle}</span>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 const rootElement = document.getElementById("root");
 const isTestRuntime = import.meta.env.MODE === "test";
 if (rootElement && !isTestRuntime) {
-  ReactDOM.createRoot(rootElement).render(
+  const routerFuture = {
+    v7_relativeSplatPath: true,
+    ...( { v7_startTransition: true } as Record<string, boolean>)
+  };
+  const root =
+    (rootElement as unknown as { _adminRoot?: ReturnType<typeof ReactDOM.createRoot> })._adminRoot ??
+    ((rootElement as unknown as { _adminRoot?: ReturnType<typeof ReactDOM.createRoot> })._adminRoot =
+      ReactDOM.createRoot(rootElement));
+
+  root.render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
+        <BrowserRouter future={routerFuture}>
           <ShellLayout>
             <Routes>
               <Route path="/" element={<Navigate to="/traits" replace />} />
               <Route path="/traits" element={<TraitsPage />} />
               <Route path="/programs" element={<ProgramsPage />} />
               <Route path="/brand-voice" element={<BrandVoicePage />} />
+              <Route path="/quiz-experience" element={<QuizExperiencePage />} />
+              <Route path="/widget/branding" element={<WidgetBrandingPage />} />
               <Route path="/widget/embed" element={<AdminWidgetEmbedPage />} />
               <Route path="/widget/preview" element={<AdminWidgetPreviewPage />} />
+              <Route path="/widget/orchestration" element={<AdminWidgetOrchestrationPage />} />
               <Route path="*" element={<Navigate to="/traits" replace />} />
             </Routes>
           </ShellLayout>

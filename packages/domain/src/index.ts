@@ -35,10 +35,14 @@ export const brandVoiceAvoidFlagOptions = [
 export const brandVoiceSampleTypes = ["headline", "cta", "email_intro", "description"] as const;
 
 export const traitQuestionTypes = ["CHAT", "QUIZ"] as const;
+export const traitStatuses = ["DRAFT", "IN_REVIEW", "ACTIVE", "DEPRECATED"] as const;
+export const programStatuses = ["DRAFT", "ACTIVE", "INACTIVE"] as const;
 
 export type TraitCategory = (typeof traitCategories)[number];
 export type ProgramTraitPriorityBucket = (typeof programTraitPriorityBuckets)[number];
 export type TraitQuestionType = (typeof traitQuestionTypes)[number];
+export type TraitStatus = (typeof traitStatuses)[number];
+export type ProgramStatus = (typeof programStatuses)[number];
 export type BrandVoiceTone = (typeof brandVoiceTones)[number];
 export type BrandVoiceSampleType = (typeof brandVoiceSampleTypes)[number];
 
@@ -61,12 +65,23 @@ export type Trait = {
   id: string;
   name: string;
   category: TraitCategory;
+  status: TraitStatus;
   definition: string | null;
   rubricScaleMin: number;
   rubricScaleMax: number;
   rubricPositiveSignals: string | null;
   rubricNegativeSignals: string | null;
   rubricFollowUps: string | null;
+  completeness?: {
+    isComplete: boolean;
+    percentComplete: number;
+    missing: string[];
+    counts: {
+      positiveSignals: number;
+      negativeSignals: number;
+      questions: number;
+    };
+  };
   createdAt: string;
   updatedAt: string;
 };
@@ -87,8 +102,25 @@ export type Program = {
   description: string | null;
   degreeLevel: string | null;
   department: string | null;
+  isActive: boolean;
   createdAt: string;
   updatedAt: string;
+};
+
+export type ProgramStatusInput = {
+  degreeLevel?: string | null;
+  department?: string | null;
+  isActive?: boolean | null;
+};
+
+const hasNonEmptyText = (value?: string | null) => (value ?? "").trim().length > 0;
+
+export const isProgramDraft = (program: ProgramStatusInput): boolean =>
+  !hasNonEmptyText(program.degreeLevel) || !hasNonEmptyText(program.department);
+
+export const computeProgramStatus = (program: ProgramStatusInput): ProgramStatus => {
+  if (isProgramDraft(program)) return "DRAFT";
+  return program.isActive ? "ACTIVE" : "INACTIVE";
 };
 
 export type ProgramTrait = {
@@ -425,6 +457,8 @@ export const pickNextTrait = (input: {
 }): { traitId: string | null; scores: Array<{ traitId: string; priority: number }> } => {
   const states = traitStateById(input.traitStates);
   const recent = input.recentTraitIds ?? [];
+  const recentWindow = recent.slice(-6);
+  const lastTraitId = recentWindow[recentWindow.length - 1] ?? null;
   const maxSameCategoryInRow = input.maxSameCategoryInRow ?? 2;
   const lastCategory = recent.length > 0 ? input.traits.find((item) => item.traitId === recent[recent.length - 1])?.category : null;
   const recentSameCategoryCount = lastCategory
@@ -438,12 +472,29 @@ export const pickNextTrait = (input: {
     const current = states.get(trait.traitId);
     const uncertainty = 1 - clampNumber(current?.confidence0to1 ?? 0, 0, 1);
     const impact = clampNumber(input.traitImpacts[trait.traitId] ?? 0.35, 0.1, 1);
-    const askedRecently = recent.slice(-5).includes(trait.traitId);
-    let coverageBoost = askedRecently ? 0.55 : 1;
-    if (lastCategory && trait.category === lastCategory && recentSameCategoryCount >= maxSameCategoryInRow) {
-      coverageBoost = 0.2;
+    const recentCount = recentWindow.filter((traitId) => traitId === trait.traitId).length;
+    let consecutiveCount = 0;
+    for (let index = recentWindow.length - 1; index >= 0; index -= 1) {
+      if (recentWindow[index] === trait.traitId) {
+        consecutiveCount += 1;
+        continue;
+      }
+      break;
     }
-    const priority = uncertainty * impact * coverageBoost;
+    let coverageBoost = 1;
+    if (recentCount > 0) {
+      coverageBoost *= Math.pow(0.6, recentCount);
+    }
+    if (lastTraitId === trait.traitId) {
+      coverageBoost *= 0.5;
+    }
+    if (consecutiveCount >= 2) {
+      coverageBoost *= 0.35;
+    }
+    if (lastCategory && trait.category === lastCategory && recentSameCategoryCount >= maxSameCategoryInRow) {
+      coverageBoost *= 0.3;
+    }
+    const priority = uncertainty * impact * clampNumber(coverageBoost, 0.05, 1);
     return { traitId: trait.traitId, priority };
   });
 

@@ -8,8 +8,10 @@ import {
   type TraitState
 } from "@pmm/domain";
 import { prisma } from "./prisma.js";
+import { filterActivePrograms } from "./program-activity.js";
 import { evaluateTraitQuestionResponse, splitRubricSignals } from "./trait-scoring.js";
 import { buildInterviewSystemPrompt, DEFAULT_INTERVIEW_LANGUAGE } from "./interview-language.js";
+import { log } from "./logger.js";
 
 const bucketWeight: Record<ProgramTraitPriorityBucket, number> = {
   CRITICAL: 1,
@@ -24,6 +26,14 @@ type Question = {
   id: string;
   traitId: string;
   traitName: string;
+  publicLabel: string;
+  oneLineHook: string | null;
+  archetypeTag: string | null;
+  displayIcon: string | null;
+  visualMood: string | null;
+  narrativeIntro: string | null;
+  answerStyle: "RADIO" | "CARD_GRID" | "SLIDER" | "CHAT" | null;
+  answerOptionsMeta: Array<{ label: string; microCopy?: string; iconToken?: string; traitScore?: number }>;
   prompt: string;
   type: "chat" | "quiz";
   options: string[];
@@ -35,6 +45,7 @@ type ProgramContext = {
     string,
     {
       traitName: string;
+      publicLabel: string;
       category: string | null;
       questions: Question[];
       positiveSignals: string[];
@@ -44,11 +55,76 @@ type ProgramContext = {
   >;
 };
 
+type RotationDiagnostics = {
+  recentTraitWindow: string[];
+  askedQuestionCount: number;
+  usedPreferredTraits: boolean;
+  preferredTraitCount: number;
+  selectedTraitId: string | null;
+  selectedQuestionId: string | null;
+  selectedTraitRecentCount: number;
+  selectedTraitConsecutiveCount: number;
+  topCandidateTraits: Array<{ traitId: string; priority: number }>;
+};
+
+const countConsecutiveFromEnd = (values: string[], target: string | null) => {
+  if (!target) return 0;
+  let count = 0;
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    if (values[index] !== target) break;
+    count += 1;
+  }
+  return count;
+};
+
+const logRotationTelemetry = (input: {
+  event: "session_create" | "turn" | "checkpoint";
+  sessionId: string;
+  mode: Mode;
+  diagnostics: RotationDiagnostics;
+  durationMs?: number;
+  answeredTraitCount?: number;
+  checkpointRequired?: boolean;
+  action?: "stop" | "continue" | "focus";
+}) => {
+  log("info", "interview.rotation.diagnostics", {
+    event: input.event,
+    mode: input.mode,
+    sessionId: input.sessionId,
+    durationMs: input.durationMs,
+    answeredTraitCount: input.answeredTraitCount,
+    checkpointRequired: input.checkpointRequired,
+    action: input.action,
+    ...input.diagnostics
+  });
+
+  if (input.diagnostics.selectedTraitConsecutiveCount >= 2) {
+    log("warn", "interview.rotation.streak_detected", {
+      event: input.event,
+      mode: input.mode,
+      sessionId: input.sessionId,
+      selectedTraitId: input.diagnostics.selectedTraitId,
+      selectedTraitConsecutiveCount: input.diagnostics.selectedTraitConsecutiveCount,
+      selectedTraitRecentCount: input.diagnostics.selectedTraitRecentCount
+    });
+  }
+};
+
 const parseOptions = (optionsJson: string | null): string[] => {
   if (!optionsJson) return [];
   try {
     const parsed = JSON.parse(optionsJson);
     return Array.isArray(parsed) ? parsed.map((item) => String(item)) : [];
+  } catch {
+    return [];
+  }
+};
+
+const parseOptionMeta = (raw: string | null): Array<{ label: string; microCopy?: string; iconToken?: string; traitScore?: number }> => {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
@@ -62,6 +138,33 @@ const confidenceLabel = (value: number): "low" | "medium" | "high" => {
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
+const buildInitialPrompt = (input: {
+  mode: Mode;
+  languageTag: string;
+  brandVoice:
+    | {
+        name: string;
+        primaryTone: string;
+        toneModifiers: string[];
+        styleFlags: string[];
+      }
+    | null;
+}) => {
+  if (!input.brandVoice) {
+    return input.languageTag.startsWith("en")
+      ? "Welcome. I am your admissions interviewer. Let's explore your fit one step at a time."
+      : "Welcome. I am your admissions interviewer.";
+  }
+
+  const tone = input.brandVoice.primaryTone || "professional";
+  const modifiers = input.brandVoice.toneModifiers.slice(0, 2).join(", ");
+  const style = input.brandVoice.styleFlags.slice(0, 2).join(", ");
+  const modifierLine = modifiers ? ` with a ${modifiers} style` : "";
+  const styleLine = style ? ` Keep the conversation ${style}.` : "";
+
+  return `Welcome. I am your ${tone} admissions interviewer${modifierLine}. I will ask short, supportive questions to understand your program fit.${styleLine}`;
+};
+
 const loadProgramContext = async (input: { mode: Mode; programFilterIds?: string[] }): Promise<ProgramContext> => {
   const scopedPrograms = await prisma.program.findMany({
     where: input.programFilterIds?.length ? { id: { in: input.programFilterIds } } : undefined,
@@ -69,14 +172,35 @@ const loadProgramContext = async (input: { mode: Mode; programFilterIds?: string
       traits: {
         include: {
           trait: {
-            include: {
+            select: {
+              id: true,
+              name: true,
+              publicLabel: true,
+              oneLineHook: true,
+              archetypeTag: true,
+              displayIcon: true,
+              visualMood: true,
+              category: true,
+              definition: true,
+              rubricPositiveSignals: true,
+              rubricNegativeSignals: true,
               questions: {
-                where: {
-                  type: input.mode === "quiz" ? TraitQuestionType.QUIZ : TraitQuestionType.CHAT
-                },
-                orderBy: { createdAt: "asc" }
+                  where: {
+                    type: input.mode === "quiz" ? TraitQuestionType.QUIZ : TraitQuestionType.CHAT
+                  },
+                  select: {
+                    id: true,
+                    traitId: true,
+                    prompt: true,
+                    type: true,
+                    optionsJson: true,
+                    narrativeIntro: true,
+                    answerStyle: true,
+                    answerOptionsMetaJson: true
+                  },
+                  orderBy: { createdAt: "asc" }
+                }
               }
-            }
           }
         }
       }
@@ -85,7 +209,11 @@ const loadProgramContext = async (input: { mode: Mode; programFilterIds?: string
     take: 24
   });
 
-  const programs = scopedPrograms.map((program) => ({
+  const activePrograms = filterActivePrograms(scopedPrograms, {
+    context: `interview-engine.loadProgramContext:${input.mode}`
+  });
+
+  const programs = activePrograms.map((program) => ({
     programId: program.id,
     programName: program.name,
     traits: program.traits.map((item) => ({
@@ -95,16 +223,25 @@ const loadProgramContext = async (input: { mode: Mode; programFilterIds?: string
   }));
 
   const traitMeta = new Map<string, ProgramContext["traitMeta"] extends Map<string, infer T> ? T : never>();
-  for (const program of scopedPrograms) {
+  for (const program of activePrograms) {
     for (const item of program.traits) {
       if (traitMeta.has(item.traitId)) continue;
       traitMeta.set(item.traitId, {
         traitName: item.trait.name,
+        publicLabel: item.trait.publicLabel ?? item.trait.name,
         category: item.trait.category,
         questions: item.trait.questions.map((question) => ({
           id: question.id,
           traitId: question.traitId,
           traitName: item.trait.name,
+          publicLabel: item.trait.publicLabel ?? item.trait.name,
+          oneLineHook: item.trait.oneLineHook ?? null,
+          archetypeTag: item.trait.archetypeTag ?? null,
+          displayIcon: item.trait.displayIcon ?? null,
+          visualMood: item.trait.visualMood ?? null,
+          narrativeIntro: question.narrativeIntro ?? null,
+          answerStyle: (question.answerStyle as Question["answerStyle"]) ?? null,
+          answerOptionsMeta: parseOptionMeta(question.answerOptionsMetaJson),
           prompt: question.prompt,
           type: question.type === TraitQuestionType.QUIZ ? "quiz" : "chat",
           options: parseOptions(question.optionsJson)
@@ -132,6 +269,7 @@ const buildSnapshot = (input: {
       return {
         traitId,
         traitName: meta.traitName,
+        publicLabel: meta.publicLabel,
         score_1_to_5: state?.score0to5 ?? null,
         confidence: state ? confidenceLabel(state.confidence0to1) : null,
         evidence: [],
@@ -146,6 +284,7 @@ const buildProgramFit = (input: {
   programs: ProgramMatchInput[];
   traitStates: TraitState[];
   previousScores?: Record<string, number>;
+  traitMeta: ProgramContext["traitMeta"];
 }) => {
   const ranked = rankProgramsByTraits({
     programs: input.programs,
@@ -161,11 +300,27 @@ const buildProgramFit = (input: {
       fitScore_0_to_100: item.fitScore_0_to_100,
       confidence_0_to_1: item.confidence_0_to_1,
       deltaFromLast_0_to_100: item.deltaFromLast_0_to_100,
-      explainability: item.explainability,
       topTraits: item.explainability.topContributors.map((trait) => ({
-        traitName: trait.traitName,
+        traitName: input.traitMeta?.get(trait.traitId)?.publicLabel ?? trait.traitName,
+        publicLabel: input.traitMeta?.get(trait.traitId)?.publicLabel ?? trait.traitName,
         delta: Number((trait.contribution * 100).toFixed(2))
-      }))
+      })),
+      explainability: {
+        ...item.explainability,
+        topContributors: item.explainability.topContributors.map((trait) => ({
+          ...trait,
+          traitName: input.traitMeta?.get(trait.traitId)?.publicLabel ?? trait.traitName,
+          publicLabel: input.traitMeta?.get(trait.traitId)?.publicLabel ?? trait.traitName
+        })),
+        gaps: item.explainability.gaps.map((trait) => ({
+          ...trait,
+          traitName: input.traitMeta?.get(trait.traitId)?.publicLabel ?? trait.traitName
+        })),
+        suggestions: item.explainability.suggestions.map((trait) => ({
+          ...trait,
+          traitName: input.traitMeta?.get(trait.traitId)?.publicLabel ?? trait.traitName
+        }))
+      }
     })),
     selectedProgramId: null
   };
@@ -181,6 +336,7 @@ const chooseQuestion = (input: {
   preferredTraitIds?: string[];
 }) => {
   const askedQuestionIds = new Set(input.askedQuestionIds ?? []);
+  const recentTraitWindow = (input.recentTraitIds ?? []).slice(-8);
   const traitImpacts = computeTraitImpacts({
     programs: input.programs,
     maxPrograms: 5
@@ -218,10 +374,27 @@ const chooseQuestion = (input: {
     .map((traitId) => firstQuestionForTrait(traitId))
     .filter((item): item is Question => Boolean(item))
     .slice(0, 2);
+  const selectedTraitId = nextQuestion?.traitId ?? candidateTraitIds[0] ?? null;
+  const selectedTraitRecentCount = selectedTraitId ? recentTraitWindow.filter((item) => item === selectedTraitId).length : 0;
+  const selectedTraitConsecutiveCount = countConsecutiveFromEnd(recentTraitWindow, selectedTraitId);
 
   return {
     nextQuestion,
-    prefetchedQuestions
+    prefetchedQuestions,
+    diagnostics: {
+      recentTraitWindow,
+      askedQuestionCount: askedQuestionIds.size,
+      usedPreferredTraits: preferred.length > 0,
+      preferredTraitCount: preferred.length,
+      selectedTraitId,
+      selectedQuestionId: nextQuestion?.id ?? null,
+      selectedTraitRecentCount,
+      selectedTraitConsecutiveCount,
+      topCandidateTraits: picked.scores.slice(0, 3).map((item) => ({
+        traitId: item.traitId,
+        priority: Number(item.priority.toFixed(4))
+      }))
+    } satisfies RotationDiagnostics
   };
 };
 
@@ -288,6 +461,7 @@ export const createInterviewSession = async (input: {
   programFilterIds?: string[];
   language?: string;
 }) => {
+  const startedAt = Date.now();
   const language = (input.language ?? DEFAULT_INTERVIEW_LANGUAGE).trim().toLowerCase();
   const session = await prisma.candidateSession.create({
     data: {
@@ -315,6 +489,13 @@ export const createInterviewSession = async (input: {
     traitStates,
     programs: context.programs
   });
+  logRotationTelemetry({
+    event: "session_create",
+    sessionId: session.id,
+    mode: input.mode,
+    durationMs: Date.now() - startedAt,
+    diagnostics: nextQuestionSet.diagnostics
+  });
   const snapshot = buildSnapshot({
     traitMeta: context.traitMeta,
     traitStates,
@@ -322,12 +503,22 @@ export const createInterviewSession = async (input: {
   });
   const programFit = buildProgramFit({
     programs: context.programs,
-    traitStates
+    traitStates,
+    traitMeta: context.traitMeta
   });
 
-  const initialPrompt = brandVoice
-    ? `Welcome! I am your ${brandVoice.primaryTone} admissions interviewer. Let's explore your fit step by step.`
-    : "Welcome! I am your admissions interviewer. Let's explore your strengths and goals.";
+  const initialPrompt = buildInitialPrompt({
+    mode: input.mode,
+    languageTag: language,
+    brandVoice: brandVoice
+      ? {
+          name: brandVoice.name,
+          primaryTone: brandVoice.primaryTone,
+          toneModifiers: brandVoice.toneModifiers,
+          styleFlags: brandVoice.styleFlags
+        }
+      : null
+  });
   const systemPrompt = buildInterviewSystemPrompt({
     brandVoicePrompt: brandVoice
       ? `Use a ${brandVoice.primaryTone} tone with these style flags: ${brandVoice.styleFlags.join(", ") || "clear and supportive"}.`
@@ -409,6 +600,7 @@ export const handleInterviewTurn = async (input: {
   programFilterIds?: string[];
   preferredTraitIds?: string[];
 }) => {
+  const startedAt = Date.now();
   const effectiveLanguage = (input.language ?? DEFAULT_INTERVIEW_LANGUAGE).trim().toLowerCase();
   if (input.language) {
     await prisma.candidateSession.update({
@@ -420,7 +612,8 @@ export const handleInterviewTurn = async (input: {
   const previousTraitStates = await loadTraitStates(input.sessionId, context.traitMeta);
   const previousProgramFit = buildProgramFit({
     programs: context.programs,
-    traitStates: previousTraitStates
+    traitStates: previousTraitStates,
+    traitMeta: context.traitMeta
   });
   const previousScoreMap = Object.fromEntries(previousProgramFit.programs.map((item) => [item.programId, item.fitScore_0_to_100]));
 
@@ -496,7 +689,8 @@ export const handleInterviewTurn = async (input: {
   const programFit = buildProgramFit({
     programs: context.programs,
     traitStates,
-    previousScores: previousScoreMap
+    previousScores: previousScoreMap,
+    traitMeta: context.traitMeta
   });
   const answeredTraitCount = await prisma.transcriptTurn.count({
     where: { sessionId: input.sessionId, speaker: "candidate" }
@@ -509,6 +703,15 @@ export const handleInterviewTurn = async (input: {
         suggestedTraitIds: programFit.programs[0]?.explainability.gaps.map((item) => item.traitId).slice(0, 2) ?? []
       }
     : null;
+  logRotationTelemetry({
+    event: "turn",
+    sessionId: input.sessionId,
+    mode: input.mode,
+    durationMs: Date.now() - startedAt,
+    answeredTraitCount,
+    checkpointRequired: Boolean(checkpoint?.required),
+    diagnostics: nextQuestionSet.diagnostics
+  });
 
   return {
     languageTag: effectiveLanguage,
@@ -531,6 +734,7 @@ export const handleCheckpointAction = async (input: {
   askedQuestionIds?: string[];
   programFilterIds?: string[];
 }) => {
+  const startedAt = Date.now();
   const effectiveLanguage = (input.language ?? DEFAULT_INTERVIEW_LANGUAGE).trim().toLowerCase();
   if (input.language) {
     await prisma.candidateSession.update({
@@ -556,6 +760,14 @@ export const handleCheckpointAction = async (input: {
     askedQuestionIds: input.askedQuestionIds,
     preferredTraitIds: input.action === "focus" ? input.focusTraitIds : undefined
   });
+  logRotationTelemetry({
+    event: "checkpoint",
+    sessionId: input.sessionId,
+    mode: input.mode,
+    action: input.action,
+    durationMs: Date.now() - startedAt,
+    diagnostics: nextQuestionSet.diagnostics
+  });
 
   return {
     languageTag: effectiveLanguage,
@@ -567,7 +779,8 @@ export const handleCheckpointAction = async (input: {
     }),
     program_fit: buildProgramFit({
       programs: context.programs,
-      traitStates
+      traitStates,
+      traitMeta: context.traitMeta
     })
   };
 };

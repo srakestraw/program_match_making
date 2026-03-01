@@ -11,7 +11,18 @@ export type TraitForPicker = {
   id: string;
   name: string;
   category: TraitCategory;
+  status: "DRAFT" | "IN_REVIEW" | "ACTIVE" | "DEPRECATED";
   definition: string | null;
+  completeness: {
+    isComplete: boolean;
+    percentComplete: number;
+    missing: string[];
+    counts: {
+      positiveSignals: number;
+      negativeSignals: number;
+      questions: number;
+    };
+  };
   createdAt?: string;
 };
 
@@ -106,13 +117,20 @@ export function TraitPickerModal({
       );
     });
 
+    const statusOrder: Record<TraitForPicker["status"], number> = {
+      ACTIVE: 0,
+      IN_REVIEW: 1,
+      DRAFT: 2,
+      DEPRECATED: 3
+    };
+
     if (sortOption === "alphabetical") {
-      list = [...list].sort((a, b) => a.name.localeCompare(b.name));
+      list = [...list].sort((a, b) => statusOrder[a.status] - statusOrder[b.status] || a.name.localeCompare(b.name));
     } else {
       list = [...list].sort((a, b) => {
         const aTime = a.createdAt ? Date.parse(a.createdAt) : 0;
         const bTime = b.createdAt ? Date.parse(b.createdAt) : 0;
-        return bTime - aTime || a.name.localeCompare(b.name);
+        return statusOrder[a.status] - statusOrder[b.status] || bTime - aTime || a.name.localeCompare(b.name);
       });
     }
     return list;
@@ -132,7 +150,10 @@ export function TraitPickerModal({
       }))
       .filter((set) => {
         if (set.traitIds.length === 0) return false;
-        const resolvedTraits = set.traitIds.map((traitId) => traitsById.get(traitId)).filter(Boolean);
+        const resolvedTraits = set.traitIds
+          .map((traitId) => traitsById.get(traitId))
+          .filter((trait): trait is TraitForPicker => Boolean(trait));
+        if (resolvedTraits.length === 0) return false;
         const matchesCategory =
           selectedCategoryId === "ALL" ||
           resolvedTraits.some((trait) => trait?.category === selectedCategoryId);
@@ -154,6 +175,11 @@ export function TraitPickerModal({
 
   const toggleTrait = (id: string) => {
     if (isAlreadyAdded(id)) return;
+    const selectedTrait = traitsById.get(id);
+    if (selectedTrait && selectedTrait.status !== "ACTIVE") {
+      const proceed = window.confirm("This trait is not Active and will not affect scoring.");
+      if (!proceed) return;
+    }
     setSelectedTraitIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -167,12 +193,25 @@ export function TraitPickerModal({
   const selectSet = (setId: string) => {
     const targetSet = contextualSets.find((set) => set.id === setId);
     if (!targetSet) return;
-    const addableIds = targetSet.traitIds.filter((id) => !isAlreadyAdded(id) && !isSelected(id));
+    const addableIds = targetSet.traitIds.filter((id) => {
+      const trait = traitsById.get(id);
+      if (!trait) return false;
+      return !isAlreadyAdded(id) && !isSelected(id);
+    });
 
     if (addableIds.length === 0) {
       setNotice("All traits in this set are already added.");
       setError(null);
       return;
+    }
+
+    const hasNonActive = addableIds.some((id) => {
+      const trait = traitsById.get(id);
+      return trait ? trait.status !== "ACTIVE" : false;
+    });
+    if (hasNonActive) {
+      const proceed = window.confirm("This trait is not Active and will not affect scoring.");
+      if (!proceed) return;
     }
 
     setSelectedTraitIds((prev) => new Set([...prev, ...addableIds]));

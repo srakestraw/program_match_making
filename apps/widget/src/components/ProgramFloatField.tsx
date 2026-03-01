@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProgramFit } from "@pmm/api-client";
 
 type ProgramFloatFieldProps = {
@@ -16,13 +16,31 @@ const confidenceLabel = (value?: number) => {
 
 export const ProgramFloatField = ({ programs, selectedProgramId, done = false }: ProgramFloatFieldProps) => {
   const [expandedProgramId, setExpandedProgramId] = useState<string | null>(null);
-  const ranked = useMemo(() => [...programs].sort((a, b) => b.fitScore_0_to_100 - a.fitScore_0_to_100).slice(0, 5), [programs]);
+  const ranked = useMemo(() => [...programs].sort((a, b) => b.fitScore_0_to_100 - a.fitScore_0_to_100).slice(0, 3), [programs]);
+  const previousRankRef = useRef<Record<string, number>>({});
+  const [rankDelta, setRankDelta] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    const nextMap: Record<string, number> = {};
+    const deltaMap: Record<string, number> = {};
+    ranked.forEach((program, index) => {
+      nextMap[program.programId] = index;
+      const previous = previousRankRef.current[program.programId];
+      if (typeof previous === "number") {
+        deltaMap[program.programId] = previous - index;
+      } else {
+        deltaMap[program.programId] = 0;
+      }
+    });
+    previousRankRef.current = nextMap;
+    setRankDelta(deltaMap);
+  }, [ranked]);
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white/80 p-3" data-testid="program-float-field">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-slate-900">{done ? "Final rankings" : "Live program rankings"}</h3>
-        <span className="text-xs text-slate-500">Top 5</span>
+        <span className="text-xs text-slate-500">Top 3</span>
       </div>
 
       <div className="space-y-2">
@@ -36,7 +54,7 @@ export const ProgramFloatField = ({ programs, selectedProgramId, done = false }:
           return (
             <article
               key={program.programId}
-              className={`rounded-md border p-2 ${isSelected ? "border-blue-400 bg-blue-50/50" : "border-slate-200 bg-white"}`}
+              className={`rounded-md border p-2 transition-all duration-300 ${isSelected ? "border-blue-400 bg-blue-50/50" : "border-slate-200 bg-white"}`}
             >
               <div className="flex items-start justify-between gap-2">
                 <div>
@@ -49,6 +67,15 @@ export const ProgramFloatField = ({ programs, selectedProgramId, done = false }:
                   <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-700">
                     {confidenceLabel(program.confidence_0_to_1)} {confidencePct}%
                   </span>
+                  {rankDelta[program.programId] !== 0 && (
+                    <p
+                      className={`mt-1 text-[10px] font-semibold ${
+                        (rankDelta[program.programId] ?? 0) > 0 ? "text-emerald-700" : "text-rose-700"
+                      }`}
+                    >
+                      {(rankDelta[program.programId] ?? 0) > 0 ? "▲" : "▼"} {Math.abs(rankDelta[program.programId] ?? 0)} rank
+                    </p>
+                  )}
                   <p className={`mt-1 text-xs font-medium ${positiveDelta ? "text-emerald-700" : delta < 0 ? "text-rose-700" : "text-slate-500"}`}>
                     Delta {positiveDelta ? "+" : ""}
                     {delta.toFixed(1)}
@@ -71,7 +98,7 @@ export const ProgramFloatField = ({ programs, selectedProgramId, done = false }:
                     <ul className="mt-1 space-y-0.5">
                       {(program.explainability?.topContributors ?? []).slice(0, 3).map((item) => (
                         <li key={`${program.programId}-top-${item.traitId}`}>
-                          {item.traitName} ({Math.round(item.contribution * 100)}%)
+                          {(item.publicLabel ?? item.traitName)} ({Math.round(item.contribution * 100)}%)
                         </li>
                       ))}
                     </ul>

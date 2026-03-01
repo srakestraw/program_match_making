@@ -592,8 +592,15 @@ const buildScoringSnapshot = (input: {
   };
 };
 
-const loadProgramTraits = async (programId: string, mode: "voice" | "chat" | "quiz") =>
-  prisma.programTrait.findMany({
+type NonActiveTraitWarning = {
+  traitId: string;
+  name: string;
+  status: "DRAFT" | "IN_REVIEW" | "ACTIVE" | "DEPRECATED";
+  reason: "Trait not Active";
+};
+
+const loadProgramTraits = async (programId: string, mode: "voice" | "chat" | "quiz") => {
+  const rows = await prisma.programTrait.findMany({
     where: { programId },
     include: {
       trait: {
@@ -612,6 +619,24 @@ const loadProgramTraits = async (programId: string, mode: "voice" | "chat" | "qu
       }
     }
   });
+  const warnings: NonActiveTraitWarning[] = [];
+  const activeRows = rows.filter((row) => {
+    const traitStatus = (row.trait as { status?: NonActiveTraitWarning["status"] }).status ?? "DRAFT";
+    if (traitStatus === "ACTIVE") return true;
+    warnings.push({
+      traitId: row.traitId,
+      name: row.trait.name,
+      status: traitStatus,
+      reason: "Trait not Active"
+    });
+    return false;
+  });
+
+  return {
+    activeRows,
+    warnings
+  };
+};
 
 const buildSessionInsights = async (input: {
   sessionId: string;
@@ -631,7 +656,7 @@ const buildSessionInsights = async (input: {
   ]);
 
   const scoringSnapshot = buildScoringSnapshot({
-    programTraits: programTraits.map((item) => ({
+    programTraits: programTraits.activeRows.map((item) => ({
       traitId: item.traitId,
       bucket: item.bucket,
       sortOrder: item.sortOrder,
@@ -645,7 +670,8 @@ const buildSessionInsights = async (input: {
 
   return {
     scoring_snapshot: scoringSnapshot,
-    program_fit: programFit
+    program_fit: programFit,
+    warnings: programTraits.warnings
   };
 };
 
@@ -666,7 +692,7 @@ export const createScorecardForSession = async (input: {
 }) => {
   const [session, program] = await Promise.all([
     prisma.candidateSession.findUnique({ where: { id: input.sessionId } }),
-    prisma.program.findUnique({ where: { id: input.programId } })
+    prisma.program.findFirst({ where: { id: input.programId, isActive: true } })
   ]);
 
   if (!session) {
@@ -690,7 +716,8 @@ export const createScorecardForSession = async (input: {
         text: turn.text
       }));
 
-  const programTraits = await loadProgramTraits(input.programId, input.mode);
+  const loadedProgramTraits = await loadProgramTraits(input.programId, input.mode);
+  const programTraits = loadedProgramTraits.activeRows;
 
   const perTrait =
     input.mode === "quiz"
@@ -793,7 +820,8 @@ export const createScorecardForSession = async (input: {
 
   return {
     ...scorecard,
-    ...insights
+    ...insights,
+    warnings: loadedProgramTraits.warnings
   };
 };
 

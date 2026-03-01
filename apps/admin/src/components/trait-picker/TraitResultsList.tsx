@@ -5,6 +5,7 @@ export type TraitResultsListItem = {
   id: string;
   name: string;
   category: TraitCategory;
+  status: "DRAFT" | "IN_REVIEW" | "ACTIVE" | "DEPRECATED";
   definition: string | null;
 };
 
@@ -96,13 +97,22 @@ export function TraitResultsList({
                     <p className="truncate text-sm font-medium text-slate-800">{trait.name}</p>
                     {isOnBoard && (
                       <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] text-slate-600">
-                        On board
+                        Added
+                      </span>
+                    )}
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
+                      {trait.status.replaceAll("_", " ")}
+                    </span>
+                    {trait.status !== "ACTIVE" && (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800">
+                        Excluded from scoring
                       </span>
                     )}
                   </div>
                   <p className="mt-0.5 line-clamp-1 text-xs text-slate-500">
                     {trait.definition ?? "No description"}
                   </p>
+                  {isOnBoard && <p className="mt-0.5 text-[11px] text-slate-500">Already on board</p>}
                   <span className="mt-1 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
                     {trait.category}
                   </span>

@@ -1,0 +1,522 @@
+{
+  "baa4e4554396d282cb20af8704cd15581e2c1e08a86cf11526c17eedeb6a8267": {
+    "positiveSignals": [
+      "Gives concrete examples showing analytical & quantitative reasoning.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of analytical & quantitative reasoning.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated analytical & quantitative reasoning in a meaningful situation.",
+      "How have you used analytical & quantitative reasoning to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong analytical & quantitative reasoning?",
+    "publicLabel": "Analytical & Quantitative Reasoning",
+    "oneLineHook": "Show how you bring analytical & quantitative reasoning to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "189726a14c3145beb7fc5c6e0819e9f34205aa7ac6517e15ca2e6804880837a8": {
+    "positiveSignals": [
+      "Gives concrete examples showing statistical modeling.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of statistical modeling.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated statistical modeling in a meaningful situation.",
+      "How have you used statistical modeling to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong statistical modeling?",
+    "publicLabel": "Statistical Modeling",
+    "oneLineHook": "Show how you bring statistical modeling to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "1f71d0aec202de86b2715593796ed6d37c9617f76c083e0a435ac9dc76d665ed": {
+    "positiveSignals": [
+      "Gives concrete examples showing data analytics & visualization.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of data analytics & visualization.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated data analytics & visualization in a meaningful situation.",
+      "How have you used data analytics & visualization to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong data analytics & visualization?",
+    "publicLabel": "Data Analytics & Visualization",
+    "oneLineHook": "Show how you bring data analytics & visualization to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "ddbe03e2ae29acaed1f16e5aeda6b9ff560d142efcdf38c019e1713f90981cee": {
+    "positiveSignals": [
+      "Gives concrete examples showing applied ai & automation.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of applied ai & automation.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated applied ai & automation in a meaningful situation.",
+      "How have you used applied ai & automation to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong applied ai & automation?",
+    "publicLabel": "Applied AI & Automation",
+    "oneLineHook": "Show how you bring applied ai & automation to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "9da5e9c5594b53c94a8d5aabf793fe4fc3a93079381e9f7710bdd1ec6547f07d": {
+    "positiveSignals": [
+      "Gives concrete examples showing accounting & financial reporting.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of accounting & financial reporting.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated accounting & financial reporting in a meaningful situation.",
+      "How have you used accounting & financial reporting to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong accounting & financial reporting?",
+    "publicLabel": "Accounting & Financial Reporting",
+    "oneLineHook": "Show how you bring accounting & financial reporting to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "c3a19834976545e8d6894a2ebcc7224abed783865b06534ce06a1506706a4687": {
+    "positiveSignals": [
+      "Gives concrete examples showing financial decision-making.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of financial decision-making.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated financial decision-making in a meaningful situation.",
+      "How have you used financial decision-making to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong financial decision-making?",
+    "publicLabel": "Financial Decision-Making",
+    "oneLineHook": "Show how you bring financial decision-making to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "d08b20f39497360d7c0f43e51af9d0ba19c724ea7a8e0562b5f300b6ec3b5b73": {
+    "positiveSignals": [
+      "Gives concrete examples showing risk assessment & management.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of risk assessment & management.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated risk assessment & management in a meaningful situation.",
+      "How have you used risk assessment & management to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong risk assessment & management?",
+    "publicLabel": "Risk Assessment & Management",
+    "oneLineHook": "Show how you bring risk assessment & management to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "2a29cdd3fbc822cfa963dda1e80d50a6db73752ade70bf1be8bd897529a0b071": {
+    "positiveSignals": [
+      "Gives concrete examples showing regulatory & ethical judgment.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of regulatory & ethical judgment.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated regulatory & ethical judgment in a meaningful situation.",
+      "How have you used regulatory & ethical judgment to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong regulatory & ethical judgment?",
+    "publicLabel": "Regulatory & Ethical Judgment",
+    "oneLineHook": "Show how you bring regulatory & ethical judgment to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "01ca8a61ac344442e886fb5c38696a17370d888bbf226848dcb2d6f078b5eb82": {
+    "positiveSignals": [
+      "Gives concrete examples showing healthcare systems literacy.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of healthcare systems literacy.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated healthcare systems literacy in a meaningful situation.",
+      "How have you used healthcare systems literacy to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong healthcare systems literacy?",
+    "publicLabel": "Healthcare Systems Literacy",
+    "oneLineHook": "Show how you bring healthcare systems literacy to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "8e9107a93a9efa36a3c4ef19ce7f4f09a39d03c5fd666826b997103b91efaa87": {
+    "positiveSignals": [
+      "Gives concrete examples showing legal reasoning.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of legal reasoning.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated legal reasoning in a meaningful situation.",
+      "How have you used legal reasoning to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong legal reasoning?",
+    "publicLabel": "Legal Reasoning",
+    "oneLineHook": "Show how you bring legal reasoning to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "a85d4058e586f14c322e3f34269fded55e62eff3aaa73e4f3be755af8a11a40b": {
+    "positiveSignals": [
+      "Gives concrete examples showing leadership & team direction.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of leadership & team direction.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated leadership & team direction in a meaningful situation.",
+      "How have you used leadership & team direction to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong leadership & team direction?",
+    "publicLabel": "Leadership & Team Direction",
+    "oneLineHook": "Show how you bring leadership & team direction to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "b82a92070ab7221b0b7fe5371f29fddf11c2f5cd980db50101d55728adcc12da": {
+    "positiveSignals": [
+      "Gives concrete examples showing strategic business acumen.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of strategic business acumen.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated strategic business acumen in a meaningful situation.",
+      "How have you used strategic business acumen to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong strategic business acumen?",
+    "publicLabel": "Strategic Business Acumen",
+    "oneLineHook": "Show how you bring strategic business acumen to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "51fa99d8548f4317451933d3cebb245c3593f2bc12c3e19400f98bb72e8f1239": {
+    "positiveSignals": [
+      "Gives concrete examples showing stakeholder communication.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of stakeholder communication.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated stakeholder communication in a meaningful situation.",
+      "How have you used stakeholder communication to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong stakeholder communication?",
+    "publicLabel": "Stakeholder Communication",
+    "oneLineHook": "Show how you bring stakeholder communication to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "9db88a6a173d6e9a856531720415d0f2b335b69ca9c9d341264ef9400620e673": {
+    "positiveSignals": [
+      "Gives concrete examples showing technology systems thinking.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of technology systems thinking.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated technology systems thinking in a meaningful situation.",
+      "How have you used technology systems thinking to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong technology systems thinking?",
+    "publicLabel": "Technology Systems Thinking",
+    "oneLineHook": "Show how you bring technology systems thinking to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "d35c3ff641c0492d94639a2e3df65daab3335a2242180d538634a708f957bd13": {
+    "positiveSignals": [
+      "Gives concrete examples showing cybersecurity & privacy governance.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of cybersecurity & privacy governance.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated cybersecurity & privacy governance in a meaningful situation.",
+      "How have you used cybersecurity & privacy governance to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong cybersecurity & privacy governance?",
+    "publicLabel": "Cybersecurity & Privacy Governance",
+    "oneLineHook": "Show how you bring cybersecurity & privacy governance to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "e2950d6bafb2d143e4d2bb0fa69b2dff9631c94034b2d68628c304ec8d543cb4": {
+    "positiveSignals": [
+      "Gives concrete examples showing global & cross-cultural agility.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of global & cross-cultural agility.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated global & cross-cultural agility in a meaningful situation.",
+      "How have you used global & cross-cultural agility to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong global & cross-cultural agility?",
+    "publicLabel": "Global & Cross-Cultural Agility",
+    "oneLineHook": "Show how you bring global & cross-cultural agility to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "c372a37d1ef55b1f2bb11ec2785528a618d41ed631e7964bd8e8ab7acdb1175d": {
+    "positiveSignals": [
+      "Gives concrete examples showing operations & supply chain orientation.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of operations & supply chain orientation.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated operations & supply chain orientation in a meaningful situation.",
+      "How have you used operations & supply chain orientation to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong operations & supply chain orientation?",
+    "publicLabel": "Operations & Supply Chain Orientation",
+    "oneLineHook": "Show how you bring operations & supply chain orientation to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "251f9b358d88c36ba0ba358f09214a7d806276fdcc314bfec176438d2165eafc": {
+    "positiveSignals": [
+      "Gives concrete examples showing market & customer insight.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of market & customer insight.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated market & customer insight in a meaningful situation.",
+      "How have you used market & customer insight to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong market & customer insight?",
+    "publicLabel": "Market & Customer Insight",
+    "oneLineHook": "Show how you bring market & customer insight to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "2f3a60fb53eb794931f118324a22583eba346fb5e3d7d6d676b6969154ba0ce4": {
+    "positiveSignals": [
+      "Gives concrete examples showing innovation & entrepreneurial drive.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of innovation & entrepreneurial drive.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated innovation & entrepreneurial drive in a meaningful situation.",
+      "How have you used innovation & entrepreneurial drive to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong innovation & entrepreneurial drive?",
+    "publicLabel": "Innovation & Entrepreneurial Drive",
+    "oneLineHook": "Show how you bring innovation & entrepreneurial drive to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  },
+  "df36c7b0a8b004fa5811973c13ec4ad0f66e32922f1d9cdef86c11756bec6448": {
+    "positiveSignals": [
+      "Gives concrete examples showing real estate investment analysis.",
+      "Explains decisions with clear, structured reasoning.",
+      "Connects outcomes to measurable impact."
+    ],
+    "negativeSignals": [
+      "Cannot provide evidence of real estate investment analysis.",
+      "Uses vague claims without specifics.",
+      "Struggles to explain tradeoffs or impact."
+    ],
+    "followUps": [
+      "Ask for a specific example.",
+      "Probe for measurable results."
+    ],
+    "chatQuestions": [
+      "Tell me about a time you demonstrated real estate investment analysis in a meaningful situation.",
+      "How have you used real estate investment analysis to improve an outcome?"
+    ],
+    "quizQuestion": "Which response best reflects strong real estate investment analysis?",
+    "publicLabel": "Real Estate Investment Analysis",
+    "oneLineHook": "Show how you bring real estate investment analysis to real decisions.",
+    "archetypeTag": "ANALYST",
+    "displayIcon": "spark",
+    "visualMood": "ASPIRATIONAL"
+  }
+}

@@ -167,12 +167,14 @@ async function run() {
       name: PROGRAM_NAME,
       description: PROGRAM_DESCRIPTION,
       degreeLevel: "M.S.A.",
-      department: "Robinson College of Business"
+      department: "Robinson College of Business",
+      isActive: true
     },
     update: {
       description: PROGRAM_DESCRIPTION,
       degreeLevel: "M.S.A.",
-      department: "Robinson College of Business"
+      department: "Robinson College of Business",
+      isActive: true
     }
   });
 
